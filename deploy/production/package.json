@@ -1,0 +1,13 @@
+{
+  "name": "deploy-production",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "init-storage": "tsx scripts/init-storage.ts"
+  },
+  "devDependencies": {
+    "@supabase/supabase-js": "^2.88.0",
+    "@types/node": "^25.0.3",
+    "tsx": "^4.7.0"
+  }
+}

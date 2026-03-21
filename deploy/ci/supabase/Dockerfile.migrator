@@ -1,0 +1,11 @@
+# 数据库迁移镜像（golang-migrate）
+
+FROM migrate/migrate:v4.17.0
+
+COPY apps/supabase/migrations /migrations
+COPY deploy/ci/supabase/migrate-entrypoint.sh /migrate-entrypoint.sh
+
+USER root
+RUN chmod +x /migrate-entrypoint.sh
+
+ENTRYPOINT ["/migrate-entrypoint.sh"]

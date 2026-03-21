@@ -1,0 +1,190 @@
+name: Build and Push Docker Images
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - 'v*'
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  check-changes:
+    runs-on: ubuntu-latest
+    outputs:
+      web: ${{ steps.filter.outputs.web }}
+      migrations: ${{ steps.filter.outputs.migrations }}
+      nginx: ${{ steps.filter.outputs.nginx }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            web:
+              - 'apps/web/**'
+              - '.github/workflows/docker-build.yml'
+            migrations:
+              - 'apps/supabase/migrations/**'
+              - 'deploy/ci/supabase/Dockerfile.migrator'
+              - 'deploy/ci/supabase/migrate-entrypoint.sh'
+            nginx:
+              - 'deploy/production/nginx.conf'
+
+  build-web:
+    needs: check-changes
+    if: github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/') || needs.check-changes.outputs.web == 'true'
+    runs-on: ubuntu-latest
+    environment: prod
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=ref,event=branch
+            type=ref,event=pr
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern={{major}}
+            type=sha,prefix=sha-,enable={{is_default_branch}}
+          flavor: |
+            latest=false
+
+      - name: Set Build Time
+        run: echo "BUILD_TIME=$(date -u +'%Y-%m-%d %H:%M:%S') UTC" >> $GITHUB_ENV
+
+      - name: Set app version and git SHA
+        id: appver
+        run: |
+          REF="${{ github.ref }}"
+          if [[ "$REF" == refs/tags/v* ]]; then
+            echo "version=${REF#refs/tags/v}" >> $GITHUB_OUTPUT
+          else
+            echo "version=$(jq -r .version apps/web/package.json)" >> $GITHUB_OUTPUT
+          fi
+          echo "short_sha=${GITHUB_SHA::7}" >> $GITHUB_OUTPUT
+        working-directory: .
+
+      - name: Build and push Web image
+        uses: docker/build-push-action@v5
+        with:
+          context: ./apps/web
+          file: ./apps/web/Dockerfile
+          platforms: linux/amd64
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            VITE_APP_VERSION=${{ steps.appver.outputs.version }}
+            VITE_APP_BUILD_TIME=${{ env.BUILD_TIME }}
+            VITE_APP_GIT_SHA=${{ steps.appver.outputs.short_sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  build-migrator:
+    needs: check-changes
+    if: github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/') || needs.check-changes.outputs.migrations == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-migrator
+          tags: |
+            type=ref,event=branch
+            type=ref,event=pr
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern={{major}}
+            type=sha,prefix=sha-,enable={{is_default_branch}}
+          flavor: |
+            latest=false
+
+      - name: Build and push Migrator image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./deploy/ci/supabase/Dockerfile.migrator
+          platforms: linux/amd64
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  nginx-lint:
+    needs: check-changes
+    if: needs.check-changes.outputs.nginx == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate nginx configuration
+        run: |
+          docker run --rm \
+            --add-host web:127.0.0.1 \
+            --add-host kong:127.0.0.1 \
+            -v "$PWD/deploy/production/nginx.conf":/etc/nginx/conf.d/default.conf:ro \
+            nginx:alpine nginx -t
+
+  notify:
+    needs: [build-web, build-migrator]
+    if: always() && startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Build Summary
+        run: |
+          echo "=========================================="
+          echo "Build Summary for ${{ github.ref_name }}"
+          echo "=========================================="
+          echo "Web:       ${{ needs.build-web.result }}"
+          echo "Migrator:  ${{ needs.build-migrator.result }}"
+          echo ""
+          echo "Images:"
+          echo "  - ghcr.io/${{ github.repository }}:${{ github.ref_name }}"
+          echo "  - ghcr.io/${{ github.repository }}-migrator:${{ github.ref_name }}"
+          echo ""
+          echo "Deploy: ./deploy/production/deploy.sh ${{ github.ref_name }}"

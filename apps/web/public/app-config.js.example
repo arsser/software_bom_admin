@@ -1,0 +1,15 @@
+// 运行时配置示例。复制为 app-config.js 并填入实际值。
+// 本地开发与生产均通过此文件提供 Supabase 配置（index.html 会加载 /app-config.js）。
+//
+// 生产环境可挂载不同 app-config.js 以适配多环境，无需重新构建镜像。
+//
+// 示例：
+//   window.__APP_CONFIG__ = {
+//     supabaseUrl: 'http://127.0.0.1:54321',   // 本地：supabase start 后的 API URL
+//     supabaseAnonKey: 'eyJhbGciOiJIUzI1NiIs...', // 本地：supabase status 中的 anon key
+//   };
+
+window.__APP_CONFIG__ = window.__APP_CONFIG__ || {
+  supabaseUrl: 'http://127.0.0.1:54321',
+  supabaseAnonKey: 'sb_publishable_ACJWlzQHlZjBrEguHvfOxg_3BJgxAaH',
+};

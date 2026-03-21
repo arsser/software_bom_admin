@@ -1,0 +1,45 @@
+# 生产环境 Docker Compose 配置
+# 使用方式: VERSION=v1.0.5 docker compose up -d
+
+services:
+  nginx:
+    image: nginx:alpine
+    container_name: softwarebomadmin-nginx
+    restart: unless-stopped
+    ports:
+      - "${WEB_PORT:-80}:80"
+      - "${WEB_SSL_PORT:-443}:443"
+    volumes:
+      - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    depends_on:
+      - web
+    networks:
+      - softwarebomadmin-network
+      - supabase-network
+    healthcheck:
+      test: [ "CMD", "curl", "-f", "http://localhost/health" ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  web:
+    image: ghcr.io/${GITHUB_REPO:-your-org/softwarebomadmin}:${VERSION:-latest}
+    container_name: softwarebomadmin-web
+    restart: unless-stopped
+    volumes:
+      - ./app-config.js:/usr/share/nginx/html/app-config.js:ro
+    networks:
+      - softwarebomadmin-network
+    healthcheck:
+      test: [ "CMD", "curl", "-f", "http://localhost/health" ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+networks:
+  softwarebomadmin-network:
+    driver: bridge
+  supabase-network:
+    external: true
+    name: supabase_default

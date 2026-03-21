@@ -1,0 +1,9 @@
+{
+  "name": "supabase",
+  "private": true,
+  "type": "module",
+  "scripts": {},
+  "devDependencies": {
+    "supabase": "^2.67.3"
+  }
+}

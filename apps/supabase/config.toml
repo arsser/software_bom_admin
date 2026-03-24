@@ -350,6 +350,9 @@ allow_dynamic_registration = false
 [functions.download-image]
 verify_jwt = false
 
+[functions.artifactory-api-info]
+verify_jwt = true
+
 [edge_runtime]
 enabled = true
 # Supported request policies: `oneshot`, `per_worker`.

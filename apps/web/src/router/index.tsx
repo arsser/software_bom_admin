@@ -6,6 +6,7 @@ import { Settings } from '../components/Settings';
 import { PingMonitor } from '../components/PingMonitor';
 import { PingLogs } from '../components/PingLogs';
 import { ImageManager } from '../components/ImageManager';
+import { Md5Calculator } from '../components/Md5Calculator';
 import { LoginPage } from '../pages/LoginPage';
 
 export const router = createBrowserRouter([
@@ -26,6 +27,7 @@ export const router = createBrowserRouter([
       { path: 'ping', element: <PingMonitor /> },
       { path: 'ping-logs', element: <PingLogs /> },
       { path: 'images', element: <ImageManager /> },
+      { path: 'md5', element: <Md5Calculator /> },
       { path: 'settings', element: <Settings /> }
     ]
   },

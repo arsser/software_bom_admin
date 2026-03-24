@@ -1,0 +1,58 @@
+import { supabase } from './supabase';
+import type { ArtifactoryConfig } from './artifactorySettings';
+
+export interface ApiInfo {
+  repo?: string;
+  path?: string;
+  created?: string;
+  createdBy?: string;
+  lastModified?: string;
+  modifiedBy?: string;
+  downloadUri?: string;
+  mimeType?: string;
+  size?: number;
+  checksums?: {
+    sha1: string;
+    sha256: string;
+    md5: string;
+  };
+  originalChecksums?: {
+    sha1: string;
+    sha256: string;
+    md5: string;
+  };
+  uri?: string;
+}
+
+export interface ApiInfoResult {
+  url: string;
+  ok: boolean;
+  info?: ApiInfo;
+  error?: string;
+  status?: number;
+}
+
+export async function getArtifactoryApiInfo(payload: {
+  urls: string[];
+  apiKey?: string;
+  config?: Partial<ArtifactoryConfig>;
+}): Promise<ApiInfoResult[]> {
+  const { data, error } = await supabase.functions.invoke('artifactory-api-info', {
+    body: payload,
+  });
+
+  if (error) {
+    throw new Error(error.message || 'Edge Function 调用失败');
+  }
+
+  if (data && typeof data === 'object' && 'error' in data && !Array.isArray(data)) {
+    const err = (data as { error?: string }).error;
+    throw new Error(err || '未知错误');
+  }
+
+  if (!Array.isArray(data)) {
+    throw new Error('返回数据格式无效');
+  }
+
+  return data as ApiInfoResult[];
+}

@@ -1,7 +1,12 @@
 import React, { useState, useEffect } from 'react';
-import { Save, Clock, Loader2, CheckCircle2, AlertCircle, Server } from 'lucide-react';
+import { Save, Clock, Loader2, CheckCircle2, AlertCircle, Server, Key } from 'lucide-react';
 import { usePingStore } from '../stores/pingStore';
 import { getAppConfig } from '../lib/appConfig';
+import {
+  fetchArtifactorySettings,
+  saveArtifactorySettings,
+  type ArtifactoryConfig,
+} from '../lib/artifactorySettings';
 
 // 验证 Cron 表达式格式
 const validateCronExpression = (cron: string): { valid: boolean; error?: string } => {
@@ -43,6 +48,15 @@ export const Settings: React.FC = () => {
   const [pingSaveStatus, setPingSaveStatus] = useState<'idle' | 'success' | 'error'>('idle');
   const [loading, setLoading] = useState(false);
 
+  const [artifactory, setArtifactory] = useState<ArtifactoryConfig>({
+    artifactoryBaseUrl: '',
+    artifactoryApiKey: '',
+    artifactoryExtBaseUrl: '',
+    artifactoryExtApiKey: '',
+  });
+  const [artifactoryLoading, setArtifactoryLoading] = useState(false);
+  const [artifactorySaveStatus, setArtifactorySaveStatus] = useState<'idle' | 'success' | 'error'>('idle');
+
   // 与 supabase 客户端一致：优先 window.__APP_CONFIG__，否则 VITE_*
   const { supabaseUrl: envSupabaseUrl } = getAppConfig();
 
@@ -66,6 +80,22 @@ export const Settings: React.FC = () => {
   }, [fetchPingSettings]);
 
   useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const cfg = await fetchArtifactorySettings();
+        if (cancelled || !cfg) return;
+        setArtifactory(cfg);
+      } catch (e) {
+        console.error(e);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
     if (pingSettings) {
       const matched = Object.entries(presetPingCron).find(
         ([, cron]) => cron === pingSettings.cronExpression
@@ -83,6 +113,21 @@ export const Settings: React.FC = () => {
       setPingMaxTargets(pingSettings.maxTargetsPerRun);
     }
   }, [pingSettings]);
+
+  const handleSaveArtifactory = async () => {
+    try {
+      setArtifactoryLoading(true);
+      await saveArtifactorySettings(artifactory);
+      setArtifactorySaveStatus('success');
+      setTimeout(() => setArtifactorySaveStatus('idle'), 3000);
+    } catch (err: any) {
+      setArtifactorySaveStatus('error');
+      alert('保存 Artifactory 配置失败: ' + (err.message || '未知错误'));
+      setTimeout(() => setArtifactorySaveStatus('idle'), 3000);
+    } finally {
+      setArtifactoryLoading(false);
+    }
+  };
 
   const handleSavePingSettings = async () => {
     try {
@@ -149,6 +194,82 @@ export const Settings: React.FC = () => {
           <p className="text-xs text-slate-500 mt-1">
             来自 <code className="bg-gray-100 px-1 rounded">app-config.js</code>（window.__APP_CONFIG__），生产环境可挂载不同 app-config.js 覆盖
           </p>
+        </div>
+      </div>
+
+      {/* Artifactory（MD5 校验等） */}
+      <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-6 space-y-4">
+        <div className="flex items-center gap-2">
+          <Key size={18} className="text-amber-600" />
+          <h3 className="text-lg font-medium text-slate-800">Artifactory 凭证</h3>
+        </div>
+        <p className="text-sm text-slate-500">
+          用于 <span className="font-medium text-slate-700">MD5 校验</span> 页批量请求 Storage API。主实例与扩展实例可分别配置 Base URL 与 API Key。
+        </p>
+        <div className="grid gap-4 md:grid-cols-2">
+          <div>
+            <label className="block text-sm font-medium text-slate-700 mb-1">主实例 Base URL</label>
+            <input
+              type="url"
+              value={artifactory.artifactoryBaseUrl ?? ''}
+              onChange={(e) => setArtifactory((a) => ({ ...a, artifactoryBaseUrl: e.target.value }))}
+              placeholder="https://artifactory.example.com"
+              className="w-full px-4 py-2 border border-gray-200 rounded-lg font-mono text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
+            />
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-slate-700 mb-1">主实例 API Key</label>
+            <input
+              type="password"
+              value={artifactory.artifactoryApiKey ?? ''}
+              onChange={(e) => setArtifactory((a) => ({ ...a, artifactoryApiKey: e.target.value }))}
+              placeholder="X-JFrog-Art-Api"
+              autoComplete="off"
+              className="w-full px-4 py-2 border border-gray-200 rounded-lg font-mono text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
+            />
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-slate-700 mb-1">扩展实例 Base URL</label>
+            <input
+              type="url"
+              value={artifactory.artifactoryExtBaseUrl ?? ''}
+              onChange={(e) => setArtifactory((a) => ({ ...a, artifactoryExtBaseUrl: e.target.value }))}
+              placeholder="https://artifactory-ext.example.com"
+              className="w-full px-4 py-2 border border-gray-200 rounded-lg font-mono text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
+            />
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-slate-700 mb-1">扩展实例 API Key</label>
+            <input
+              type="password"
+              value={artifactory.artifactoryExtApiKey ?? ''}
+              onChange={(e) => setArtifactory((a) => ({ ...a, artifactoryExtApiKey: e.target.value }))}
+              placeholder="X-JFrog-Art-Api"
+              autoComplete="off"
+              className="w-full px-4 py-2 border border-gray-200 rounded-lg font-mono text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
+            />
+          </div>
+        </div>
+        <div className="flex justify-end items-center gap-3 pt-2">
+          <button
+            type="button"
+            onClick={handleSaveArtifactory}
+            disabled={artifactoryLoading}
+            className="flex items-center gap-2 px-6 py-2 bg-amber-600 text-white font-medium rounded-lg hover:bg-amber-700 transition-colors shadow-sm disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            {artifactoryLoading ? <Loader2 size={18} className="animate-spin" /> : <Save size={18} />}
+            保存 Artifactory 配置
+          </button>
+          {artifactorySaveStatus === 'success' && (
+            <div className="flex items-center gap-1 text-emerald-600 text-sm">
+              <CheckCircle2 size={16} /> 已保存
+            </div>
+          )}
+          {artifactorySaveStatus === 'error' && (
+            <div className="flex items-center gap-1 text-red-600 text-sm">
+              <AlertCircle size={16} /> 保存失败
+            </div>
+          )}
         </div>
       </div>
 

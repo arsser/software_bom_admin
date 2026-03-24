@@ -1,5 +1,5 @@
 import { useNavigate, useLocation } from 'react-router-dom';
-import { LayoutDashboard, Settings, LogOut, Database, ChevronLeft, ChevronRight, Globe2, FileText, Image as ImageIcon } from 'lucide-react';
+import { LayoutDashboard, Settings, LogOut, Database, ChevronLeft, ChevronRight, Globe2, FileText, Image as ImageIcon, Calculator } from 'lucide-react';
 import { useAuthStore } from '../stores/authStore';
 
 interface SidebarProps {
@@ -18,6 +18,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ collapsed = false, onToggle })
     { path: '/ping', label: '域名监测', icon: Globe2 },
     { path: '/ping-logs', label: '监测日志', icon: FileText },
     { path: '/images', label: '图片管理', icon: ImageIcon },
+    { path: '/md5', label: 'MD5 校验', icon: Calculator },
     { path: '/settings', label: '系统设置', icon: Settings },
   ];
 

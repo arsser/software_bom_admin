@@ -51,7 +51,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ collapsed = false, onToggle })
           <Database size={18} />
         </div>
         {!collapsed && (
-          <span className="font-bold text-xl text-slate-800 tracking-tight whitespace-nowrap">Admin Starter</span>
+          <span className="font-bold text-xl text-slate-800 tracking-tight whitespace-nowrap">软件BOM管理</span>
         )}
       </div>
 

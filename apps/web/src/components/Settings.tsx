@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Save, Clock, Loader2, CheckCircle2, AlertCircle, Server, Key } from 'lucide-react';
+import { Save, Clock, Loader2, CheckCircle2, AlertCircle, Server, Key, Eye, EyeOff } from 'lucide-react';
 import { usePingStore } from '../stores/pingStore';
 import { getAppConfig } from '../lib/appConfig';
 import {
@@ -7,6 +7,7 @@ import {
   saveArtifactorySettings,
   type ArtifactoryConfig,
 } from '../lib/artifactorySettings';
+import { getArtifactoryApiInfo, type ApiInfoResult } from '../lib/artifactoryApi';
 
 // 验证 Cron 表达式格式
 const validateCronExpression = (cron: string): { valid: boolean; error?: string } => {
@@ -56,6 +57,13 @@ export const Settings: React.FC = () => {
   });
   const [artifactoryLoading, setArtifactoryLoading] = useState(false);
   const [artifactorySaveStatus, setArtifactorySaveStatus] = useState<'idle' | 'success' | 'error'>('idle');
+
+  const [testUrl, setTestUrl] = useState('');
+  const [artifactoryTestLoading, setArtifactoryTestLoading] = useState(false);
+  const [artifactoryTestResult, setArtifactoryTestResult] = useState<ApiInfoResult | null>(null);
+
+  const [showArtifactoryApiKey, setShowArtifactoryApiKey] = useState(false);
+  const [showArtifactoryExtApiKey, setShowArtifactoryExtApiKey] = useState(false);
 
   // 与 supabase 客户端一致：优先 window.__APP_CONFIG__，否则 VITE_*
   const { supabaseUrl: envSupabaseUrl } = getAppConfig();
@@ -167,6 +175,45 @@ export const Settings: React.FC = () => {
     }
   };
 
+  const handleTestArtifactory = async () => {
+    const url = testUrl.trim();
+    if (!url) {
+      alert('请输入要测试的 Artifactory URL');
+      return;
+    }
+
+    const hasAnyKey = Boolean(artifactory.artifactoryApiKey || artifactory.artifactoryExtApiKey);
+    if (!hasAnyKey) {
+      alert('请先配置至少一个 Artifactory API Key');
+      return;
+    }
+
+    setArtifactoryTestLoading(true);
+    setArtifactoryTestResult(null);
+    try {
+      const results = await getArtifactoryApiInfo({
+        urls: [url],
+        apiKey: artifactory.artifactoryApiKey || artifactory.artifactoryExtApiKey || undefined,
+        config: {
+          artifactoryBaseUrl: artifactory.artifactoryBaseUrl || undefined,
+          artifactoryApiKey: artifactory.artifactoryApiKey || undefined,
+          artifactoryExtBaseUrl: artifactory.artifactoryExtBaseUrl || undefined,
+          artifactoryExtApiKey: artifactory.artifactoryExtApiKey || undefined,
+        },
+      });
+
+      const r = results[0];
+      if (!r) throw new Error('未返回测试结果');
+      setArtifactoryTestResult(r);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      setArtifactoryTestResult({ url, ok: false, error: msg });
+      alert('测试失败：' + msg);
+    } finally {
+      setArtifactoryTestLoading(false);
+    }
+  };
+
   return (
     <div className="max-w-2xl mx-auto space-y-6">
       <div>
@@ -219,14 +266,24 @@ export const Settings: React.FC = () => {
           </div>
           <div>
             <label className="block text-sm font-medium text-slate-700 mb-1">主实例 API Key</label>
-            <input
-              type="password"
-              value={artifactory.artifactoryApiKey ?? ''}
-              onChange={(e) => setArtifactory((a) => ({ ...a, artifactoryApiKey: e.target.value }))}
-              placeholder="X-JFrog-Art-Api"
-              autoComplete="off"
-              className="w-full px-4 py-2 border border-gray-200 rounded-lg font-mono text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
-            />
+            <div className="flex items-center gap-2">
+              <input
+                type={showArtifactoryApiKey ? 'text' : 'password'}
+                value={artifactory.artifactoryApiKey ?? ''}
+                onChange={(e) => setArtifactory((a) => ({ ...a, artifactoryApiKey: e.target.value }))}
+                placeholder="X-JFrog-Art-Api"
+                autoComplete="off"
+                className="flex-1 px-4 py-2 border border-gray-200 rounded-lg font-mono text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
+              />
+              <button
+                type="button"
+                onClick={() => setShowArtifactoryApiKey((v) => !v)}
+                className="px-3 py-2 border border-gray-200 rounded-lg text-slate-600 hover:bg-slate-50 transition-colors"
+                aria-label={showArtifactoryApiKey ? '隐藏 API Key' : '显示 API Key'}
+              >
+                {showArtifactoryApiKey ? <EyeOff size={16} /> : <Eye size={16} />}
+              </button>
+            </div>
           </div>
           <div>
             <label className="block text-sm font-medium text-slate-700 mb-1">扩展实例 Base URL</label>
@@ -240,22 +297,94 @@ export const Settings: React.FC = () => {
           </div>
           <div>
             <label className="block text-sm font-medium text-slate-700 mb-1">扩展实例 API Key</label>
-            <input
-              type="password"
-              value={artifactory.artifactoryExtApiKey ?? ''}
-              onChange={(e) => setArtifactory((a) => ({ ...a, artifactoryExtApiKey: e.target.value }))}
-              placeholder="X-JFrog-Art-Api"
-              autoComplete="off"
-              className="w-full px-4 py-2 border border-gray-200 rounded-lg font-mono text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
-            />
+            <div className="flex items-center gap-2">
+              <input
+                type={showArtifactoryExtApiKey ? 'text' : 'password'}
+                value={artifactory.artifactoryExtApiKey ?? ''}
+                onChange={(e) => setArtifactory((a) => ({ ...a, artifactoryExtApiKey: e.target.value }))}
+                placeholder="X-JFrog-Art-Api"
+                autoComplete="off"
+                className="flex-1 px-4 py-2 border border-gray-200 rounded-lg font-mono text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
+              />
+              <button
+                type="button"
+                onClick={() => setShowArtifactoryExtApiKey((v) => !v)}
+                className="px-3 py-2 border border-gray-200 rounded-lg text-slate-600 hover:bg-slate-50 transition-colors"
+                aria-label={showArtifactoryExtApiKey ? '隐藏 API Key' : '显示 API Key'}
+              >
+                {showArtifactoryExtApiKey ? <EyeOff size={16} /> : <Eye size={16} />}
+              </button>
+            </div>
           </div>
         </div>
+
+        <div className="border-t border-gray-100 pt-4">
+          <div className="grid gap-4 md:grid-cols-2 items-end">
+            <div>
+              <label className="block text-sm font-medium text-slate-700 mb-1">
+                测试 URL（Storage API 鉴权）
+              </label>
+              <input
+                type="url"
+                value={testUrl}
+                onChange={(e) => setTestUrl(e.target.value)}
+                placeholder="https://artifactory.example.com/artifactory/repo/path/file.jar"
+                className="w-full px-4 py-2 border border-gray-200 rounded-lg font-mono text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
+              />
+              <p className="text-xs text-slate-500 mt-1">
+                请输入 Artifactory 制品 URL（函数会自动转换为 <code className="bg-slate-100 px-1 rounded text-xs">/artifactory/api/storage</code> 进行验证）。
+              </p>
+            </div>
+
+            <div className="flex justify-end gap-3 md:justify-end">
+              <button
+                type="button"
+                onClick={handleTestArtifactory}
+                disabled={artifactoryTestLoading}
+                className="flex items-center gap-2 px-6 py-2 bg-blue-600 text-white font-medium rounded-lg hover:bg-blue-700 transition-colors shadow-sm disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {artifactoryTestLoading ? (
+                  <Loader2 size={18} className="animate-spin" />
+                ) : (
+                  <Server size={18} />
+                )}
+                测试凭证
+              </button>
+            </div>
+          </div>
+
+          {artifactoryTestResult && (
+            <div className="mt-3">
+              {artifactoryTestResult.ok ? (
+                <div className="text-sm text-emerald-700 flex items-center gap-2">
+                  <CheckCircle2 size={16} />
+                  成功（HTTP {artifactoryTestResult.status ?? '—'}）
+                  {artifactoryTestResult.info?.repo ? (
+                    <span className="text-slate-600 ml-2">
+                      {artifactoryTestResult.info.repo}
+                      {artifactoryTestResult.info.path ? `/${artifactoryTestResult.info.path}` : ''}
+                    </span>
+                  ) : null}
+                </div>
+              ) : (
+                <div className="text-sm text-red-600 flex items-center gap-2">
+                  <AlertCircle size={16} />
+                  失败（HTTP {artifactoryTestResult.status ?? '—'}）
+                  <span className="text-slate-600">
+                    {artifactoryTestResult.error || '未知错误'}
+                  </span>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+
         <div className="flex justify-end items-center gap-3 pt-2">
           <button
             type="button"
             onClick={handleSaveArtifactory}
             disabled={artifactoryLoading}
-            className="flex items-center gap-2 px-6 py-2 bg-amber-600 text-white font-medium rounded-lg hover:bg-amber-700 transition-colors shadow-sm disabled:opacity-50 disabled:cursor-not-allowed"
+            className="flex items-center gap-2 px-6 py-2 bg-green-600 text-white font-medium rounded-lg hover:bg-green-700 transition-colors shadow-sm disabled:opacity-50 disabled:cursor-not-allowed"
           >
             {artifactoryLoading ? <Loader2 size={18} className="animate-spin" /> : <Save size={18} />}
             保存 Artifactory 配置

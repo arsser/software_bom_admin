@@ -21,12 +21,15 @@ GITHUB_REPO="${GITHUB_REPO:-your-org/softwarebomadmin}"
 
 DEPLOY_ENV_FILE="$SCRIPT_DIR/.deploy.env"
 if [ -f "$DEPLOY_ENV_FILE" ]; then
+    set -a
     # shellcheck disable=SC1090
     source "$DEPLOY_ENV_FILE"
+    set +a
 fi
 
 WEB_IMAGE="$REGISTRY/$GITHUB_REPO:$VERSION"
 MIGRATOR_IMAGE="$REGISTRY/$GITHUB_REPO-migrator:$VERSION"
+BOM_SCANNER_IMAGE="$REGISTRY/$GITHUB_REPO-bom-scanner:$VERSION"
 
 log() { echo -e "${GREEN}[$(date '+%Y-%m-%d %H:%M:%S')]${NC} $*"; }
 warn() { echo -e "${YELLOW}[$(date '+%Y-%m-%d %H:%M:%S')] WARNING:${NC} $*"; }
@@ -81,6 +84,11 @@ if ! docker pull "$MIGRATOR_IMAGE"; then
     error "Failed to pull migrator image"
     exit 1
 fi
+log "Pulling bom-scanner image: $BOM_SCANNER_IMAGE"
+if ! docker pull "$BOM_SCANNER_IMAGE"; then
+    error "Failed to pull bom-scanner image"
+    exit 1
+fi
 log "All images pulled successfully"
 
 log "Step 2: Running database migrations..."
@@ -133,6 +141,12 @@ else
     warn "Web container may not be running"
 fi
 
+if docker ps --format '{{.Names}}' | grep -q "softwarebomadmin-bom-scanner"; then
+    log "BOM scanner worker container is running"
+else
+    warn "BOM scanner worker container may not be running"
+fi
+
 if docker ps --format '{{.Names}}' | grep -q "softwarebomadmin-nginx"; then
     log "Nginx container is running"
 else
@@ -145,6 +159,7 @@ cat > "$SCRIPT_DIR/DEPLOYED_VERSION" <<EOF
   "version": "$VERSION",
   "web_image": "$WEB_IMAGE",
   "migrator_image": "$MIGRATOR_IMAGE",
+  "bom_scanner_image": "$BOM_SCANNER_IMAGE",
   "deployed_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
   "deployed_by": "$(whoami)"
 }

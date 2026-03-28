@@ -37,6 +37,21 @@ services:
       timeout: 10s
       retries: 3
 
+  # BOM 本地目录扫描：消费 bom_scan_jobs，写入 local_file（需 service_role + 挂载暂存目录）
+  bom-scanner:
+    image: ghcr.io/${GITHUB_REPO:-your-org/softwarebomadmin}-bom-scanner:${VERSION:-latest}
+    container_name: softwarebomadmin-bom-scanner
+    restart: unless-stopped
+    environment:
+      SUPABASE_URL: ${SUPABASE_URL_FOR_WORKER:-http://kong:8000}
+      SUPABASE_SERVICE_ROLE_KEY: ${SUPABASE_SERVICE_ROLE_KEY}
+      BOM_LOCAL_ROOT: ${BOM_LOCAL_ROOT:-/data/bom_store}
+    volumes:
+      - ${BOM_HOST_STORE:-./data/bom_store}:/data/bom_store:ro
+    networks:
+      - softwarebomadmin-network
+      - supabase-network
+
 networks:
   softwarebomadmin-network:
     driver: bridge

@@ -1,0 +1,17 @@
+{
+  "name": "bom-scanner-worker",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "description": "Consumes bom_scan_jobs, indexes BOM_LOCAL_ROOT into local_file via Supabase RPCs",
+  "scripts": {
+    "start": "node src/index.mjs",
+    "start:env": "node --env-file=.env src/index.mjs"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.49.8"
+  }
+}

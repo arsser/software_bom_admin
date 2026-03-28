@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Save, Clock, Loader2, CheckCircle2, AlertCircle, Server, Key, Eye, EyeOff } from 'lucide-react';
+import { Save, Clock, Loader2, CheckCircle2, AlertCircle, Server, Key, Eye, EyeOff, Package } from 'lucide-react';
 import { usePingStore } from '../stores/pingStore';
 import { getAppConfig } from '../lib/appConfig';
 import {
@@ -7,6 +7,19 @@ import {
   saveArtifactorySettings,
   type ArtifactoryConfig,
 } from '../lib/artifactorySettings';
+import {
+  fetchBomScannerSettings,
+  saveBomScannerSettings,
+  type BomScannerConfig,
+} from '../lib/bomScannerSettings';
+import {
+  fetchLatestBomScanJob,
+  fetchLocalFileStats,
+  formatSupabaseError,
+  requestBomScan,
+  type BomScanJob,
+  type BomScanJobStatus,
+} from '../lib/bomScannerJobs';
 import { getArtifactoryApiInfo, type ApiInfoResult } from '../lib/artifactoryApi';
 
 // 验证 Cron 表达式格式
@@ -39,6 +52,13 @@ const validateCronExpression = (cron: string): { valid: boolean; error?: string 
   return { valid: true };
 };
 
+const BOM_SCAN_JOB_STATUS_CN: Record<BomScanJobStatus, string> = {
+  queued: '排队中',
+  running: '执行中',
+  succeeded: '成功',
+  failed: '失败',
+};
+
 export const Settings: React.FC = () => {
   const {
     settings: pingSettings,
@@ -64,6 +84,15 @@ export const Settings: React.FC = () => {
 
   const [showArtifactoryApiKey, setShowArtifactoryApiKey] = useState(false);
   const [showArtifactoryExtApiKey, setShowArtifactoryExtApiKey] = useState(false);
+
+  const [bomScanner, setBomScanner] = useState<BomScannerConfig | null>(null);
+  const [bomKeyMapJson, setBomKeyMapJson] = useState('');
+  const [bomLoading, setBomLoading] = useState(false);
+  const [bomSaveStatus, setBomSaveStatus] = useState<'idle' | 'success' | 'error'>('idle');
+  const [bomScanJob, setBomScanJob] = useState<BomScanJob | null>(null);
+  const [bomScanStats, setBomScanStats] = useState<{ fileCount: number; md5Count: number }>({ fileCount: 0, md5Count: 0 });
+  const [bomScanLoading, setBomScanLoading] = useState(false);
+  const [bomScanMessage, setBomScanMessage] = useState<string>('');
 
   // 与 supabase 客户端一致：优先 window.__APP_CONFIG__，否则 VITE_*
   const { supabaseUrl: envSupabaseUrl } = getAppConfig();
@@ -103,6 +132,30 @@ export const Settings: React.FC = () => {
     };
   }, []);
 
+  const loadBomScanRuntime = async () => {
+    const [latestJob, stats] = await Promise.all([fetchLatestBomScanJob(), fetchLocalFileStats()]);
+    setBomScanJob(latestJob);
+    setBomScanStats(stats);
+  };
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const cfg = await fetchBomScannerSettings();
+        if (cancelled) return;
+        setBomScanner(cfg);
+        setBomKeyMapJson(JSON.stringify(cfg.jsonKeyMap, null, 2));
+        await loadBomScanRuntime();
+      } catch (e) {
+        console.error(e);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   useEffect(() => {
     if (pingSettings) {
       const matched = Object.entries(presetPingCron).find(
@@ -121,6 +174,65 @@ export const Settings: React.FC = () => {
       setPingMaxTargets(pingSettings.maxTargetsPerRun);
     }
   }, [pingSettings]);
+
+  const handleSaveBomScanner = async () => {
+    if (!bomScanner) return;
+    let parsed: BomScannerConfig['jsonKeyMap'];
+    try {
+      const raw = JSON.parse(bomKeyMapJson) as unknown;
+      if (!raw || typeof raw !== 'object') throw new Error('jsonKeyMap 必须是 JSON 对象');
+      const o = raw as Record<string, unknown>;
+      const arr = (k: string) => {
+        const v = o[k];
+        if (!Array.isArray(v) || !v.every((x) => typeof x === 'string')) {
+          throw new Error(`jsonKeyMap.${k} 必须是非空字符串数组`);
+        }
+        return v as string[];
+      };
+      parsed = {
+        downloadUrl: arr('downloadUrl'),
+        expectedMd5: arr('expectedMd5'),
+        arch: arr('arch'),
+        extUrl: o.extUrl !== undefined ? arr('extUrl') : undefined,
+      };
+    } catch (e) {
+      alert(e instanceof Error ? e.message : 'jsonKeyMap JSON 解析失败');
+      return;
+    }
+
+    try {
+      setBomLoading(true);
+      await saveBomScannerSettings({
+        ...bomScanner,
+        jsonKeyMap: parsed,
+      });
+      const next = await fetchBomScannerSettings();
+      setBomScanner(next);
+      setBomKeyMapJson(JSON.stringify(next.jsonKeyMap, null, 2));
+      setBomSaveStatus('success');
+      setTimeout(() => setBomSaveStatus('idle'), 3000);
+    } catch (err: any) {
+      setBomSaveStatus('error');
+      alert('保存 BOM 扫描配置失败: ' + (err.message || '未知错误'));
+      setTimeout(() => setBomSaveStatus('idle'), 3000);
+    } finally {
+      setBomLoading(false);
+    }
+  };
+
+  const handleTriggerBomScan = async () => {
+    try {
+      setBomScanLoading(true);
+      setBomScanMessage('');
+      const jobId = await requestBomScan('manual');
+      setBomScanMessage(`已创建扫描任务：${jobId.slice(0, 8)}…（等待 worker 执行）`);
+      await loadBomScanRuntime();
+    } catch (e) {
+      setBomScanMessage(`触发扫描失败：${formatSupabaseError(e)}`);
+    } finally {
+      setBomScanLoading(false);
+    }
+  };
 
   const handleSaveArtifactory = async () => {
     try {
@@ -242,6 +354,141 @@ export const Settings: React.FC = () => {
             来自 <code className="bg-gray-100 px-1 rounded">app-config.js</code>（window.__APP_CONFIG__），生产环境可挂载不同 app-config.js 覆盖
           </p>
         </div>
+      </div>
+
+      {/* BOM 本地扫描（阶段 0） */}
+      <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-6 space-y-4">
+        <div className="flex items-center gap-2">
+          <Package size={18} className="text-indigo-600" />
+          <h3 className="text-lg font-medium text-slate-800">BOM 本地扫描</h3>
+        </div>
+        <p className="text-sm text-slate-500">
+          扫描间隔（秒）与 worker 轮询、定时入队一致，由下方配置写入数据库；BOM 行 jsonb 字段别名为多 key 兼容。本地暂存目录由 compose 挂载，不在此配置。
+        </p>
+        {bomScanner && (
+          <div className="space-y-4">
+            <div className="rounded-lg border border-indigo-100 bg-indigo-50 p-3 text-sm text-indigo-900 space-y-2">
+              <div className="text-xs font-medium text-indigo-950">Worker 最近执行（按任务请求时间最新一条）</div>
+              {bomScanJob ? (
+                <dl className="grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-1 text-xs text-indigo-900">
+                  <div className="flex justify-between sm:block gap-2">
+                    <dt className="text-indigo-800/80 shrink-0">状态</dt>
+                    <dd className="font-medium">{BOM_SCAN_JOB_STATUS_CN[bomScanJob.status]}</dd>
+                  </div>
+                  <div className="flex justify-between sm:block gap-2">
+                    <dt className="text-indigo-800/80 shrink-0">触发来源</dt>
+                    <dd className="font-mono truncate" title={bomScanJob.triggerSource}>{bomScanJob.triggerSource}</dd>
+                  </div>
+                  <div className="flex justify-between sm:block gap-2 sm:col-span-2">
+                    <dt className="text-indigo-800/80 shrink-0">请求时间</dt>
+                    <dd>{new Date(bomScanJob.requestedAt).toLocaleString()}</dd>
+                  </div>
+                  <div className="flex justify-between sm:block gap-2">
+                    <dt className="text-indigo-800/80 shrink-0">开始时间</dt>
+                    <dd>{bomScanJob.startedAt ? new Date(bomScanJob.startedAt).toLocaleString() : '—'}</dd>
+                  </div>
+                  <div className="flex justify-between sm:block gap-2">
+                    <dt className="text-indigo-800/80 shrink-0">结束时间</dt>
+                    <dd>{bomScanJob.finishedAt ? new Date(bomScanJob.finishedAt).toLocaleString() : '—'}</dd>
+                  </div>
+                </dl>
+              ) : (
+                <p className="text-xs text-indigo-800/90">尚无扫描任务记录。若已部署 worker，请确认其能连上 Supabase 且已手动或定时入队。</p>
+              )}
+              <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-indigo-800/90 border-t border-indigo-200/60 pt-2">
+                <span>索引文件数：{bomScanStats.fileCount}</span>
+                <span>已计算 MD5 数：{bomScanStats.md5Count}</span>
+              </div>
+              <p className="text-xs text-amber-900/90 bg-amber-50/80 border border-amber-200/60 rounded px-2 py-1.5">
+                若「结束时间」长期不更新（或一直处于执行中），请检查 <code className="font-mono text-[11px]">bom-scanner</code> 容器/进程是否存活、能否访问数据库与挂载目录。
+              </p>
+              <div className="flex items-center justify-end gap-2 pt-1">
+                <button
+                  type="button"
+                  onClick={handleTriggerBomScan}
+                  disabled={bomScanLoading}
+                  className="inline-flex items-center gap-2 px-3 py-1.5 rounded-md border border-indigo-200 bg-white text-indigo-700 hover:bg-indigo-100 disabled:opacity-60"
+                >
+                  {bomScanLoading ? <Loader2 size={14} className="animate-spin" /> : null}
+                  手动触发扫描
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void loadBomScanRuntime()}
+                  className="inline-flex items-center gap-2 px-3 py-1.5 rounded-md border border-indigo-200 bg-white text-indigo-700 hover:bg-indigo-100"
+                >
+                  刷新状态
+                </button>
+              </div>
+              {bomScanJob?.message ? <div className="text-xs text-indigo-800/90">最近结果：{bomScanJob.message}</div> : null}
+              {bomScanMessage ? <div className="text-xs text-indigo-800/90">{bomScanMessage}</div> : null}
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium text-slate-700 mb-1">扫描间隔（秒，5–86400）</label>
+              <input
+                type="number"
+                min={5}
+                max={86400}
+                value={bomScanner.scanIntervalSeconds}
+                onChange={(e) => {
+                  const n = Number(e.target.value);
+                  setBomScanner((s) =>
+                    s
+                      ? {
+                          ...s,
+                          scanIntervalSeconds: Number.isFinite(n)
+                            ? Math.min(86400, Math.max(5, Math.round(n)))
+                            : s.scanIntervalSeconds,
+                        }
+                      : s
+                  );
+                }}
+                className="w-full max-w-xs px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
+              />
+              <p className="text-xs text-slate-500 mt-1">
+                与 worker 主循环睡眠、定时自动入队共用同一数值；保存后 worker 下一轮从数据库读取即可生效。
+              </p>
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-slate-700 mb-1">jsonKeyMap（JSON）</label>
+              <textarea
+                value={bomKeyMapJson}
+                onChange={(e) => setBomKeyMapJson(e.target.value)}
+                rows={12}
+                spellCheck={false}
+                className="w-full px-4 py-3 border border-gray-200 rounded-lg font-mono text-xs focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 text-slate-800"
+              />
+              <p className="text-xs text-slate-500 mt-1">
+                键名：<code className="bg-gray-100 px-1 rounded">downloadUrl</code>、
+                <code className="bg-gray-100 px-1 rounded">expectedMd5</code>、
+                <code className="bg-gray-100 px-1 rounded">arch</code>、
+                <code className="bg-gray-100 px-1 rounded">extUrl</code>（可选）；值为字符串数组，表示 jsonb 中可能出现的列名。
+              </p>
+            </div>
+            <div className="flex justify-end items-center gap-3 pt-2">
+              <button
+                type="button"
+                onClick={handleSaveBomScanner}
+                disabled={bomLoading}
+                className="flex items-center gap-2 px-6 py-2 bg-indigo-600 text-white font-medium rounded-lg hover:bg-indigo-700 transition-colors shadow-sm disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {bomLoading ? <Loader2 size={18} className="animate-spin" /> : <Save size={18} />}
+                保存 BOM 扫描配置
+              </button>
+              {bomSaveStatus === 'success' && (
+                <div className="flex items-center gap-1 text-emerald-600 text-sm">
+                  <CheckCircle2 size={16} /> 已保存
+                </div>
+              )}
+              {bomSaveStatus === 'error' && (
+                <div className="flex items-center gap-1 text-red-600 text-sm">
+                  <AlertCircle size={16} /> 保存失败
+                </div>
+              )}
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Artifactory（MD5 校验等） */}

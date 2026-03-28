@@ -22,6 +22,7 @@ jobs:
       web: ${{ steps.filter.outputs.web }}
       migrations: ${{ steps.filter.outputs.migrations }}
       nginx: ${{ steps.filter.outputs.nginx }}
+      bom_scanner: ${{ steps.filter.outputs.bom_scanner }}
     steps:
       - uses: actions/checkout@v4
 
@@ -38,6 +39,9 @@ jobs:
               - 'deploy/ci/supabase/migrate-entrypoint.sh'
             nginx:
               - 'deploy/production/nginx.conf'
+            bom_scanner:
+              - 'apps/bom-scanner-worker/**'
+              - '.github/workflows/docker-build.yml'
 
   build-web:
     needs: check-changes
@@ -155,6 +159,54 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
+  build-bom-scanner:
+    needs: check-changes
+    if: github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/') || needs.check-changes.outputs.bom_scanner == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-bom-scanner
+          tags: |
+            type=ref,event=branch
+            type=ref,event=pr
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern={{major}}
+            type=sha,prefix=sha-,enable={{is_default_branch}}
+          flavor: |
+            latest=false
+
+      - name: Build and push BOM scanner worker image
+        uses: docker/build-push-action@v5
+        with:
+          context: ./apps/bom-scanner-worker
+          file: ./apps/bom-scanner-worker/Dockerfile
+          platforms: linux/amd64
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
   nginx-lint:
     needs: check-changes
     if: needs.check-changes.outputs.nginx == 'true'
@@ -171,7 +223,7 @@ jobs:
             nginx:alpine nginx -t
 
   notify:
-    needs: [build-web, build-migrator]
+    needs: [build-web, build-migrator, build-bom-scanner]
     if: always() && startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
     steps:
@@ -180,11 +232,13 @@ jobs:
           echo "=========================================="
           echo "Build Summary for ${{ github.ref_name }}"
           echo "=========================================="
-          echo "Web:       ${{ needs.build-web.result }}"
-          echo "Migrator:  ${{ needs.build-migrator.result }}"
+          echo "Web:          ${{ needs.build-web.result }}"
+          echo "Migrator:     ${{ needs.build-migrator.result }}"
+          echo "BOM scanner:  ${{ needs.build-bom-scanner.result }}"
           echo ""
           echo "Images:"
           echo "  - ghcr.io/${{ github.repository }}:${{ github.ref_name }}"
           echo "  - ghcr.io/${{ github.repository }}-migrator:${{ github.ref_name }}"
+          echo "  - ghcr.io/${{ github.repository }}-bom-scanner:${{ github.ref_name }}"
           echo ""
           echo "Deploy: ./deploy/production/deploy.sh ${{ github.ref_name }}"

@@ -63,6 +63,21 @@ function mtimeCloseEnough(dbIso, fileMtimeMs) {
   return Math.abs(dbMs - fileMtimeMs) < 2000;
 }
 
+/** @param {unknown} v */
+function isValidMd5Hex(v) {
+  return typeof v === 'string' && /^[a-f0-9]{32}$/i.test(v.trim());
+}
+
+/** @param {unknown} dbVal @param {number} diskSize */
+function sizeBytesEqual(dbVal, diskSize) {
+  if (dbVal == null) return false;
+  try {
+    return BigInt(String(dbVal)) === BigInt(Math.trunc(diskSize));
+  } catch {
+    return Number(dbVal) === diskSize;
+  }
+}
+
 /**
  * @param {import('@supabase/supabase-js').SupabaseClient} supabase
  * @param {string} relPath
@@ -181,9 +196,11 @@ async function runScanJob(supabase, jobId, rootAbs) {
     const mtimeIso = new Date(st.mtimeMs).toISOString();
 
     const existing = await fetchLocalFileRow(supabase, rel);
-    const sizeSame = existing && Number(existing.size_bytes) === sizeBytes;
-    const mtimeSame = existing && mtimeCloseEnough(existing.mtime, st.mtimeMs);
-    const needMd5 = !existing || !sizeSame || !mtimeSame;
+    const sizeSame = Boolean(existing && sizeBytesEqual(existing.size_bytes, sizeBytes));
+    const mtimeSame = Boolean(existing && mtimeCloseEnough(existing.mtime, st.mtimeMs));
+    const hasMd5 = Boolean(existing && isValidMd5Hex(existing.md5));
+    // 仅新文件、元数据变化、或从未得到有效 MD5 时读盘；否则复用库中 md5（upsert 传 null 不覆盖）
+    const needMd5 = !existing || !sizeSame || !mtimeSame || !hasMd5;
 
     let md5Hex = null;
     if (needMd5) {

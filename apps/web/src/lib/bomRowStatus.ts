@@ -31,3 +31,10 @@ export const BOM_ROW_STATUS_ORDER: BomRowStatus[] = [
 export function isBomRowStatus(v: string): v is BomRowStatus {
   return v in BOM_ROW_STATUS_LABEL;
 }
+
+/** 批次表格下方仅展示一次：与「待处理」状态对应的含义说明 */
+export const BOM_STATUS_LEGEND_PENDING =
+  '本地未找到：索引中尚无与此期望 MD5 一致的文件；将文件放入暂存目录并扫描后可恢复。';
+
+/** 批次表格下方仅展示一次：与「校验通过」状态对应的含义说明 */
+export const BOM_STATUS_LEGEND_VERIFIED_OK = '本地索引中已存在与期望 MD5 一致的内容。';

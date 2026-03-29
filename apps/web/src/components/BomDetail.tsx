@@ -1,19 +1,40 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
-import { AlertTriangle, ArrowLeft, Loader2, Package, RefreshCcw, Save, Trash2 } from 'lucide-react';
+import { AlertTriangle, ArrowLeft, Download, Loader2, Package, RefreshCcw, Save, Trash2 } from 'lucide-react';
 import { defaultBomScannerConfig, fetchBomScannerSettings, type BomScannerConfig } from '../lib/bomScannerSettings';
 import {
   buildBomWarnings,
   createBatchWithRows,
   fetchBomBatchById,
   fetchBomRows,
+  fetchLocalFileInfoByMd5,
+  type LocalFileIndexInfo,
+  mergeHeaderOrder,
   parsePastedBom,
   parsePastedFromClipboard,
   replaceBatchRows,
   updateBomBatchHeaderOrder,
+  updateBomRowRecord,
   validateRequiredHeaders,
+  type BomBatchRow,
   type BomRowRecord,
 } from '../lib/bomBatches';
+import { enrichBomRowsFromArtifactory } from '../lib/bomArtifactoryEnrich';
+import { fetchArtifactorySettings, type ArtifactoryConfig } from '../lib/artifactorySettings';
+import {
+  extractExpectedMd5FromRow,
+  extractRemoteSizeBytesFromRow,
+  extractRemarkFromRow,
+  fileBasename,
+  headerMatchesAny,
+} from '../lib/bomRowFields';
+import { BomRowByteSizeCell } from './HumanByteSize';
+import { BomDataTableCell, headerIsDownloadColumn, headerIsMd5Column } from '../lib/bomTableCell';
+import {
+  BOM_ROW_STATUS_LABEL,
+  BOM_STATUS_LEGEND_PENDING,
+  BOM_STATUS_LEGEND_VERIFIED_OK,
+} from '../lib/bomRowStatus';
 import {
   createProduct,
   fetchProducts,
@@ -40,6 +61,7 @@ export const BomDetail: React.FC = () => {
 
   const [pastedText, setPastedText] = useState('');
   const [selectedRows, setSelectedRows] = useState<BomRowRecord[]>([]);
+  const [loadedBomRows, setLoadedBomRows] = useState<BomBatchRow[]>([]);
   const [batchHeaderOrder, setBatchHeaderOrder] = useState<string[]>([]);
   const [lastMessage, setLastMessage] = useState<string>('');
 
@@ -47,6 +69,9 @@ export const BomDetail: React.FC = () => {
   const [previewHeaders, setPreviewHeaders] = useState<string[]>([]);
   const [showRawInput, setShowRawInput] = useState(false);
   const [previewHeaderError, setPreviewHeaderError] = useState<string>('');
+  const [artifactoryConfig, setArtifactoryConfig] = useState<ArtifactoryConfig | null>(null);
+  const [localInfoByMd5, setLocalInfoByMd5] = useState<Map<string, LocalFileIndexInfo>>(() => new Map());
+  const [artifactoryEnrichLoading, setArtifactoryEnrichLoading] = useState(false);
 
   const pasteAreaRef = useRef<HTMLDivElement>(null);
   const PASTE_AREA_HINT = '在此处 Ctrl/Cmd+V 粘贴 Excel 区域';
@@ -62,6 +87,8 @@ export const BomDetail: React.FC = () => {
     if (!config) return [];
     return buildBomWarnings(selectedRows, config.jsonKeyMap);
   }, [config, selectedRows]);
+
+  const tableKeyMap = useMemo(() => (config ?? defaultBomScannerConfig).jsonKeyMap, [config]);
 
   const existingHeaders = useMemo(() => {
     if (batchHeaderOrder.length > 0) return batchHeaderOrder.slice(0, 32);
@@ -93,6 +120,14 @@ export const BomDetail: React.FC = () => {
 
     return keys;
   }, [batchHeaderOrder, selectedRows]);
+
+  const dataHeaders = useMemo(() => {
+    const rk = tableKeyMap.remark ?? [];
+    if (!rk.length) return existingHeaders;
+    return existingHeaders.filter((h) => !headerMatchesAny(h, rk));
+  }, [existingHeaders, tableKeyMap.remark]);
+
+  const remarkHeaderLabel = tableKeyMap.remark?.[0] ?? '备注';
 
   const handleParsePreview = (rawText: string) => {
     if (!rawText.trim()) {
@@ -138,17 +173,20 @@ export const BomDetail: React.FC = () => {
     setLoading(true);
     setError(null);
     try {
-      const [scanner, prods] = await Promise.all([
+      const [scanner, prods, af] = await Promise.all([
         fetchBomScannerSettings(),
         fetchProducts(),
+        fetchArtifactorySettings(),
       ]);
       setConfig(scanner);
       setProducts(prods);
+      setArtifactoryConfig(af);
 
       const presetProductId = searchParams.get('productId');
       if (isNew) {
         const pick = presetProductId && prods.some((p) => p.id === presetProductId) ? presetProductId : (prods[0]?.id ?? '');
         if (!selectedProductId) setSelectedProductId(pick);
+        setLoadedBomRows([]);
       } else {
         const b = await fetchBomBatchById(batchId);
         if (!b) throw new Error('未找到该批次');
@@ -157,8 +195,8 @@ export const BomDetail: React.FC = () => {
         setBatchHeaderOrder(b.headerOrder ?? []);
 
         const rows = await fetchBomRows(batchId);
-        const r = rows.map((x) => x.bom_row);
-        setSelectedRows(r);
+        setLoadedBomRows(rows);
+        setSelectedRows(rows.map((x) => x.bom_row));
       }
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -171,6 +209,75 @@ export const BomDetail: React.FC = () => {
     load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [batchId]);
+
+  useEffect(() => {
+    if (!batchId || !config || loadedBomRows.length === 0) {
+      setLocalInfoByMd5(new Map());
+      return;
+    }
+    const md5s = loadedBomRows
+      .map((r) => extractExpectedMd5FromRow(r.bom_row, config.jsonKeyMap))
+      .filter((m): m is string => m != null);
+    let cancelled = false;
+    fetchLocalFileInfoByMd5(md5s)
+      .then((m) => {
+        if (!cancelled) setLocalInfoByMd5(m);
+      })
+      .catch(() => {
+        if (!cancelled) setLocalInfoByMd5(new Map());
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [batchId, config, loadedBomRows]);
+
+  const handleArtifactoryEnrich = async () => {
+    if (!batchId || !config) return;
+    const af = artifactoryConfig;
+    if (!af) {
+      alert('无法读取 Artifactory 配置，请稍后重试或检查系统设置。');
+      return;
+    }
+    if (!(af.artifactoryApiKey || '').trim() && !(af.artifactoryExtApiKey || '').trim()) {
+      alert('请先在「系统设置」中配置 Artifactory API Key（it 或 ext 至少一个）。');
+      return;
+    }
+    setArtifactoryEnrichLoading(true);
+    try {
+      const { rows: enriched, summary } = await enrichBomRowsFromArtifactory(
+        loadedBomRows,
+        config.jsonKeyMap,
+        af,
+      );
+      const jm = config.jsonKeyMap;
+      const toEnsure = [jm.fileSizeBytes?.[0], jm.remark?.[0]].filter(Boolean) as string[];
+      const baseHo = batchHeaderOrder.length > 0 ? batchHeaderOrder : existingHeaders;
+      const ho = mergeHeaderOrder([...baseHo], toEnsure);
+      let persisted = 0;
+      for (let i = 0; i < enriched.length; i += 1) {
+        const a = loadedBomRows[i];
+        const b = enriched[i];
+        if (a && b && JSON.stringify(a.bom_row) !== JSON.stringify(b.bom_row)) {
+          await updateBomRowRecord(b.id, b.bom_row);
+          persisted += 1;
+        }
+      }
+      if (toEnsure.length) await updateBomBatchHeaderOrder(batchId, ho);
+      setBatchHeaderOrder(ho);
+      await load();
+      const parts = [
+        `已写入数据库 ${persisted} 行`,
+        `含可请求 URL 并参与拉取 ${summary.rowsWithDownloadUrl} 行`,
+        `跳过无 http(s) 下载路径 ${summary.skippedNoUrl} 行`,
+      ];
+      if (summary.failedChunks) parts.push(`部分批次请求异常 ${summary.failedChunks} 次`);
+      alert(parts.join('；'));
+    } catch (e) {
+      alert(e instanceof Error ? e.message : String(e));
+    } finally {
+      setArtifactoryEnrichLoading(false);
+    }
+  };
 
   const handleCreateProduct = async () => {
     try {
@@ -220,7 +327,9 @@ export const BomDetail: React.FC = () => {
         await replaceBatchRows(batchId, parsed.rows);
         setBatchHeaderOrder(parsed.headers);
         setLastMessage(`已覆盖批次，共 ${parsed.rows.length} 行；告警 ${buildBomWarnings(parsed.rows, config.jsonKeyMap).length} 条`);
-        setSelectedRows(parsed.rows);
+        const refreshed = await fetchBomRows(batchId);
+        setLoadedBomRows(refreshed);
+        setSelectedRows(refreshed.map((x) => x.bom_row));
       }
       setPastedText('');
       handleClearImportPreview();
@@ -232,7 +341,7 @@ export const BomDetail: React.FC = () => {
   };
 
   return (
-    <div className="max-w-5xl mx-auto space-y-6">
+    <div className="max-w-[96rem] mx-auto space-y-6">
       <div className="flex items-start justify-between gap-4">
         <div className="flex items-start gap-3">
           <div className="w-10 h-10 rounded-lg bg-indigo-600 text-white flex items-center justify-center flex-shrink-0">
@@ -436,22 +545,46 @@ export const BomDetail: React.FC = () => {
           ) : null}
           {previewRows.length > 0 ? (
             <div className="overflow-auto border border-gray-200 rounded-lg">
-              <table className="min-w-full text-xs">
+              <table className="min-w-full text-xs table-fixed">
                 <thead className="bg-slate-50">
                   <tr>
-                    <th className="px-3 py-2 text-left font-semibold text-slate-700 border-b border-gray-200 whitespace-nowrap">行号</th>
-                    {previewHeaders.map((h) => (
-                      <th key={h} className="px-3 py-2 text-left font-semibold text-slate-700 border-b border-gray-200 whitespace-nowrap">{h}</th>
-                    ))}
+                    <th className="px-3 py-2 text-left font-semibold text-slate-700 border-b border-gray-200 whitespace-nowrap w-12">
+                      行号
+                    </th>
+                    {previewHeaders.map((h) => {
+                      const linkOrMd5 =
+                        headerIsDownloadColumn(h, tableKeyMap) || headerIsMd5Column(h, tableKeyMap);
+                      return (
+                        <th
+                          key={h}
+                          className={`px-3 py-2 text-left font-semibold text-slate-700 border-b border-gray-200 whitespace-nowrap ${
+                            linkOrMd5 ? 'max-w-[14rem] w-[14rem]' : 'max-w-[11rem]'
+                          }`}
+                        >
+                          {h}
+                        </th>
+                      );
+                    })}
                   </tr>
                 </thead>
                 <tbody>
                   {previewRows.map((r, i) => (
                     <tr key={i} className="border-b last:border-b-0">
-                      <td className="px-3 py-2 text-slate-500 whitespace-nowrap">{i + 1}</td>
-                      {previewHeaders.map((h) => (
-                        <td key={`${i}-${h}`} className="px-3 py-2 text-slate-700 whitespace-nowrap max-w-56 overflow-hidden text-ellipsis">{r[h] ?? ''}</td>
-                      ))}
+                      <td className="px-3 py-2 text-slate-500 whitespace-nowrap w-12 align-middle">{i + 1}</td>
+                      {previewHeaders.map((h) => {
+                        const linkOrMd5 =
+                          headerIsDownloadColumn(h, tableKeyMap) || headerIsMd5Column(h, tableKeyMap);
+                        return (
+                          <td
+                            key={`${i}-${h}`}
+                            className={`px-3 py-2 text-slate-700 align-middle ${
+                              linkOrMd5 ? 'max-w-[14rem] w-[14rem]' : 'max-w-[11rem]'
+                            }`}
+                          >
+                            <BomDataTableCell header={h} value={r[h] ?? ''} keyMap={tableKeyMap} />
+                          </td>
+                        );
+                      })}
                     </tr>
                   ))}
                 </tbody>
@@ -482,30 +615,149 @@ export const BomDetail: React.FC = () => {
 
       {!isNew ? (
         <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-6 space-y-3">
-          <h3 className="text-lg font-medium text-slate-800">已入库数据（只读预览）</h3>
-          {selectedRows.length > 0 ? (
-            <div className="overflow-auto border border-gray-200 rounded-lg">
-              <table className="min-w-full text-xs">
-                <thead className="bg-slate-50">
-                  <tr>
-                    <th className="px-3 py-2 text-left font-semibold text-slate-700 border-b border-gray-200 whitespace-nowrap">行号</th>
-                    {existingHeaders.map((h) => (
-                      <th key={h} className="px-3 py-2 text-left font-semibold text-slate-700 border-b border-gray-200 whitespace-nowrap">{h}</th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {selectedRows.map((r, i) => (
-                    <tr key={i} className="border-b last:border-b-0">
-                      <td className="px-3 py-2 text-slate-500 whitespace-nowrap">{i + 1}</td>
-                      {existingHeaders.map((h) => (
-                        <td key={`${i}-${h}`} className="px-3 py-2 text-slate-700 whitespace-nowrap max-w-56 overflow-hidden text-ellipsis">{r[h] ?? ''}</td>
-                      ))}
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <h3 className="text-lg font-medium text-slate-800">已入库数据（只读预览 · 阶段 3 校验状态）</h3>
+            {loadedBomRows.length > 0 ? (
+              <button
+                type="button"
+                onClick={() => void handleArtifactoryEnrich()}
+                disabled={artifactoryEnrichLoading}
+                className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg border border-amber-300 bg-amber-50 text-amber-950 text-sm font-medium hover:bg-amber-100 disabled:opacity-60"
+              >
+                {artifactoryEnrichLoading ? <Loader2 size={16} className="animate-spin" /> : <Download size={16} />}
+                从 Artifactory 补充 MD5/大小
+              </button>
+            ) : null}
+          </div>
+          <p className="text-xs text-slate-500">
+            「本地文件」为与期望 MD5 匹配的 <code className="bg-slate-100 px-1 rounded">local_file.path</code>{' '}
+            文件名（悬停可看完整相对路径）。「大小」优先<strong>本地索引</strong>；无本地时显示 Artifactory 写入的<strong>远端</strong>大小；复制按钮复制字节数。
+          </p>
+          {loadedBomRows.length > 0 ? (
+            <>
+              <div className="overflow-auto border border-gray-200 rounded-lg">
+                <table className="min-w-full text-xs table-fixed">
+                  <thead className="bg-slate-50">
+                    <tr>
+                      <th className="px-3 py-2 text-left font-semibold text-slate-700 border-b border-gray-200 whitespace-nowrap w-12">
+                        行号
+                      </th>
+                      <th className="px-3 py-2 text-left font-semibold text-slate-700 border-b border-gray-200 whitespace-nowrap w-[8.5rem]">
+                        状态
+                      </th>
+                      <th className="px-3 py-2 text-left font-semibold text-slate-700 border-b border-gray-200 whitespace-nowrap w-[12rem] max-w-[12rem]">
+                        本地文件
+                      </th>
+                      <th className="px-3 py-2 text-left font-semibold text-slate-700 border-b border-gray-200 whitespace-nowrap w-[11rem]">
+                        大小
+                      </th>
+                      <th className="px-3 py-2 text-left font-semibold text-slate-700 border-b border-gray-200 min-w-[8rem] max-w-[14rem]">
+                        {remarkHeaderLabel}
+                      </th>
+                      {dataHeaders.map((h) => {
+                        const linkOrMd5 =
+                          headerIsDownloadColumn(h, tableKeyMap) || headerIsMd5Column(h, tableKeyMap);
+                        return (
+                          <th
+                            key={h}
+                            className={`px-3 py-2 text-left font-semibold text-slate-700 border-b border-gray-200 whitespace-nowrap ${
+                              linkOrMd5 ? 'max-w-[14rem] w-[14rem]' : 'max-w-[11rem]'
+                            }`}
+                          >
+                            {h}
+                          </th>
+                        );
+                      })}
                     </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+                  </thead>
+                  <tbody>
+                    {loadedBomRows.map((lr, i) => {
+                      const r = lr.bom_row;
+                      const md5 = extractExpectedMd5FromRow(r, tableKeyMap);
+                      const localInfo = md5 != null ? localInfoByMd5.get(md5) : undefined;
+                      const localB = localInfo?.sizeBytes ?? null;
+                      const localPath = localInfo?.path ?? null;
+                      const remoteB = extractRemoteSizeBytesFromRow(r, tableKeyMap);
+                      const remarkText = extractRemarkFromRow(r, tableKeyMap);
+                      const badgeClass =
+                        lr.status === 'verified_ok'
+                          ? 'bg-emerald-50 text-emerald-900 border-emerald-200'
+                          : lr.status === 'verified_fail'
+                            ? 'bg-red-50 text-red-800 border-red-200'
+                            : lr.status === 'await_manual_download'
+                              ? 'bg-amber-50 text-amber-900 border-amber-200'
+                              : 'bg-slate-100 text-slate-800 border-slate-200';
+                      return (
+                        <tr key={lr.id} className="border-b last:border-b-0">
+                          <td className="px-3 py-2 text-slate-500 whitespace-nowrap align-middle w-12">{i + 1}</td>
+                          <td className="px-3 py-2 whitespace-nowrap align-middle w-[8.5rem]">
+                            <span
+                              className={`inline-flex rounded-md border px-2 py-0.5 font-medium ${badgeClass}`}
+                            >
+                              {BOM_ROW_STATUS_LABEL[lr.status]}
+                            </span>
+                          </td>
+                          <td className="px-3 py-2 align-middle w-[12rem] max-w-[12rem]">
+                            {localPath ? (
+                              <span
+                                className="block truncate font-mono text-[11px] text-slate-800"
+                                title={localPath}
+                              >
+                                {fileBasename(localPath)}
+                              </span>
+                            ) : (
+                              <span className="text-slate-400">—</span>
+                            )}
+                          </td>
+                          <td className="px-3 py-2 align-middle w-[11rem] max-w-[11rem]">
+                            <BomRowByteSizeCell localBytes={localB} remoteBytes={remoteB} />
+                          </td>
+                          <td
+                            className="px-3 py-2 align-middle text-slate-700 min-w-[8rem] max-w-[14rem] overflow-hidden"
+                            title={remarkText ?? undefined}
+                          >
+                            <span className="line-clamp-2 text-left">{remarkText ?? '—'}</span>
+                          </td>
+                          {dataHeaders.map((h) => {
+                            const linkOrMd5 =
+                              headerIsDownloadColumn(h, tableKeyMap) || headerIsMd5Column(h, tableKeyMap);
+                            return (
+                              <td
+                                key={`${lr.id}-${h}`}
+                                className={`px-3 py-2 text-slate-700 align-middle ${linkOrMd5 ? 'max-w-[14rem] w-[14rem]' : 'max-w-[11rem]'}`}
+                              >
+                                <BomDataTableCell header={h} value={r[h] ?? ''} keyMap={tableKeyMap} />
+                              </td>
+                            );
+                          })}
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+              <div className="mt-3 space-y-3 text-xs">
+                {loadedBomRows.some((lr) => lr.status === 'pending' || lr.status === 'verified_ok') ? (
+                  <div className="rounded-lg border border-slate-100 bg-slate-50/90 px-3 py-2.5 space-y-2 text-slate-600">
+                    <div className="font-medium text-slate-800">状态说明</div>
+                    {loadedBomRows.some((lr) => lr.status === 'pending') ? (
+                      <p className="leading-snug">
+                        <span className="font-medium text-slate-700">待处理</span>：{BOM_STATUS_LEGEND_PENDING}
+                      </p>
+                    ) : null}
+                    {loadedBomRows.some((lr) => lr.status === 'verified_ok') ? (
+                      <p className="leading-snug">
+                        <span className="font-medium text-slate-700">校验通过</span>：{BOM_STATUS_LEGEND_VERIFIED_OK}
+                      </p>
+                    ) : null}
+                  </div>
+                ) : null}
+                <p className="text-slate-500">
+                  状态在每次<strong>扫描任务成功结束</strong>后由服务端按期望 MD5 与{' '}
+                  <code className="bg-slate-100 px-1 rounded">local_file</code> 索引刷新；点此页「刷新」可拉取最新状态。
+                </p>
+              </div>
+            </>
           ) : (
             <p className="text-sm text-slate-500">该批次暂无已入库行数据。</p>
           )}

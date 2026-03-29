@@ -194,6 +194,8 @@ export const Settings: React.FC = () => {
         expectedMd5: arr('expectedMd5'),
         arch: arr('arch'),
         extUrl: o.extUrl !== undefined ? arr('extUrl') : undefined,
+        fileSizeBytes: o.fileSizeBytes !== undefined ? arr('fileSizeBytes') : undefined,
+        remark: o.remark !== undefined ? arr('remark') : undefined,
       };
     } catch (e) {
       alert(e instanceof Error ? e.message : 'jsonKeyMap JSON 解析失败');
@@ -463,7 +465,9 @@ export const Settings: React.FC = () => {
                 键名：<code className="bg-gray-100 px-1 rounded">downloadUrl</code>、
                 <code className="bg-gray-100 px-1 rounded">expectedMd5</code>、
                 <code className="bg-gray-100 px-1 rounded">arch</code>、
-                <code className="bg-gray-100 px-1 rounded">extUrl</code>（可选）；值为字符串数组，表示 jsonb 中可能出现的列名。
+                <code className="bg-gray-100 px-1 rounded">extUrl</code>、
+                <code className="bg-gray-100 px-1 rounded">fileSizeBytes</code>、
+                <code className="bg-gray-100 px-1 rounded">remark</code>（可选）；值为字符串数组，表示 jsonb 中可能出现的列名。
               </p>
             </div>
             <div className="flex justify-end items-center gap-3 pt-2">

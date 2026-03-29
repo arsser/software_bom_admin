@@ -1,3 +1,10 @@
+
+col_1	组件类型	组件名	组件ID	版本号	硬件平台	备注	下载路径	MD5
+COMMON	component	license	license-2.4.0	2.4.0	common		https://it-artifactory.yitu-inc.com/artifactory/tw-stage/artifacts/components/license/2.4.0/arm_NPU40T/license2-installer-v2.4.0	bcfb9be23f45a5c285a7316cb1c0dc34
+COMMON	paas	utk	utk-0.12.2-x86	0.12.2-x86	x86_T4		https://it-artifactory.yitu-inc.com/artifactory/tw-stage/artifacts/paas/utk/0.12.2/x86_T4/utk	976a59e14f30592c082d2361a7dfe1a2
+COMMON	paas	utk	utk-0.12.2-arm	0.12.2	arm_NPU40T		https://it-artifactory.yitu-inc.com/artifactory/tw-stage/artifacts/paas/utk/0.12.2/arm_NPU40T/utk	205390fb59406d66b5703fdc9d71791b
+
+
 软件BOM表
 
 

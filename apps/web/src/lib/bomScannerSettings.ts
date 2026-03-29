@@ -7,6 +7,10 @@ export type BomJsonKeyMap = {
   expectedMd5: string[];
   arch: string[];
   extUrl?: string[];
+  /** 写入 Artifactory 拉取的大小（字节，整数字符串） */
+  fileSizeBytes?: string[];
+  /** 拉取失败等说明 */
+  remark?: string[];
 };
 
 /** DB 中仅存 scanIntervalSeconds；读库时可能仍有历史 scanIntervalMinutes */
@@ -23,6 +27,8 @@ const defaultJsonKeyMap: BomJsonKeyMap = {
   expectedMd5: ['MD5', 'md5', 'checksum'],
   arch: ['硬件平台', 'arch', 'platform', '架构'],
   extUrl: ['ext_url', 'extUrl', '转存地址'],
+  fileSizeBytes: ['文件大小', 'size_bytes', '远端大小'],
+  remark: ['备注', 'note', 'remark'],
 };
 
 const defaultConfig: BomScannerConfig = {
@@ -54,6 +60,9 @@ function mergeConfig(raw: BomScannerRaw | null | undefined): BomScannerConfig {
       expectedMd5: Array.isArray(jm?.expectedMd5) && jm.expectedMd5.length ? jm.expectedMd5 : defaultJsonKeyMap.expectedMd5,
       arch: Array.isArray(jm?.arch) && jm.arch.length ? jm.arch : defaultJsonKeyMap.arch,
       extUrl: Array.isArray(jm?.extUrl) && jm.extUrl.length ? jm.extUrl : defaultJsonKeyMap.extUrl,
+      fileSizeBytes:
+        Array.isArray(jm?.fileSizeBytes) && jm.fileSizeBytes.length ? jm.fileSizeBytes : defaultJsonKeyMap.fileSizeBytes!,
+      remark: Array.isArray(jm?.remark) && jm.remark.length ? jm.remark : defaultJsonKeyMap.remark!,
     },
   };
 }

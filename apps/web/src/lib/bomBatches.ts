@@ -8,6 +8,7 @@ import {
   type BomWarning,
   type HeaderValidationResult,
 } from './bomParser';
+import { isBomRowStatus, type BomRowStatus } from './bomRowStatus';
 
 export type BomBatch = {
   id: string;
@@ -19,11 +20,11 @@ export type BomBatch = {
   rowCount: number;
 };
 
-type BomBatchRow = {
+export type BomBatchRow = {
   id: string;
   bom_row: BomRowRecord;
+  status: BomRowStatus;
 };
-
 
 export async function fetchBomBatches(): Promise<BomBatch[]> {
   const { data, error } = await supabase
@@ -71,11 +72,15 @@ export async function updateBomBatchHeaderOrder(batchId: string, headerOrder: st
 export async function fetchBomRows(batchId: string): Promise<BomBatchRow[]> {
   const { data, error } = await supabase
     .from('bom_rows')
-    .select('id,bom_row')
+    .select('id,bom_row,status')
     .eq('batch_id', batchId)
     .order('created_at', { ascending: true });
   if (error) throw error;
-  return (data ?? []) as BomBatchRow[];
+  return (data ?? []).map((raw: any) => ({
+    id: String(raw.id),
+    bom_row: raw.bom_row as BomRowRecord,
+    status: isBomRowStatus(String(raw.status)) ? (String(raw.status) as BomRowStatus) : 'pending',
+  }));
 }
 
 export async function createBatchWithRows(payload: { name: string; productId: string; headerOrder: string[]; rows: BomRowRecord[] }): Promise<string> {
@@ -96,6 +101,53 @@ export async function createBatchWithRows(payload: { name: string; productId: st
   if (rowsError) throw rowsError;
 
   return batch.id as string;
+}
+
+export async function updateBomRowRecord(rowId: string, bom_row: BomRowRecord): Promise<void> {
+  const { error } = await supabase.from('bom_rows').update({ bom_row }).eq('id', rowId);
+  if (error) throw error;
+}
+
+export type LocalFileIndexInfo = {
+  sizeBytes: number;
+  /** 相对仓库根的路径（与 worker 一致） */
+  path: string;
+};
+
+/** 按 MD5（小写 32 hex）查询本地索引中的 path、size_bytes；同 MD5 多文件时保留第一条命中 */
+export async function fetchLocalFileInfoByMd5(md5List: string[]): Promise<Map<string, LocalFileIndexInfo>> {
+  const unique = [
+    ...new Set(md5List.filter((m) => /^[a-fA-F0-9]{32}$/.test(m.trim())).map((m) => m.trim().toLowerCase())),
+  ];
+  const map = new Map<string, LocalFileIndexInfo>();
+  const chunkSize = 80;
+  for (let i = 0; i < unique.length; i += chunkSize) {
+    const part = unique.slice(i, i + chunkSize);
+    const { data, error } = await supabase.from('local_file').select('md5,size_bytes,path').in('md5', part);
+    if (error) throw error;
+    for (const row of data ?? []) {
+      const raw = row as { md5?: string; size_bytes?: number | string; path?: string };
+      const m = String(raw.md5 ?? '').toLowerCase();
+      const sz = typeof raw.size_bytes === 'string' ? Number(raw.size_bytes) : Number(raw.size_bytes);
+      const p = String(raw.path ?? '').trim();
+      if (/^[a-f0-9]{32}$/.test(m) && Number.isFinite(sz) && sz >= 0 && p && !map.has(m)) {
+        map.set(m, { sizeBytes: sz, path: p });
+      }
+    }
+  }
+  return map;
+}
+
+export function mergeHeaderOrder(existing: string[], keysToEnsure: string[]): string[] {
+  const seen = new Set(existing.map((h) => h.trim()));
+  const out = [...existing];
+  for (const k of keysToEnsure) {
+    const t = k.trim();
+    if (!t || seen.has(t)) continue;
+    out.push(t);
+    seen.add(t);
+  }
+  return out.slice(0, 64);
 }
 
 export async function replaceBatchRows(batchId: string, rows: BomRowRecord[]): Promise<void> {

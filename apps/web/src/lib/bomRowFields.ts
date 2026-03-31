@@ -1,3 +1,4 @@
+import type { BomBatchRow, LocalFileIndexInfo } from './bomBatches';
 import type { BomJsonKeyMap } from './bomScannerSettings';
 import type { BomRowRecord } from './bomParser';
 
@@ -71,6 +72,23 @@ export function remarkColumnKeys(keyMap: BomJsonKeyMap): string[] {
 export function headerMatchesAny(header: string, keys: string[]): boolean {
   const n = norm(header);
   return keys.some((k) => norm(k) === n);
+}
+
+/** 与 DB eligible 语义对齐：可网页/worker 从 it-Artifactory 拉取 */
+export function rowEligibleForItPull(
+  row: BomBatchRow,
+  keyMap: BomJsonKeyMap,
+  localInfoByMd5: Map<string, LocalFileIndexInfo>,
+): boolean {
+  if (row.status !== 'pending' && row.status !== 'error') return false;
+  const raw = extractDownloadUrlRaw(row.bom_row, keyMap);
+  if (!raw) return false;
+  const url = extractHttpUrlFromDownloadCell(raw);
+  if (!url) return false;
+  if (!/artifactory/i.test(url)) return false;
+  const md5 = extractExpectedMd5FromRow(row.bom_row, keyMap);
+  if (md5 && localInfoByMd5.has(md5)) return false;
+  return true;
 }
 
 /** 从相对/绝对路径取文件名（用于表格展示） */

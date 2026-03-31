@@ -24,6 +24,8 @@ export type BomBatchRow = {
   id: string;
   bom_row: BomRowRecord;
   status: BomRowStatus;
+  /** 阶段 4：自动下载失败等简要原因 */
+  lastFetchError?: string | null;
 };
 
 export async function fetchBomBatches(): Promise<BomBatch[]> {
@@ -72,7 +74,7 @@ export async function updateBomBatchHeaderOrder(batchId: string, headerOrder: st
 export async function fetchBomRows(batchId: string): Promise<BomBatchRow[]> {
   const { data, error } = await supabase
     .from('bom_rows')
-    .select('id,bom_row,status')
+    .select('id,bom_row,status,last_fetch_error')
     .eq('batch_id', batchId)
     .order('created_at', { ascending: true });
   if (error) throw error;
@@ -80,6 +82,7 @@ export async function fetchBomRows(batchId: string): Promise<BomBatchRow[]> {
     id: String(raw.id),
     bom_row: raw.bom_row as BomRowRecord,
     status: isBomRowStatus(String(raw.status)) ? (String(raw.status) as BomRowStatus) : 'pending',
+    lastFetchError: (raw.last_fetch_error as string | null | undefined) ?? null,
   }));
 }
 

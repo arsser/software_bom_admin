@@ -5,10 +5,7 @@ import {
   Key,
   MoreHorizontal,
   Loader2,
-  ChevronDown,
-  ChevronRight,
 } from 'lucide-react';
-import { Link } from 'react-router-dom';
 import { getArtifactoryApiInfo, type ApiInfoResult } from '../lib/artifactoryApi';
 import { fetchArtifactorySettings, type ArtifactoryConfig } from '../lib/artifactorySettings';
 
@@ -18,11 +15,9 @@ function copyText(text: string) {
 
 export const Md5Calculator: React.FC = () => {
   const [urlsText, setUrlsText] = useState('');
-  const [manualApiKey, setManualApiKey] = useState('');
   const [loading, setLoading] = useState(false);
   const [results, setResults] = useState<ApiInfoResult[]>([]);
   const [config, setConfig] = useState<ArtifactoryConfig | null>(null);
-  const [showManualKey, setShowManualKey] = useState(false);
   const [modalRecord, setModalRecord] = useState<ApiInfoResult | null>(null);
   const [expandedUrl, setExpandedUrl] = useState<string | null>(null);
 
@@ -33,11 +28,6 @@ export const Md5Calculator: React.FC = () => {
         const cfg = await fetchArtifactorySettings();
         if (cancelled) return;
         setConfig(cfg);
-        if (cfg?.artifactoryApiKey) {
-          setManualApiKey(cfg.artifactoryApiKey);
-        } else {
-          setManualApiKey('');
-        }
       } catch (e) {
         console.error(e);
       }
@@ -58,18 +48,7 @@ export const Md5Calculator: React.FC = () => {
     setLoading(true);
     setResults([]);
     try {
-      const data = await getArtifactoryApiInfo({
-        urls,
-        apiKey: manualApiKey || undefined,
-        config: config
-          ? {
-              artifactoryBaseUrl: config.artifactoryBaseUrl || undefined,
-              artifactoryApiKey: config.artifactoryApiKey || undefined,
-              artifactoryExtBaseUrl: config.artifactoryExtBaseUrl || undefined,
-              artifactoryExtApiKey: config.artifactoryExtApiKey || undefined,
-            }
-          : undefined,
-      });
+      const data = await getArtifactoryApiInfo({ urls });
       setResults(data);
     } catch (err) {
       console.error(err);
@@ -93,11 +72,7 @@ export const Md5Calculator: React.FC = () => {
           <code className="text-xs bg-slate-100 px-1 rounded">/artifactory/...</code> 路径。
         </p>
         <p className="text-sm text-slate-400 mt-1">
-          凭证请在{' '}
-          <Link to="/settings" className="text-blue-600 hover:underline">
-            系统设置
-          </Link>{' '}
-          中配置 Artifactory。
+          凭证由 edge function 从环境变量 IT_ARTIFACTORY_* 读取；系统设置页仅用于展示与手工排查。
         </p>
       </div>
 
@@ -113,29 +88,11 @@ export const Md5Calculator: React.FC = () => {
               <div className="font-mono text-slate-800 break-all">
                 {config.artifactoryBaseUrl || '未配置'}
               </div>
-              <div className="flex items-center gap-2">
-                <span
-                  className={`inline-block w-2 h-2 rounded-full ${config.artifactoryApiKey ? 'bg-emerald-500' : 'bg-amber-400'}`}
-                />
-                <span className="text-slate-600">API Key</span>
-                <code className="text-xs text-slate-500">
-                  {config.artifactoryApiKey ? '••••••••' : '无'}
-                </code>
-              </div>
             </div>
             <div className="space-y-1">
               <div className="text-slate-500">扩展实例 Base URL</div>
               <div className="font-mono text-slate-800 break-all">
                 {config.artifactoryExtBaseUrl || '未配置'}
-              </div>
-              <div className="flex items-center gap-2">
-                <span
-                  className={`inline-block w-2 h-2 rounded-full ${config.artifactoryExtApiKey ? 'bg-emerald-500' : 'bg-amber-400'}`}
-                />
-                <span className="text-slate-600">API Key</span>
-                <code className="text-xs text-slate-500">
-                  {config.artifactoryExtApiKey ? '••••••••' : '无'}
-                </code>
               </div>
             </div>
           </div>
@@ -158,30 +115,6 @@ export const Md5Calculator: React.FC = () => {
             className="w-full px-4 py-3 border border-gray-200 rounded-lg font-mono text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
           />
           <p className="text-xs text-slate-500 mt-1">可从 Excel/CSV 整列粘贴。</p>
-        </div>
-
-        <div className="border-t border-gray-100 pt-4">
-          <button
-            type="button"
-            onClick={() => setShowManualKey(!showManualKey)}
-            className="flex items-center gap-1 text-sm text-slate-500 hover:text-slate-700"
-          >
-            {showManualKey ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
-            手动 API Key（可选，用于未匹配已保存 Base URL 的地址）
-          </button>
-          {showManualKey && (
-            <div className="mt-3 max-w-md">
-              <label className="block text-sm font-medium text-slate-700 mb-1">X-JFrog-Art-Api</label>
-              <input
-                type="password"
-                value={manualApiKey}
-                onChange={(e) => setManualApiKey(e.target.value)}
-                placeholder="未在设置中配置的仓库时使用"
-                autoComplete="off"
-                className="w-full px-4 py-2 border border-gray-200 rounded-lg font-mono text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
-              />
-            </div>
-          )}
         </div>
 
         <div className="flex justify-end pt-2">

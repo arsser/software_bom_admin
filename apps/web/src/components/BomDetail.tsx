@@ -1,6 +1,18 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
-import { AlertTriangle, ArrowLeft, Download, Loader2, Package, RefreshCcw, Save, Trash2 } from 'lucide-react';
+import {
+  AlertTriangle,
+  ArrowLeft,
+  ClipboardCopy,
+  HardDriveDownload,
+  Download,
+  Loader2,
+  Package,
+  RefreshCcw,
+  Save,
+  Trash2,
+  XCircle,
+} from 'lucide-react';
 import { defaultBomScannerConfig, fetchBomScannerSettings, type BomScannerConfig } from '../lib/bomScannerSettings';
 import {
   buildBomWarnings,
@@ -22,16 +34,33 @@ import {
 import { enrichBomRowsFromArtifactory } from '../lib/bomArtifactoryEnrich';
 import { fetchArtifactorySettings, type ArtifactoryConfig } from '../lib/artifactorySettings';
 import {
+  BOM_DOWNLOAD_JOB_STATUS_LABEL,
+  cancelBomDownloadJob,
+  downloadJobIsTerminal,
+  downloadJobProgressPercent,
+  fetchBomDownloadJobsForBatch,
+  formatDownloadJobBytesLine,
+  requestBomItDownload,
+  type BomDownloadJob,
+} from '../lib/bomDownloadJobs';
+import {
+  buildCopyCommandsForRows,
+  rowHasArtifactoryHttpUrl,
+} from '../lib/bomDownloadCommands';
+import {
   extractExpectedMd5FromRow,
   extractRemoteSizeBytesFromRow,
   extractRemarkFromRow,
   fileBasename,
   headerMatchesAny,
+  rowEligibleForItPull,
 } from '../lib/bomRowFields';
 import { BomRowByteSizeCell } from './HumanByteSize';
 import { BomDataTableCell, headerIsDownloadColumn, headerIsMd5Column } from '../lib/bomTableCell';
 import {
   BOM_ROW_STATUS_LABEL,
+  BOM_STATUS_LEGEND_ERROR,
+  BOM_STATUS_LEGEND_MANUAL,
   BOM_STATUS_LEGEND_PENDING,
   BOM_STATUS_LEGEND_VERIFIED_OK,
 } from '../lib/bomRowStatus';
@@ -72,6 +101,14 @@ export const BomDetail: React.FC = () => {
   const [artifactoryConfig, setArtifactoryConfig] = useState<ArtifactoryConfig | null>(null);
   const [localInfoByMd5, setLocalInfoByMd5] = useState<Map<string, LocalFileIndexInfo>>(() => new Map());
   const [artifactoryEnrichLoading, setArtifactoryEnrichLoading] = useState(false);
+  const [downloadJobs, setDownloadJobs] = useState<BomDownloadJob[]>([]);
+  /** 'all' | 行 id | null */
+  const [downloadBusy, setDownloadBusy] = useState<'all' | string | null>(null);
+  const [downloadCancelBusy, setDownloadCancelBusy] = useState(false);
+  const downloadJobStatusRef = useRef<Map<string, string>>(new Map());
+  /** 已入库表格：勾选用于复制 curl/wget 的行 id */
+  const [copyRowIds, setCopyRowIds] = useState<Set<string>>(() => new Set());
+  const [copyCmdToast, setCopyCmdToast] = useState<string | null>(null);
 
   const pasteAreaRef = useRef<HTMLDivElement>(null);
   const PASTE_AREA_HINT = '在此处 Ctrl/Cmd+V 粘贴 Excel 区域';
@@ -197,6 +234,12 @@ export const BomDetail: React.FC = () => {
         const rows = await fetchBomRows(batchId);
         setLoadedBomRows(rows);
         setSelectedRows(rows.map((x) => x.bom_row));
+        try {
+          const jobs = await fetchBomDownloadJobsForBatch(batchId);
+          setDownloadJobs(jobs);
+        } catch {
+          setDownloadJobs([]);
+        }
       }
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -206,6 +249,8 @@ export const BomDetail: React.FC = () => {
   };
 
   useEffect(() => {
+    downloadJobStatusRef.current = new Map();
+    setCopyRowIds(new Set());
     load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [batchId]);
@@ -231,15 +276,162 @@ export const BomDetail: React.FC = () => {
     };
   }, [batchId, config, loadedBomRows]);
 
-  const handleArtifactoryEnrich = async () => {
-    if (!batchId || !config) return;
+  const eligiblePullCount = useMemo(() => {
+    if (!config) return 0;
+    return loadedBomRows.filter((lr) => rowEligibleForItPull(lr, tableKeyMap, localInfoByMd5)).length;
+  }, [loadedBomRows, config, tableKeyMap, localInfoByMd5]);
+
+  const copyableRowIds = useMemo(() => {
+    if (!config) return [] as string[];
+    return loadedBomRows.filter((lr) => rowHasArtifactoryHttpUrl(lr, tableKeyMap)).map((lr) => lr.id);
+  }, [loadedBomRows, config, tableKeyMap]);
+
+  const allCopyableRowsSelected = useMemo(
+    () => copyableRowIds.length > 0 && copyableRowIds.every((id) => copyRowIds.has(id)),
+    [copyableRowIds, copyRowIds],
+  );
+
+  const hasActiveDownloadJob = useMemo(
+    () => downloadJobs.some((j) => j.status === 'queued' || j.status === 'running'),
+    [downloadJobs],
+  );
+
+  const latestDownloadJob = downloadJobs[0] ?? null;
+  const queuedDownloadJob = useMemo(
+    () => downloadJobs.find((j) => j.status === 'queued') ?? null,
+    [downloadJobs],
+  );
+
+  useEffect(() => {
+    if (!batchId || !hasActiveDownloadJob) return;
+    const id = window.setInterval(() => {
+      void fetchBomDownloadJobsForBatch(batchId).then(setDownloadJobs);
+    }, 1500);
+    return () => window.clearInterval(id);
+  }, [batchId, hasActiveDownloadJob]);
+
+  useEffect(() => {
+    for (const j of downloadJobs) {
+      const prev = downloadJobStatusRef.current.get(j.id);
+      downloadJobStatusRef.current.set(j.id, j.status);
+      if (
+        (prev === 'queued' || prev === 'running') &&
+        downloadJobIsTerminal(j.status)
+      ) {
+        void load();
+        break;
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- 仅在任务状态从进行中变为终态时刷新批次
+  }, [downloadJobs]);
+
+  const handleDownloadAllIt = async () => {
+    if (!batchId) return;
+    setDownloadBusy('all');
+    try {
+      await requestBomItDownload(batchId, null);
+      const jobs = await fetchBomDownloadJobsForBatch(batchId);
+      setDownloadJobs(jobs);
+    } catch (e) {
+      alert(e instanceof Error ? e.message : String(e));
+    } finally {
+      setDownloadBusy(null);
+    }
+  };
+
+  const handleDownloadOneIt = async (rowId: string) => {
+    if (!batchId) return;
+    setDownloadBusy(rowId);
+    try {
+      await requestBomItDownload(batchId, [rowId]);
+      const jobs = await fetchBomDownloadJobsForBatch(batchId);
+      setDownloadJobs(jobs);
+    } catch (e) {
+      alert(e instanceof Error ? e.message : String(e));
+    } finally {
+      setDownloadBusy(null);
+    }
+  };
+
+  const handleCancelQueuedDownload = async (jobId: string) => {
+    if (!batchId) return;
+    setDownloadCancelBusy(true);
+    try {
+      const ok = await cancelBomDownloadJob(jobId);
+      if (!ok) {
+        alert('无法取消：任务可能已开始执行或已结束。');
+      }
+      const jobs = await fetchBomDownloadJobsForBatch(batchId);
+      setDownloadJobs(jobs);
+    } catch (e) {
+      alert(e instanceof Error ? e.message : String(e));
+    } finally {
+      setDownloadCancelBusy(false);
+    }
+  };
+
+  const toggleCopyRowId = (rowId: string) => {
+    setCopyRowIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(rowId)) next.delete(rowId);
+      else next.add(rowId);
+      return next;
+    });
+  };
+
+  const toggleSelectAllCopyableRows = () => {
+    if (allCopyableRowsSelected) {
+      setCopyRowIds(new Set());
+    } else {
+      setCopyRowIds(new Set(copyableRowIds));
+    }
+  };
+
+  const handleCopyDownloadCommands = async (tool: 'curl' | 'wget') => {
+    if (!config) return;
     const af = artifactoryConfig;
     if (!af) {
       alert('无法读取 Artifactory 配置，请稍后重试或检查系统设置。');
       return;
     }
     if (!(af.artifactoryApiKey || '').trim() && !(af.artifactoryExtApiKey || '').trim()) {
-      alert('请先在「系统设置」中配置 Artifactory API Key（it 或 ext 至少一个）。');
+      alert('请先在「系统设置」中配置 Artifactory API Key（主实例或扩展实例）。');
+      return;
+    }
+    const items = loadedBomRows
+      .map((lr, idx) => ({ row: lr, displayLine: idx + 1 }))
+      .filter(({ row }) => copyRowIds.has(row.id));
+    if (items.length === 0) {
+      alert('请先勾选表格左侧复选框（需为含 it-Artifactory 链接的行）。');
+      return;
+    }
+    const { text, errors } = buildCopyCommandsForRows(items, config.jsonKeyMap, af, tool);
+    if (!text.trim()) {
+      alert(errors.length ? errors.join('\n') : '没有可生成的命令。');
+      return;
+    }
+    let clip = text;
+    if (errors.length) {
+      clip += `\n\n# 以下行已跳过：\n${errors.map((e) => `# ${e}`).join('\n')}`;
+    }
+    try {
+      await navigator.clipboard.writeText(clip);
+      const label = tool === 'curl' ? 'curl' : 'wget';
+      setCopyCmdToast(`已复制 ${label}（${items.length} 条命令${errors.length ? `，${errors.length} 条跳过` : ''}）`);
+      window.setTimeout(() => setCopyCmdToast(null), 4000);
+      if (errors.length) {
+        alert(`已复制到剪贴板；另有 ${errors.length} 行无法生成（见剪贴板末尾注释）。`);
+      }
+    } catch (e) {
+      alert(e instanceof Error ? e.message : String(e));
+    }
+  };
+
+  const handleArtifactoryEnrich = async () => {
+    if (!batchId || !config) return;
+    const af = artifactoryConfig;
+    if (!af) {
+      alert('无法读取 Artifactory 配置，请稍后重试或检查系统设置。');
       return;
     }
     setArtifactoryEnrichLoading(true);
@@ -616,7 +808,7 @@ export const BomDetail: React.FC = () => {
       {!isNew ? (
         <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-6 space-y-3">
           <div className="flex flex-wrap items-start justify-between gap-3">
-            <h3 className="text-lg font-medium text-slate-800">已入库数据（只读预览 · 阶段 3 校验状态）</h3>
+            <h3 className="text-lg font-medium text-slate-800">已入库数据（只读预览 · 校验与获取状态）</h3>
             {loadedBomRows.length > 0 ? (
               <button
                 type="button"
@@ -632,9 +824,129 @@ export const BomDetail: React.FC = () => {
           <p className="text-xs text-slate-500">
             「本地文件」为与期望 MD5 匹配的 <code className="bg-slate-100 px-1 rounded">local_file.path</code>{' '}
             文件名（悬停可看完整相对路径）。「大小」优先<strong>本地索引</strong>；无本地时显示 Artifactory 写入的<strong>远端</strong>大小；复制按钮复制字节数。
+            it-Artifactory 直链由部署侧 <code className="bg-slate-100 px-1 rounded">bom-scanner-worker</code> 使用服务端
+            API Key 拉取到暂存目录；其它来源请人工拷贝后扫描。
           </p>
           {loadedBomRows.length > 0 ? (
             <>
+              <div className="rounded-lg border border-indigo-100 bg-indigo-50/90 p-4 space-y-3">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div>
+                    <div className="text-sm font-medium text-indigo-950">it-Artifactory 拉取</div>
+                    <p className="text-xs text-indigo-900/80 mt-0.5">
+                      任务入队后由 <code className="bg-white/80 px-1 rounded text-[11px]">bom-scanner-worker</code>{' '}
+                      抢占执行；请保持进程在线、可连 Supabase，并在 worker 的 .env（或 compose）中配置{' '}
+                      <code className="bg-white/80 px-1 rounded text-[11px]">IT_ARTIFACTORY_API_KEY</code> 等变量。
+                    </p>
+                  </div>
+                  <div className="flex flex-wrap items-center gap-2">
+                    {queuedDownloadJob ? (
+                      <button
+                        type="button"
+                        disabled={downloadCancelBusy}
+                        onClick={() => void handleCancelQueuedDownload(queuedDownloadJob.id)}
+                        className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-slate-300 bg-white text-slate-700 text-sm font-medium hover:bg-slate-50 disabled:opacity-50"
+                      >
+                        {downloadCancelBusy ? (
+                          <Loader2 size={16} className="animate-spin" />
+                        ) : (
+                          <XCircle size={16} />
+                        )}
+                        取消排队
+                      </button>
+                    ) : null}
+                    <button
+                      type="button"
+                      disabled={eligiblePullCount === 0 || downloadBusy !== null || hasActiveDownloadJob}
+                      onClick={() => void handleDownloadAllIt()}
+                      className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg border border-indigo-300 bg-white text-indigo-900 text-sm font-medium hover:bg-indigo-100 disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      {downloadBusy === 'all' ? <Loader2 size={16} className="animate-spin" /> : <Download size={16} />}
+                      拉取全部（{eligiblePullCount}）
+                    </button>
+                    {batchId ? (
+                      <button
+                        type="button"
+                        onClick={() => navigate(`/bom/jobs?batchId=${encodeURIComponent(batchId)}`)}
+                        className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg border border-slate-300 bg-white text-slate-800 text-sm font-medium hover:bg-slate-50"
+                      >
+                        <HardDriveDownload size={16} />
+                        下载任务
+                      </button>
+                    ) : null}
+                    <button
+                      type="button"
+                      onClick={() => void handleCopyDownloadCommands('curl')}
+                      disabled={copyRowIds.size === 0}
+                      title="复制选中行的 curl 命令（含 Authorization 与 X-JFrog-Art-Api）"
+                      className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-slate-300 bg-white text-slate-800 text-sm font-medium hover:bg-slate-50 disabled:opacity-45 disabled:cursor-not-allowed"
+                    >
+                      <ClipboardCopy size={16} />
+                      复制 curl
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => void handleCopyDownloadCommands('wget')}
+                      disabled={copyRowIds.size === 0}
+                      title="复制选中行的 wget 命令"
+                      className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-slate-300 bg-white text-slate-800 text-sm font-medium hover:bg-slate-50 disabled:opacity-45 disabled:cursor-not-allowed"
+                    >
+                      <ClipboardCopy size={16} />
+                      复制 wget
+                    </button>
+                  </div>
+                </div>
+                {copyCmdToast ? (
+                  <p className="text-xs text-emerald-800 font-medium px-0.5">{copyCmdToast}</p>
+                ) : null}
+                <p className="text-[11px] text-slate-600 leading-snug">
+                  在下方表格勾选行后，可复制带 API Key 的终端下载命令（与 worker 相同 Bearer，并附带 JFrog 头以便排错）。命令含敏感信息，请勿泄露剪贴板内容。
+                </p>
+                <p className="text-xs text-amber-950/90 bg-amber-50 border border-amber-200/80 rounded-md px-2.5 py-2 leading-snug">
+                  若<strong>长时间停在「排队中」</strong>：多半是 worker 未启动、连不上数据库，或尚未应用含{' '}
+                  <code className="font-mono text-[11px]">bom_download_jobs</code> 的迁移。请确认容器/进程在跑并已执行{' '}
+                  <code className="font-mono text-[11px]">supabase db reset</code> / migration up。当前版本 worker
+                  在两次扫描之间的休眠里也会每隔数秒尝试抢占队列。「取消排队」仅对尚未被 worker
+                  接走的任务有效；已进入「拉取中」后无法从网页中止。
+                </p>
+                {latestDownloadJob ? (
+                  <div className="rounded-md border border-indigo-200/80 bg-white/90 px-3 py-2.5 space-y-2">
+                    <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-indigo-950">
+                      <span className="font-medium">
+                        {BOM_DOWNLOAD_JOB_STATUS_LABEL[latestDownloadJob.status]}
+                      </span>
+                      <span className="font-mono text-indigo-800/90">
+                        {latestDownloadJob.progressTotal > 0
+                          ? `${latestDownloadJob.progressCurrent}/${latestDownloadJob.progressTotal}`
+                          : '—'}
+                      </span>
+                    </div>
+                    {formatDownloadJobBytesLine(latestDownloadJob) ? (
+                      <p className="text-[11px] text-indigo-800/90">{formatDownloadJobBytesLine(latestDownloadJob)}</p>
+                    ) : null}
+                    <div className="h-2 w-full rounded-full bg-indigo-100 overflow-hidden">
+                      <div
+                        className={`h-full rounded-full transition-all duration-300 ${
+                          latestDownloadJob.status === 'cancelled' ? 'bg-slate-400' : 'bg-indigo-600'
+                        }`}
+                        style={{
+                          width: `${downloadJobProgressPercent(latestDownloadJob)}%`,
+                        }}
+                      />
+                    </div>
+                    {latestDownloadJob.lastMessage ? (
+                      <p className="text-[11px] text-indigo-900/90 font-mono break-all leading-snug">
+                        {latestDownloadJob.lastMessage}
+                      </p>
+                    ) : null}
+                    {latestDownloadJob.finishedAt ? (
+                      <p className="text-[11px] text-slate-500">
+                        结束时间：{new Date(latestDownloadJob.finishedAt).toLocaleString()}
+                      </p>
+                    ) : null}
+                  </div>
+                ) : null}
+              </div>
               <div className="overflow-auto border border-gray-200 rounded-lg">
                 <table className="min-w-full text-xs table-fixed">
                   <thead className="bg-slate-50">
@@ -642,8 +954,24 @@ export const BomDetail: React.FC = () => {
                       <th className="px-3 py-2 text-left font-semibold text-slate-700 border-b border-gray-200 whitespace-nowrap w-12">
                         行号
                       </th>
+                      <th className="px-2 py-2 text-center font-semibold text-slate-700 border-b border-gray-200 whitespace-nowrap w-9">
+                        <input
+                          type="checkbox"
+                          checked={allCopyableRowsSelected}
+                          disabled={copyableRowIds.length === 0}
+                          onChange={toggleSelectAllCopyableRows}
+                          title="全选含 it-Artifactory 链接的行（用于复制 curl/wget）"
+                          className="h-3.5 w-3.5 rounded border-slate-400 align-middle cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+                        />
+                      </th>
+                      <th className="px-3 py-2 text-center font-semibold text-slate-700 border-b border-gray-200 whitespace-nowrap w-14">
+                        拉取
+                      </th>
                       <th className="px-3 py-2 text-left font-semibold text-slate-700 border-b border-gray-200 whitespace-nowrap w-[8.5rem]">
                         状态
+                      </th>
+                      <th className="px-3 py-2 text-left font-semibold text-slate-700 border-b border-gray-200 whitespace-nowrap min-w-[10rem] max-w-[14rem] w-[12rem]">
+                        获取说明
                       </th>
                       <th className="px-3 py-2 text-left font-semibold text-slate-700 border-b border-gray-200 whitespace-nowrap w-[12rem] max-w-[12rem]">
                         本地文件
@@ -686,16 +1014,61 @@ export const BomDetail: React.FC = () => {
                             ? 'bg-red-50 text-red-800 border-red-200'
                             : lr.status === 'await_manual_download'
                               ? 'bg-amber-50 text-amber-900 border-amber-200'
-                              : 'bg-slate-100 text-slate-800 border-slate-200';
+                              : lr.status === 'error'
+                                ? 'bg-rose-50 text-rose-900 border-rose-200'
+                                : 'bg-slate-100 text-slate-800 border-slate-200';
+                      const canPullThis = rowEligibleForItPull(lr, tableKeyMap, localInfoByMd5);
+                      const canCopyCmd = rowHasArtifactoryHttpUrl(lr, tableKeyMap);
                       return (
                         <tr key={lr.id} className="border-b last:border-b-0">
                           <td className="px-3 py-2 text-slate-500 whitespace-nowrap align-middle w-12">{i + 1}</td>
+                          <td className="px-2 py-2 align-middle w-9 text-center">
+                            <input
+                              type="checkbox"
+                              checked={copyRowIds.has(lr.id)}
+                              disabled={!canCopyCmd}
+                              onChange={() => toggleCopyRowId(lr.id)}
+                              title={canCopyCmd ? '勾选后可批量复制 curl/wget' : '无 it-Artifactory 链接'}
+                              className="h-3.5 w-3.5 rounded border-slate-400 align-middle cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed"
+                            />
+                          </td>
+                          <td className="px-3 py-2 align-middle w-14 text-center">
+                            {canPullThis ? (
+                              <button
+                                type="button"
+                                disabled={downloadBusy !== null || hasActiveDownloadJob}
+                                onClick={() => void handleDownloadOneIt(lr.id)}
+                                title="拉取本行 it-Artifactory 制品"
+                                className="inline-flex items-center justify-center p-1 rounded-md border border-indigo-200 bg-indigo-50 text-indigo-800 hover:bg-indigo-100 disabled:opacity-45 disabled:cursor-not-allowed"
+                              >
+                                {downloadBusy === lr.id ? (
+                                  <Loader2 size={14} className="animate-spin" />
+                                ) : (
+                                  <Download size={14} />
+                                )}
+                              </button>
+                            ) : (
+                              <span className="text-slate-300">—</span>
+                            )}
+                          </td>
                           <td className="px-3 py-2 whitespace-nowrap align-middle w-[8.5rem]">
                             <span
                               className={`inline-flex rounded-md border px-2 py-0.5 font-medium ${badgeClass}`}
                             >
                               {BOM_ROW_STATUS_LABEL[lr.status]}
                             </span>
+                          </td>
+                          <td
+                            className="px-3 py-2 align-middle min-w-[10rem] max-w-[14rem] w-[12rem] text-slate-700"
+                            title={lr.lastFetchError ?? undefined}
+                          >
+                            {lr.lastFetchError ? (
+                              <span className="line-clamp-3 text-left text-[11px] leading-snug">{lr.lastFetchError}</span>
+                            ) : lr.status === 'await_manual_download' ? (
+                              <span className="text-[11px] text-amber-900/90 leading-snug">请自行下载并放入暂存目录</span>
+                            ) : (
+                              <span className="text-slate-400">—</span>
+                            )}
                           </td>
                           <td className="px-3 py-2 align-middle w-[12rem] max-w-[12rem]">
                             {localPath ? (
@@ -737,7 +1110,9 @@ export const BomDetail: React.FC = () => {
                 </table>
               </div>
               <div className="mt-3 space-y-3 text-xs">
-                {loadedBomRows.some((lr) => lr.status === 'pending' || lr.status === 'verified_ok') ? (
+                {loadedBomRows.some((lr) =>
+                  ['pending', 'verified_ok', 'await_manual_download', 'error'].includes(lr.status),
+                ) ? (
                   <div className="rounded-lg border border-slate-100 bg-slate-50/90 px-3 py-2.5 space-y-2 text-slate-600">
                     <div className="font-medium text-slate-800">状态说明</div>
                     {loadedBomRows.some((lr) => lr.status === 'pending') ? (
@@ -748,6 +1123,16 @@ export const BomDetail: React.FC = () => {
                     {loadedBomRows.some((lr) => lr.status === 'verified_ok') ? (
                       <p className="leading-snug">
                         <span className="font-medium text-slate-700">校验通过</span>：{BOM_STATUS_LEGEND_VERIFIED_OK}
+                      </p>
+                    ) : null}
+                    {loadedBomRows.some((lr) => lr.status === 'await_manual_download') ? (
+                      <p className="leading-snug">
+                        <span className="font-medium text-slate-700">待人工下载</span>：{BOM_STATUS_LEGEND_MANUAL}
+                      </p>
+                    ) : null}
+                    {loadedBomRows.some((lr) => lr.status === 'error') ? (
+                      <p className="leading-snug">
+                        <span className="font-medium text-slate-700">异常</span>：{BOM_STATUS_LEGEND_ERROR}
                       </p>
                     ) : null}
                   </div>

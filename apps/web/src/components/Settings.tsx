@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Save, Clock, Loader2, CheckCircle2, AlertCircle, Server, Key, Eye, EyeOff, Package } from 'lucide-react';
+import { Save, Clock, Loader2, CheckCircle2, AlertCircle, Server, Key, Package } from 'lucide-react';
 import { usePingStore } from '../stores/pingStore';
 import { getAppConfig } from '../lib/appConfig';
 import {
@@ -81,9 +81,6 @@ export const Settings: React.FC = () => {
   const [testUrl, setTestUrl] = useState('');
   const [artifactoryTestLoading, setArtifactoryTestLoading] = useState(false);
   const [artifactoryTestResult, setArtifactoryTestResult] = useState<ApiInfoResult | null>(null);
-
-  const [showArtifactoryApiKey, setShowArtifactoryApiKey] = useState(false);
-  const [showArtifactoryExtApiKey, setShowArtifactoryExtApiKey] = useState(false);
 
   const [bomScanner, setBomScanner] = useState<BomScannerConfig | null>(null);
   const [bomKeyMapJson, setBomKeyMapJson] = useState('');
@@ -296,25 +293,10 @@ export const Settings: React.FC = () => {
       return;
     }
 
-    const hasAnyKey = Boolean(artifactory.artifactoryApiKey || artifactory.artifactoryExtApiKey);
-    if (!hasAnyKey) {
-      alert('请先配置至少一个 Artifactory API Key');
-      return;
-    }
-
     setArtifactoryTestLoading(true);
     setArtifactoryTestResult(null);
     try {
-      const results = await getArtifactoryApiInfo({
-        urls: [url],
-        apiKey: artifactory.artifactoryApiKey || artifactory.artifactoryExtApiKey || undefined,
-        config: {
-          artifactoryBaseUrl: artifactory.artifactoryBaseUrl || undefined,
-          artifactoryApiKey: artifactory.artifactoryApiKey || undefined,
-          artifactoryExtBaseUrl: artifactory.artifactoryExtBaseUrl || undefined,
-          artifactoryExtApiKey: artifactory.artifactoryExtApiKey || undefined,
-        },
-      });
+      const results = await getArtifactoryApiInfo({ urls: [url] });
 
       const r = results[0];
       if (!r) throw new Error('未返回测试结果');
@@ -366,6 +348,10 @@ export const Settings: React.FC = () => {
         </div>
         <p className="text-sm text-slate-500">
           扫描间隔（秒）与 worker 轮询、定时入队一致，由下方配置写入数据库；BOM 行 jsonb 字段别名为多 key 兼容。本地暂存目录由 compose 挂载，不在此配置。
+          含 <span className="font-medium text-slate-700">artifactory</span> 的下载链接由{' '}
+          <code className="bg-gray-100 px-1 rounded text-xs">bom-scanner-worker</code> 仅从进程环境变量（如{' '}
+          <code className="bg-gray-100 px-1 rounded text-xs">IT_ARTIFACTORY_API_KEY</code>
+          ）拉取，不读取下表；部署时请与 compose/.env 中密钥保持一致。其它来源仅提示人工拷贝。
         </p>
         {bomScanner && (
           <div className="space-y-4">
@@ -502,7 +488,7 @@ export const Settings: React.FC = () => {
           <h3 className="text-lg font-medium text-slate-800">Artifactory 凭证</h3>
         </div>
         <p className="text-sm text-slate-500">
-          用于 <span className="font-medium text-slate-700">MD5 校验</span> 页批量请求 Storage API。主实例与扩展实例可分别配置 Base URL 与 API Key。
+          用于 worker 自动下载、Edge 查询与手工复制下载命令。凭据统一读取数据库 `system_settings.artifactory_config`。
         </p>
         <div className="grid gap-4 md:grid-cols-2">
           <div>
@@ -517,24 +503,14 @@ export const Settings: React.FC = () => {
           </div>
           <div>
             <label className="block text-sm font-medium text-slate-700 mb-1">主实例 API Key</label>
-            <div className="flex items-center gap-2">
-              <input
-                type={showArtifactoryApiKey ? 'text' : 'password'}
-                value={artifactory.artifactoryApiKey ?? ''}
-                onChange={(e) => setArtifactory((a) => ({ ...a, artifactoryApiKey: e.target.value }))}
-                placeholder="X-JFrog-Art-Api"
-                autoComplete="off"
-                className="flex-1 px-4 py-2 border border-gray-200 rounded-lg font-mono text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
-              />
-              <button
-                type="button"
-                onClick={() => setShowArtifactoryApiKey((v) => !v)}
-                className="px-3 py-2 border border-gray-200 rounded-lg text-slate-600 hover:bg-slate-50 transition-colors"
-                aria-label={showArtifactoryApiKey ? '隐藏 API Key' : '显示 API Key'}
-              >
-                {showArtifactoryApiKey ? <EyeOff size={16} /> : <Eye size={16} />}
-              </button>
-            </div>
+            <input
+              type="password"
+              value={artifactory.artifactoryApiKey ?? ''}
+              onChange={(e) => setArtifactory((a) => ({ ...a, artifactoryApiKey: e.target.value }))}
+              placeholder="X-JFrog-Art-Api"
+              autoComplete="off"
+              className="w-full px-4 py-2 border border-gray-200 rounded-lg font-mono text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
+            />
           </div>
           <div>
             <label className="block text-sm font-medium text-slate-700 mb-1">扩展实例 Base URL</label>
@@ -548,26 +524,19 @@ export const Settings: React.FC = () => {
           </div>
           <div>
             <label className="block text-sm font-medium text-slate-700 mb-1">扩展实例 API Key</label>
-            <div className="flex items-center gap-2">
-              <input
-                type={showArtifactoryExtApiKey ? 'text' : 'password'}
-                value={artifactory.artifactoryExtApiKey ?? ''}
-                onChange={(e) => setArtifactory((a) => ({ ...a, artifactoryExtApiKey: e.target.value }))}
-                placeholder="X-JFrog-Art-Api"
-                autoComplete="off"
-                className="flex-1 px-4 py-2 border border-gray-200 rounded-lg font-mono text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
-              />
-              <button
-                type="button"
-                onClick={() => setShowArtifactoryExtApiKey((v) => !v)}
-                className="px-3 py-2 border border-gray-200 rounded-lg text-slate-600 hover:bg-slate-50 transition-colors"
-                aria-label={showArtifactoryExtApiKey ? '隐藏 API Key' : '显示 API Key'}
-              >
-                {showArtifactoryExtApiKey ? <EyeOff size={16} /> : <Eye size={16} />}
-              </button>
-            </div>
+            <input
+              type="password"
+              value={artifactory.artifactoryExtApiKey ?? ''}
+              onChange={(e) => setArtifactory((a) => ({ ...a, artifactoryExtApiKey: e.target.value }))}
+              placeholder="X-JFrog-Art-Api"
+              autoComplete="off"
+              className="w-full px-4 py-2 border border-gray-200 rounded-lg font-mono text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
+            />
           </div>
         </div>
+        <p className="text-xs text-slate-500">
+          硬约束：前端不会把 API Key 传给 edge；edge 与 worker 运行时均只从数据库读取。
+        </p>
 
         <div className="border-t border-gray-100 pt-4">
           <div className="grid gap-4 md:grid-cols-2 items-end">

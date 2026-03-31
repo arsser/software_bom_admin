@@ -47,7 +47,8 @@ services:
       SUPABASE_SERVICE_ROLE_KEY: ${SUPABASE_SERVICE_ROLE_KEY}
       BOM_LOCAL_ROOT: ${BOM_LOCAL_ROOT:-/data/bom_store}
     volumes:
-      - ${BOM_HOST_STORE:-./data/bom_store}:/data/bom_store:ro
+      # 阶段 4 需写入 it-Artifactory 拉取的文件；须与 BOM_LOCAL_ROOT 一致
+      - ${BOM_HOST_STORE:-./data/bom_store}:/data/bom_store
     networks:
       - softwarebomadmin-network
       - supabase-network

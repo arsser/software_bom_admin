@@ -1,5 +1,5 @@
 import { useNavigate, useLocation } from 'react-router-dom';
-import { LayoutDashboard, Settings, LogOut, Database, ChevronLeft, ChevronRight, Calculator, Package } from 'lucide-react';
+import { LayoutDashboard, Settings, LogOut, Database, ChevronLeft, ChevronRight, Calculator, Package, HardDriveDownload } from 'lucide-react';
 import { useAuthStore } from '../stores/authStore';
 
 interface SidebarProps {
@@ -17,6 +17,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ collapsed = false, onToggle })
     { path: '/dashboard', label: '仪表盘', icon: LayoutDashboard },
     { path: '/md5', label: 'MD5 校验', icon: Calculator },
     { path: '/bom', label: 'BOM 管理', icon: Package },
+    { path: '/bom/jobs', label: '下载任务', icon: HardDriveDownload },
     { path: '/settings', label: '系统设置', icon: Settings },
   ];
 
@@ -57,9 +58,12 @@ export const Sidebar: React.FC<SidebarProps> = ({ collapsed = false, onToggle })
       <nav className="flex-1 p-4 space-y-1">
         {navItems.map((item) => {
           const Icon = item.icon;
-          const isActive = item.path === '/bom'
-            ? location.pathname === '/bom' || location.pathname.startsWith('/bom/')
-            : location.pathname === item.path;
+          const isActive =
+            item.path === '/bom/jobs'
+              ? location.pathname === '/bom/jobs'
+              : item.path === '/bom'
+                ? (location.pathname === '/bom' || location.pathname.startsWith('/bom/')) && location.pathname !== '/bom/jobs'
+                : location.pathname === item.path;
           return (
             <button
               key={item.path}

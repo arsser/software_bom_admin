@@ -1,7 +1,9 @@
 import { createHash } from 'node:crypto';
-import { createReadStream } from 'node:fs';
+import { createReadStream, createWriteStream } from 'node:fs';
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { pipeline } from 'node:stream/promises';
+import { Readable, Transform } from 'node:stream';
 import { createClient } from '@supabase/supabase-js';
 
 function log(...args) {
@@ -199,7 +201,6 @@ async function runScanJob(supabase, jobId, rootAbs) {
     const sizeSame = Boolean(existing && sizeBytesEqual(existing.size_bytes, sizeBytes));
     const mtimeSame = Boolean(existing && mtimeCloseEnough(existing.mtime, st.mtimeMs));
     const hasMd5 = Boolean(existing && isValidMd5Hex(existing.md5));
-    // 仅新文件、元数据变化、或从未得到有效 MD5 时读盘；否则复用库中 md5（upsert 传 null 不覆盖）
     const needMd5 = !existing || !sizeSame || !mtimeSame || !hasMd5;
 
     let md5Hex = null;
@@ -254,6 +255,578 @@ async function failJob(supabase, jobId, message) {
   if (error) log('WARN failJob finalize error', error.message);
 }
 
+
+/** @param {string} raw */
+function urlPathBasename(raw) {
+  if (!raw || !String(raw).trim()) return '';
+  try {
+    const u = new URL(String(raw).trim());
+    const seg = u.pathname.split('/').filter(Boolean);
+    return seg.length ? seg[seg.length - 1] : '';
+  } catch {
+    const t = String(raw).trim().replace(/^[a-z][a-z0-9+.-]*:\/\/[^/]+/i, '').replace(/\?.*$/, '');
+    const parts = t.split('/');
+    return parts.length ? parts[parts.length - 1] : '';
+  }
+}
+
+/** @param {string} name */
+function safeFlatFilename(name) {
+  const base = name && String(name).trim() ? String(name).trim() : 'download.bin';
+  const cleaned = base.replace(/[/\\?*:|"<>]/g, '_').replace(/\s+/g, ' ');
+  return cleaned.slice(0, 200) || 'download.bin';
+}
+
+/** 日志用：不输出完整密钥 */
+function apiKeyLogHint(key) {
+  const k = String(key ?? '').trim();
+  if (!k) return { present: false, length: 0, hint: '(empty)' };
+  const len = k.length;
+  const hint = len <= 8 ? `***(len=${len})` : `${k.slice(0, 4)}…${k.slice(-2)}(len=${len})`;
+  return { present: true, length: len, hint };
+}
+
+/**
+ * @param {import('@supabase/supabase-js').SupabaseClient} supabase
+ * @returns {Promise<{ primary: { apiKey: string, baseUrl: string }, ext: { apiKey: string, baseUrl: string } }>}
+ */
+async function loadItArtifactoryDbBundle(supabase) {
+  const { data, error } = await supabase
+    .from('system_settings')
+    .select('value')
+    .eq('key', 'artifactory_config')
+    .maybeSingle();
+  if (error) {
+    log('WARN load artifactory_config', error.message);
+    return {
+      primary: { apiKey: '', baseUrl: '' },
+      ext: { apiKey: '', baseUrl: '' },
+    };
+  }
+  const v = data?.value ?? {};
+  return {
+    primary: {
+      apiKey: typeof v.artifactoryApiKey === 'string' ? v.artifactoryApiKey.trim() : '',
+      baseUrl: typeof v.artifactoryBaseUrl === 'string' ? v.artifactoryBaseUrl.trim() : '',
+    },
+    ext: {
+      apiKey: typeof v.artifactoryExtApiKey === 'string' ? v.artifactoryExtApiKey.trim() : '',
+      baseUrl: typeof v.artifactoryExtBaseUrl === 'string' ? v.artifactoryExtBaseUrl.trim() : '',
+    },
+  };
+}
+
+function itDbBundleHasAnyKey(bundle) {
+  return Boolean(bundle.primary.apiKey || bundle.ext.apiKey);
+}
+
+/**
+ * 按下载 URL 主机与 DB 中 base URL 匹配主/扩展实例。
+ * @param {string} downloadUrl
+ * @param {{ primary: { apiKey: string, baseUrl: string }, ext: { apiKey: string, baseUrl: string } }} bundle
+ * @returns {{ apiKey: string, baseUrl: string } | null}
+ */
+function pickCredsForItUrl(downloadUrl, bundle) {
+  const { primary, ext } = bundle;
+  let u;
+  try {
+    u = new URL(downloadUrl);
+  } catch {
+    return null;
+  }
+  const host = u.hostname.toLowerCase();
+  let extHost = null;
+  let priHost = null;
+  try {
+    extHost = ext.baseUrl ? new URL(ext.baseUrl.includes('://') ? ext.baseUrl : `https://${ext.baseUrl}`).hostname.toLowerCase() : null;
+  } catch {
+    extHost = null;
+  }
+  try {
+    priHost = primary.baseUrl ? new URL(primary.baseUrl.includes('://') ? primary.baseUrl : `https://${primary.baseUrl}`).hostname.toLowerCase() : null;
+  } catch {
+    priHost = null;
+  }
+  if (extHost && host === extHost && ext.apiKey) return { apiKey: ext.apiKey, baseUrl: ext.baseUrl };
+  if (priHost && host === priHost && primary.apiKey) return { apiKey: primary.apiKey, baseUrl: primary.baseUrl };
+  if (!priHost && !extHost) {
+    if (primary.apiKey) return { apiKey: primary.apiKey, baseUrl: primary.baseUrl };
+    if (ext.apiKey) return { apiKey: ext.apiKey, baseUrl: ext.baseUrl };
+  }
+  return null;
+}
+
+async function logItArtifactoryDbAtStartup(supabase) {
+  const bundle = await loadItArtifactoryDbBundle(supabase);
+  const ph = apiKeyLogHint(bundle.primary.apiKey);
+  const eh = apiKeyLogHint(bundle.ext.apiKey);
+  log('it-artifactory creds', {
+    source: 'db',
+    primaryApiKey: ph.hint,
+    primaryBaseUrl: bundle.primary.baseUrl || '(empty)',
+    extApiKey: eh.hint,
+    extBaseUrl: bundle.ext.baseUrl || '(empty)',
+    anyKey: itDbBundleHasAnyKey(bundle),
+  });
+  if (!itDbBundleHasAnyKey(bundle)) {
+    log('WARN it-artifactory DB artifactory_config 未配置主/扩展 API Key，队列拉取将失败');
+  }
+}
+
+function itUrlAllowedForBase(downloadUrl, baseUrl) {
+  if (!baseUrl) return true;
+  try {
+    const b = new URL(baseUrl.includes('://') ? baseUrl : `https://${baseUrl}`);
+    const u = new URL(downloadUrl);
+    return b.hostname === u.hostname;
+  } catch {
+    return true;
+  }
+}
+
+/**
+ * @param {import('@supabase/supabase-js').SupabaseClient} supabase
+ * @param {string} jobId
+ * @param {Record<string, unknown>} patch
+ */
+async function patchDownloadJob(supabase, jobId, patch) {
+  const { error } = await supabase.from('bom_download_jobs').update(patch).eq('id', jobId);
+  if (error) log('WARN patchDownloadJob', jobId, error.message);
+}
+
+/**
+ * @param {import('@supabase/supabase-js').SupabaseClient} supabase
+ * @param {string} rootAbs
+ * @param {{ apiKey: string, baseUrl: string }} creds
+ * @param {{ id: string, downloadUrl: string }} row
+ * @param {object} [opts]
+ * @param {(n: { runningDownloaded: number, runningTotal: number | null, fileName: string }) => void} [opts.onProgress]
+ */
+async function downloadItArtifactRow(supabase, rootAbs, creds, row, opts = {}) {
+  const id = row.id;
+  const url = String(row.downloadUrl).trim();
+  const onProgress = opts.onProgress;
+  if (!/^https?:\/\//i.test(url)) {
+    return { ok: false, message: '非 http(s) URL' };
+  }
+
+  if (!itUrlAllowedForBase(url, creds.baseUrl)) {
+    const msg = `URL 主机与配置的 it Base URL 不一致`;
+    log('it-download skip host mismatch', id, url);
+    const { error: upErr } = await supabase
+      .from('bom_rows')
+      .update({ status: 'error', last_fetch_error: msg.slice(0, 1000) })
+      .eq('id', id);
+    if (upErr) log('WARN set fetch error', upErr.message);
+    return { ok: false, message: msg };
+  }
+
+  let baseName = safeFlatFilename(urlPathBasename(url));
+  let destName = baseName;
+  let destAbs = path.join(rootAbs, destName);
+  let n = 0;
+  while (true) {
+    try {
+      await fs.access(destAbs);
+      n += 1;
+      const ext = path.extname(baseName);
+      const stem = ext ? baseName.slice(0, -ext.length) : baseName;
+      destName = `${stem}_${n}${ext || ''}`;
+      destAbs = path.join(rootAbs, destName);
+    } catch {
+      break;
+    }
+  }
+
+  const tmpAbs = `${destAbs}.part`;
+  const timeoutMsRaw = Number(process.env.IT_ARTIFACTORY_DOWNLOAD_TIMEOUT_MS || 3600000);
+  const timeoutMs = Number.isFinite(timeoutMsRaw) && timeoutMsRaw > 0 ? timeoutMsRaw : 3600000;
+  let urlHost = '';
+  let urlPathPrefix = '';
+  try {
+    const u = new URL(url);
+    urlHost = u.hostname;
+    urlPathPrefix = u.pathname.length > 120 ? `${u.pathname.slice(0, 120)}…` : u.pathname;
+  } catch (e) {
+    log('WARN it-download URL parse', id, e instanceof Error ? e.message : e);
+  }
+  const hostOk = itUrlAllowedForBase(url, creds.baseUrl);
+  log('it-download fetch', id, {
+    urlHost,
+    pathPrefix: urlPathPrefix,
+    destFile: destName,
+    configuredBaseUrl: creds.baseUrl || '(none)',
+    hostMatchesBase: hostOk,
+    auth: 'Bearer + X-JFrog-Art-Api (same key; JFrog 通常认后者)',
+  });
+
+  try {
+    let totalBytes = null;
+    await Promise.race([
+      (async () => {
+        const key = creds.apiKey;
+        const res = await fetch(url, {
+          redirect: 'follow',
+          headers: {
+            // 与网页复制的 curl、artifactory-api-info Edge 一致：JFrog API Key 主要靠 X-JFrog-Art-Api；
+            // 仅 Bearer 时部分实例会 401（Bad props auth token / basictoken=…）。
+            Authorization: `Bearer ${key}`,
+            'X-JFrog-Art-Api': key,
+            'X-Api-Key': key,
+            Accept: '*/*',
+          },
+        });
+        if (!res.ok) {
+          let bodySnippet = '';
+          try {
+            bodySnippet = (await res.text()).slice(0, 400).replace(/\s+/g, ' ');
+          } catch {
+            /* ignore */
+          }
+          const wwwAuth = res.headers.get('www-authenticate');
+          const reqId = res.headers.get('x-request-id') || res.headers.get('x-jfrog-request-id');
+          log('it-download http error', id, {
+            status: res.status,
+            statusText: res.statusText,
+            wwwAuthenticate: wwwAuth,
+            requestId: reqId,
+            bodySnippet: bodySnippet || '(empty)',
+          });
+          const msg = `HTTP ${res.status} ${res.statusText || ''}`.trim().slice(0, 1000);
+          throw new Error(msg);
+        }
+        if (!res.body) throw new Error('响应无正文');
+        const cl = res.headers.get('content-length');
+        if (cl) {
+          const parsed = Number(cl);
+          if (Number.isFinite(parsed) && parsed >= 0) totalBytes = parsed;
+        }
+        const ws = createWriteStream(tmpAbs, { flags: 'w' });
+        let running = 0;
+        const counter = new Transform({
+          transform(chunk, _enc, cb) {
+            running += chunk.length;
+            if (onProgress) {
+              onProgress({
+                runningDownloaded: running,
+                runningTotal: totalBytes,
+                fileName: destName,
+              });
+            }
+            cb(null, chunk);
+          },
+        });
+        await pipeline(Readable.fromWeb(res.body), counter, ws);
+      })(),
+      new Promise((_, reject) => {
+        setTimeout(() => reject(new Error('download timeout')), timeoutMs);
+      }),
+    ]);
+    let fileSize = 0;
+    try {
+      const st = await fs.stat(tmpAbs);
+      fileSize = st.size;
+    } catch {
+      fileSize = 0;
+    }
+    await fs.rename(tmpAbs, destAbs);
+    log('it-download ok', id, destName);
+    const { error: upErr } = await supabase
+      .from('bom_rows')
+      .update({ status: 'pending', last_fetch_error: null })
+      .eq('id', id);
+    if (upErr) log('WARN clear fetch error after ok', upErr.message);
+    return { ok: true, fileName: destName, bytes: fileSize };
+  } catch (e) {
+    try {
+      await fs.unlink(tmpAbs);
+    } catch {
+      /* ignore */
+    }
+    const msg = (e instanceof Error ? e.message : String(e)).slice(0, 1000);
+    log('it-download error', id, msg);
+    const { error: upErr } = await supabase.from('bom_rows').update({ status: 'error', last_fetch_error: msg }).eq('id', id);
+    if (upErr) log('WARN set fetch error', upErr.message);
+    return { ok: false, message: msg };
+  }
+}
+
+
+/**
+ * @param {import('@supabase/supabase-js').SupabaseClient} supabase
+ */
+async function failStaleDownloadJobs(supabase) {
+  const staleRaw = Number(process.env.BOM_DOWNLOAD_STALE_SECONDS || 900);
+  const staleSec = Number.isFinite(staleRaw) && staleRaw >= 60 ? Math.floor(staleRaw) : 900;
+  const { data, error } = await supabase.rpc('bom_fail_stale_download_jobs', { p_stale_seconds: staleSec });
+  if (error) {
+    log('WARN bom_fail_stale_download_jobs', error.message);
+    return;
+  }
+  const n = typeof data === 'number' ? data : Number(data);
+  if (n > 0) log('bom_fail_stale_download_jobs', n);
+}
+
+/**
+ * @param {import('@supabase/supabase-js').SupabaseClient} supabase
+ */
+async function claimDownloadJob(supabase) {
+  const { data, error } = await supabase.rpc('bom_claim_download_job');
+  if (error) {
+    log('WARN bom_claim_download_job', error.message);
+    return null;
+  }
+  if (data == null) return null;
+  const rows = Array.isArray(data) ? data : [data];
+  const first = rows[0];
+  if (!first?.id) return null;
+  return first;
+}
+
+/**
+ * @param {import('@supabase/supabase-js').SupabaseClient} supabase
+ * @param {string} rootAbs
+ * @param {{ id: string, row_ids: string[], progress_total: number }} job
+ */
+async function executeDownloadJob(supabase, rootAbs, job) {
+  const jobId = job.id;
+  const rowIds = Array.isArray(job.row_ids) ? job.row_ids : [];
+  const total = rowIds.length;
+  const heartbeatMsRaw = Number(process.env.BOM_DOWNLOAD_HEARTBEAT_MS || 15000);
+  const heartbeatMs = Number.isFinite(heartbeatMsRaw) && heartbeatMsRaw >= 5000 ? Math.min(heartbeatMsRaw, 120000) : 15000;
+  const progressFlushMsRaw = Number(process.env.BOM_DOWNLOAD_PROGRESS_FLUSH_MS || 10000);
+  const progressFlushMs = Number.isFinite(progressFlushMsRaw) && progressFlushMsRaw >= 2000 ? Math.min(progressFlushMsRaw, 60000) : 10000;
+
+  if (!total) {
+    await patchDownloadJob(supabase, jobId, {
+      status: 'failed',
+      finished_at: new Date().toISOString(),
+      last_message: '任务无行',
+    });
+    return;
+  }
+
+  const itBundle = await loadItArtifactoryDbBundle(supabase);
+  if (!itDbBundleHasAnyKey(itBundle)) {
+    await patchDownloadJob(supabase, jobId, {
+      status: 'failed',
+      finished_at: new Date().toISOString(),
+      last_message:
+        '未配置 it Artifactory API Key（请在数据库 system_settings.artifactory_config 配置主/扩展 Key）',
+    });
+    return;
+  }
+
+  const { data: targets, error: tErr } = await supabase.rpc('bom_row_download_targets', { p_ids: rowIds });
+  if (tErr) {
+    await patchDownloadJob(supabase, jobId, {
+      status: 'failed',
+      finished_at: new Date().toISOString(),
+      last_message: tErr.message.slice(0, 2000),
+    });
+    return;
+  }
+
+  const urlMap = new Map((targets ?? []).map((t) => [t.id, t.download_url]));
+
+  let heartbeatTimer = null;
+  const touchHeartbeat = async () => {
+    await patchDownloadJob(supabase, jobId, {
+      heartbeat_at: new Date().toISOString(),
+    });
+  };
+  heartbeatTimer = setInterval(() => {
+    void touchHeartbeat();
+  }, heartbeatMs);
+
+  let completed = 0;
+  let nOk = 0;
+  let nFail = 0;
+  let nSkip = 0;
+  let bytesDoneTotal = 0;
+
+  try {
+    for (const rowId of rowIds) {
+      const { data: still, error: e1 } = await supabase.rpc('bom_row_still_eligible_for_it_download', { p_row_id: rowId });
+      if (e1) log('WARN bom_row_still_eligible', e1.message);
+
+      if (!still) {
+        nSkip += 1;
+        completed += 1;
+        await patchDownloadJob(supabase, jobId, {
+          progress_current: completed,
+          running_row_id: null,
+          running_file_name: null,
+          running_bytes_downloaded: 0,
+          running_bytes_total: null,
+          last_message: `${completed}/${total} 跳过（已有本地或状态变化）`,
+        });
+        await touchHeartbeat();
+        continue;
+      }
+
+      const rawUrl = urlMap.get(rowId);
+      const url = typeof rawUrl === 'string' ? rawUrl.trim() : '';
+      if (!url) {
+        nSkip += 1;
+        completed += 1;
+        await patchDownloadJob(supabase, jobId, {
+          progress_current: completed,
+          running_row_id: null,
+          running_file_name: null,
+          running_bytes_downloaded: 0,
+          running_bytes_total: null,
+          last_message: `${completed}/${total} 跳过（无下载 URL）`,
+        });
+        await touchHeartbeat();
+        continue;
+      }
+
+      const destNameGuess = safeFlatFilename(urlPathBasename(url));
+      let lastFlush = 0;
+      await patchDownloadJob(supabase, jobId, {
+        running_row_id: rowId,
+        running_file_name: destNameGuess,
+        running_bytes_downloaded: 0,
+        running_bytes_total: null,
+        last_message: `${completed}/${total} 下载中… ${destNameGuess}`,
+      });
+      await touchHeartbeat();
+
+      const rowCreds = pickCredsForItUrl(url, itBundle);
+      if (!rowCreds?.apiKey) {
+        const msg =
+          '环境变量中的 IT_ARTIFACTORY_BASE_URL / IT_ARTIFACTORY_EXT_BASE_URL 与下载 URL 主机无法匹配（或对应 Key 为空）';
+        nFail += 1;
+        completed += 1;
+        const { error: upErr } = await supabase
+          .from('bom_rows')
+          .update({ status: 'error', last_fetch_error: msg.slice(0, 1000) })
+          .eq('id', rowId);
+        if (upErr) log('WARN set fetch error', upErr.message);
+        await patchDownloadJob(supabase, jobId, {
+          progress_current: completed,
+          bytes_downloaded_total: bytesDoneTotal,
+          running_row_id: null,
+          running_file_name: null,
+          running_bytes_downloaded: 0,
+          running_bytes_total: null,
+          last_message: `${completed}/${total} ${msg}`.slice(0, 2000),
+        });
+        await touchHeartbeat();
+        continue;
+      }
+
+      const r = await downloadItArtifactRow(supabase, rootAbs, rowCreds, { id: rowId, downloadUrl: url }, {
+        onProgress: ({ runningDownloaded, runningTotal, fileName }) => {
+          const now = Date.now();
+          if (now - lastFlush < progressFlushMs) return;
+          lastFlush = now;
+          const msg =
+            runningTotal != null
+              ? `${completed + 1}/${total} 下载中 ${fileName} ${runningDownloaded}/${runningTotal} B`
+              : `${completed + 1}/${total} 下载中 ${fileName} ${runningDownloaded} B`;
+          void patchDownloadJob(supabase, jobId, {
+            running_bytes_downloaded: runningDownloaded,
+            running_bytes_total: runningTotal,
+            running_file_name: fileName,
+            heartbeat_at: new Date().toISOString(),
+            last_message: msg.slice(0, 2000),
+          });
+        },
+      });
+
+      if (r.ok) {
+        nOk += 1;
+        const b = typeof r.bytes === 'number' ? r.bytes : 0;
+        bytesDoneTotal += b;
+      } else {
+        nFail += 1;
+      }
+      completed += 1;
+      const tail = r.ok ? `→ ${r.fileName}` : r.message ?? '失败';
+      await patchDownloadJob(supabase, jobId, {
+        progress_current: completed,
+        bytes_downloaded_total: bytesDoneTotal,
+        running_row_id: null,
+        running_file_name: null,
+        running_bytes_downloaded: 0,
+        running_bytes_total: null,
+        last_message: `${completed}/${total} ${tail}`.slice(0, 2000),
+      });
+      await touchHeartbeat();
+    }
+
+    let finalStatus = 'succeeded';
+    let summary = `完成：成功 ${nOk}，失败 ${nFail}，跳过 ${nSkip}`;
+    if (nOk === 0 && nFail > 0) {
+      finalStatus = 'failed';
+    } else if (nOk > 0 && nFail > 0) {
+      summary = `部分失败：成功 ${nOk}，失败 ${nFail}，跳过 ${nSkip}`;
+    }
+
+    await patchDownloadJob(supabase, jobId, {
+      status: finalStatus,
+      finished_at: new Date().toISOString(),
+      last_message: summary.slice(0, 2000),
+      running_row_id: null,
+      running_file_name: null,
+      running_bytes_downloaded: 0,
+      running_bytes_total: null,
+    });
+    log('web-download-job done', jobId, summary);
+  } finally {
+    if (heartbeatTimer) clearInterval(heartbeatTimer);
+  }
+}
+
+/**
+ * @param {import('@supabase/supabase-js').SupabaseClient} supabase
+ * @param {string} rootAbs
+ */
+async function drainWebDownloadJobs(supabase, rootAbs) {
+  for (;;) {
+    const job = await claimDownloadJob(supabase);
+    if (!job) break;
+    try {
+      await executeDownloadJob(supabase, rootAbs, job);
+    } catch (e) {
+      const msg = (e instanceof Error ? e.message : String(e)).slice(0, 2000);
+      log('ERROR executeDownloadJob', job.id, msg);
+      await patchDownloadJob(supabase, job.id, {
+        status: 'failed',
+        finished_at: new Date().toISOString(),
+        last_message: msg,
+        running_row_id: null,
+        running_file_name: null,
+      });
+    }
+  }
+}
+
+/**
+ * @param {import('@supabase/supabase-js').SupabaseClient} supabase
+ * @param {string} rootAbs
+ * @param {number} intervalMs
+ */
+async function sleepWithDownloadPoll(supabase, rootAbs, intervalMs) {
+  const tickRaw = Number(process.env.BOM_WORKER_IDLE_TICK_MS || 3000);
+  const tickMs = Number.isFinite(tickRaw) && tickRaw >= 500 ? Math.min(tickRaw, 10000) : 3000;
+  let remaining = intervalMs;
+  while (remaining > 0) {
+    try {
+      await failStaleDownloadJobs(supabase);
+      await drainWebDownloadJobs(supabase, rootAbs);
+    } catch (e) {
+      log('WARN idle download poll', e instanceof Error ? e.message : e);
+    }
+    const nap = Math.min(tickMs, remaining);
+    await sleep(nap);
+    remaining -= nap;
+  }
+}
+
+
 async function main() {
   const url = requireEnv('SUPABASE_URL');
   const key = requireEnv('SUPABASE_SERVICE_ROLE_KEY');
@@ -261,21 +834,30 @@ async function main() {
 
   let rootAbs = path.resolve(root);
   try {
-    await fs.access(rootAbs, fs.constants.R_OK);
+    await fs.access(rootAbs, fs.constants.R_OK | fs.constants.W_OK);
   } catch (e) {
-    throw new Error(`BOM_LOCAL_ROOT not readable: ${rootAbs} (${e instanceof Error ? e.message : e})`);
+    throw new Error(`BOM_LOCAL_ROOT not readable/writable: ${rootAbs} (${e instanceof Error ? e.message : e})`);
   }
 
   const supabase = createClient(url, key, {
     auth: { persistSession: false, autoRefreshToken: false },
   });
 
-  log('bom-scanner-worker start', { root: rootAbs, cwd: process.cwd(), note: 'interval from system_settings.bom_scanner.scanIntervalSeconds' });
+  log('bom-scanner-worker start', {
+    root: rootAbs,
+    cwd: process.cwd(),
+    note: 'interval from system_settings.bom_scanner.scanIntervalSeconds; it downloads only via bom_download_jobs queue',
+  });
+
+  await logItArtifactoryDbAtStartup(supabase);
 
   while (true) {
     let intervalSec = 30;
     try {
       intervalSec = await fetchScanIntervalSeconds(supabase);
+
+      await failStaleDownloadJobs(supabase);
+      await drainWebDownloadJobs(supabase, rootAbs);
 
       let jobId = await pickQueuedJob(supabase);
       while (jobId) {
@@ -302,7 +884,7 @@ async function main() {
     } catch (e) {
       log('ERROR tick', e instanceof Error ? e.stack : e);
     }
-    await sleep(intervalSec * 1000);
+    await sleepWithDownloadPoll(supabase, rootAbs, intervalSec * 1000);
   }
 }
 
@@ -310,3 +892,4 @@ main().catch((e) => {
   console.error(e);
   process.exit(1);
 });
+

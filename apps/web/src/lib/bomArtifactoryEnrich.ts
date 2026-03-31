@@ -51,15 +51,8 @@ export type EnrichArtifactorySummary = {
 export async function enrichBomRowsFromArtifactory(
   rows: BomBatchRow[],
   keyMap: BomJsonKeyMap,
-  artifactory: ArtifactoryConfig,
+  _artifactory: ArtifactoryConfig,
 ): Promise<{ rows: BomBatchRow[]; summary: EnrichArtifactorySummary }> {
-  const hasKey = Boolean(
-    (artifactory.artifactoryApiKey || artifactory.artifactoryExtApiKey || '').trim(),
-  );
-  if (!hasKey) {
-    throw new Error('请先在系统设置中配置 Artifactory API Key（it 或 ext 至少一个）');
-  }
-
   const indexed: { row: BomBatchRow; url: string; index: number }[] = [];
   rows.forEach((row, index) => {
     const raw = extractDownloadUrlRaw(row.bom_row, keyMap);
@@ -80,22 +73,11 @@ export async function enrichBomRowsFromArtifactory(
   }
 
   const outRows = [...rows];
-  const cfg: ArtifactoryConfig = artifactory;
-
   for (let i = 0; i < indexed.length; i += CHUNK) {
     const slice = indexed.slice(i, i + CHUNK);
     const urls = slice.map((s) => s.url);
     try {
-      const results = await getArtifactoryApiInfo({
-        urls,
-        apiKey: artifactory.artifactoryApiKey || artifactory.artifactoryExtApiKey || undefined,
-        config: {
-          artifactoryBaseUrl: cfg.artifactoryBaseUrl || undefined,
-          artifactoryApiKey: cfg.artifactoryApiKey || undefined,
-          artifactoryExtBaseUrl: cfg.artifactoryExtBaseUrl || undefined,
-          artifactoryExtApiKey: cfg.artifactoryExtApiKey || undefined,
-        },
-      });
+      const results = await getArtifactoryApiInfo({ urls });
 
       slice.forEach((item, j) => {
         const res = results[j] ?? { url: item.url, ok: false, error: '无返回' };

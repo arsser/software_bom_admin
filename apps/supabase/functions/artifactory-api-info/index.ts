@@ -1,4 +1,5 @@
 import { serve } from 'https://deno.land/std@0.168.0/http/server.ts'
+import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 
 const corsHeaders: Record<string, string> = {
   'Access-Control-Allow-Origin': '*',
@@ -39,12 +40,14 @@ export interface ApiInfoResult {
 type GetApiInfoBody = {
   urls?: string[]
   apiKey?: string
-  config?: {
-    artifactoryBaseUrl?: string
-    artifactoryApiKey?: string
-    artifactoryExtBaseUrl?: string
-    artifactoryExtApiKey?: string
-  }
+  config?: unknown
+}
+
+type DbArtifactoryConfig = {
+  artifactoryBaseUrl?: string
+  artifactoryApiKey?: string
+  artifactoryExtBaseUrl?: string
+  artifactoryExtApiKey?: string
 }
 
 const TIMEOUT_MS = 15000
@@ -66,20 +69,54 @@ function buildHeaders(apiKey?: string): HeadersInit {
   return headers
 }
 
+async function readDbArtifactoryConfig(): Promise<DbArtifactoryConfig> {
+  const supabaseUrl = Deno.env.get('SUPABASE_URL')
+  const serviceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')
+  if (!supabaseUrl || !serviceKey) {
+    throw new Error('Edge 缺少 SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY，无法读取数据库凭据')
+  }
+  const admin = createClient(supabaseUrl, serviceKey, {
+    auth: { persistSession: false, autoRefreshToken: false },
+  })
+  const { data, error } = await admin
+    .from('system_settings')
+    .select('value')
+    .eq('key', 'artifactory_config')
+    .maybeSingle()
+  if (error) throw new Error(`读取 artifactory_config 失败: ${error.message}`)
+  const v = (data?.value ?? {}) as DbArtifactoryConfig
+  return {
+    artifactoryBaseUrl: normalizeBaseUrl(v.artifactoryBaseUrl),
+    artifactoryApiKey: (v.artifactoryApiKey || '').trim() || undefined,
+    artifactoryExtBaseUrl: normalizeBaseUrl(v.artifactoryExtBaseUrl),
+    artifactoryExtApiKey: (v.artifactoryExtApiKey || '').trim() || undefined,
+  }
+}
+
+function hasAnyApiKey(cfg: DbArtifactoryConfig): boolean {
+  return Boolean(cfg.artifactoryApiKey || cfg.artifactoryExtApiKey)
+}
+
+function pickHeadersByUrl(cleanUrl: string, cfg: DbArtifactoryConfig): HeadersInit {
+  const primaryBase = normalizeBaseUrl(cfg.artifactoryBaseUrl)
+  const extBase = normalizeBaseUrl(cfg.artifactoryExtBaseUrl)
+
+  if (primaryBase && cleanUrl.startsWith(primaryBase)) return buildHeaders(cfg.artifactoryApiKey)
+  if (extBase && cleanUrl.startsWith(extBase)) return buildHeaders(cfg.artifactoryExtApiKey)
+  if (!primaryBase && !extBase) return buildHeaders(cfg.artifactoryApiKey || cfg.artifactoryExtApiKey)
+  return buildHeaders(undefined)
+}
+
 function toStorageApiUrl(rawUrl: string): string | null {
   try {
     const u = new URL(rawUrl)
-    if (u.pathname.includes('/api/storage/')) {
-      return rawUrl
-    }
+    if (u.pathname.includes('/api/storage/')) return rawUrl
     const artifactoryPrefix = '/artifactory/'
     const pathIdx = u.pathname.indexOf(artifactoryPrefix)
-
     if (pathIdx === -1) {
       const path = u.pathname.startsWith('/') ? u.pathname : `/${u.pathname}`
       return `${u.origin}/artifactory/api/storage${path}`
     }
-
     const pathAfterPrefix = u.pathname.substring(pathIdx + artifactoryPrefix.length)
     return `${u.origin}${artifactoryPrefix}api/storage/${pathAfterPrefix}`
   } catch {
@@ -89,19 +126,12 @@ function toStorageApiUrl(rawUrl: string): string | null {
 
 async function getSingleApiInfo(url: string, headers: HeadersInit): Promise<ApiInfoResult> {
   const apiUrl = toStorageApiUrl(url)
-  if (!apiUrl) {
-    return { url, ok: false, error: 'Invalid Artifactory URL' }
-  }
+  if (!apiUrl) return { url, ok: false, error: 'Invalid Artifactory URL' }
 
   try {
     const controller = new AbortController()
     const timeout = setTimeout(() => controller.abort(), TIMEOUT_MS)
-
-    const res = await fetch(apiUrl, {
-      method: 'GET',
-      headers,
-      signal: controller.signal,
-    })
+    const res = await fetch(apiUrl, { method: 'GET', headers, signal: controller.signal })
     clearTimeout(timeout)
 
     if (!res.ok) {
@@ -121,7 +151,6 @@ async function getSingleApiInfo(url: string, headers: HeadersInit): Promise<ApiI
     }
 
     const data = (await res.json()) as Record<string, unknown>
-
     const info: ApiInfo = {
       repo: data.repo as string | undefined,
       path: data.path as string | undefined,
@@ -136,7 +165,6 @@ async function getSingleApiInfo(url: string, headers: HeadersInit): Promise<ApiI
       originalChecksums: data.originalChecksums as ApiInfo['originalChecksums'],
       uri: data.uri as string | undefined,
     }
-
     return { url, ok: true, info, status: res.status }
   } catch (e: unknown) {
     const err = e as { name?: string; message?: string }
@@ -147,13 +175,13 @@ async function getSingleApiInfo(url: string, headers: HeadersInit): Promise<ApiI
 }
 
 async function getApiInfo(dto: GetApiInfoBody): Promise<ApiInfoResult[]> {
-  const { urls, config, apiKey } = dto
-  if (!urls || !Array.isArray(urls)) {
-    return []
-  }
+  const { urls } = dto
+  if (!urls || !Array.isArray(urls)) return []
 
-  const primaryBase = normalizeBaseUrl(config?.artifactoryBaseUrl)
-  const extBase = normalizeBaseUrl(config?.artifactoryExtBaseUrl)
+  const dbCfg = await readDbArtifactoryConfig()
+  if (!hasAnyApiKey(dbCfg)) {
+    throw new Error('数据库 artifactory_config 未配置主/扩展 API Key')
+  }
 
   const results = await Promise.all(
     urls.map(async (url) => {
@@ -163,35 +191,18 @@ async function getApiInfo(dto: GetApiInfoBody): Promise<ApiInfoResult[]> {
         const u = new URL(cleanUrl)
         u.pathname = u.pathname.replace(/\/+/g, '/')
         cleanUrl = u.toString()
-
-        let headers: HeadersInit = {}
-        if (config) {
-          if (primaryBase && cleanUrl.startsWith(primaryBase)) {
-            headers = buildHeaders(config.artifactoryApiKey)
-          } else if (extBase && cleanUrl.startsWith(extBase)) {
-            headers = buildHeaders(config.artifactoryExtApiKey)
-          } else {
-            headers = buildHeaders(apiKey)
-          }
-        } else {
-          headers = buildHeaders(apiKey)
-        }
-
+        const headers = pickHeadersByUrl(cleanUrl, dbCfg)
         return await getSingleApiInfo(cleanUrl, headers)
       } catch {
         return await getSingleApiInfo(cleanUrl, {})
       }
     }),
   )
-
   return results.filter((r): r is ApiInfoResult => r !== null)
 }
 
 serve(async (req) => {
-  if (req.method === 'OPTIONS') {
-    return new Response('ok', { headers: corsHeaders })
-  }
-
+  if (req.method === 'OPTIONS') return new Response('ok', { headers: corsHeaders })
   if (req.method !== 'POST') {
     return new Response(JSON.stringify({ error: 'Method not allowed' }), {
       status: 405,
@@ -205,6 +216,14 @@ serve(async (req) => {
       body = await req.json()
     } catch {
       return new Response(JSON.stringify({ error: 'Invalid JSON body' }), {
+        status: 400,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      })
+    }
+
+    // 硬约束：客户端不得通过 body 覆盖凭据，统一从 DB 读取。
+    if (typeof body.apiKey === 'string' || typeof body.config !== 'undefined') {
+      return new Response(JSON.stringify({ error: 'body.apiKey/config 已禁用；凭据仅从数据库读取' }), {
         status: 400,
         headers: { ...corsHeaders, 'Content-Type': 'application/json' },
       })

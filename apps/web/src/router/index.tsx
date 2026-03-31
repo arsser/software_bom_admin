@@ -6,6 +6,7 @@ import { Settings } from '../components/Settings';
 import { Md5Calculator } from '../components/Md5Calculator';
 import { BomMaster } from '../components/BomMaster';
 import { BomDetail } from '../components/BomDetail';
+import { BomDownloadJobsPage } from '../components/BomDownloadJobsPage';
 import { LoginPage } from '../pages/LoginPage';
 
 export const router = createBrowserRouter([
@@ -26,6 +27,7 @@ export const router = createBrowserRouter([
       { path: 'md5', element: <Md5Calculator /> },
       { path: 'bom', element: <BomMaster /> },
       { path: 'bom/new', element: <BomDetail /> },
+      { path: 'bom/jobs', element: <BomDownloadJobsPage /> },
       { path: 'bom/:batchId', element: <BomDetail /> },
       { path: 'settings', element: <Settings /> }
     ]

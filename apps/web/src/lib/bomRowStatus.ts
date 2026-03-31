@@ -38,3 +38,10 @@ export const BOM_STATUS_LEGEND_PENDING =
 
 /** 批次表格下方仅展示一次：与「校验通过」状态对应的含义说明 */
 export const BOM_STATUS_LEGEND_VERIFIED_OK = '本地索引中已存在与期望 MD5 一致的内容。';
+
+/** 非 it-artifactory 链接：需自行下载后拷贝到服务器 BOM 暂存目录，再触发扫描。 */
+export const BOM_STATUS_LEGEND_MANUAL =
+  '链接非 it-Artifactory：请自行下载并拷贝到暂存目录，保存后由扫描更新索引与状态。';
+
+/** 自动拉取失败等：原因见「获取说明」列；修正后可由下一轮 worker 重试或人工拷贝后扫描。 */
+export const BOM_STATUS_LEGEND_ERROR = '自动从 it-Artifactory 拉取失败或主机与配置不一致；见获取说明。';

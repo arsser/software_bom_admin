@@ -1,6 +1,7 @@
 import { useNavigate, useLocation } from 'react-router-dom';
 import { LayoutDashboard, Settings, LogOut, Database, ChevronLeft, ChevronRight, Calculator, Package, HardDriveDownload } from 'lucide-react';
 import { useAuthStore } from '../stores/authStore';
+import { SidebarWorkerHeartbeat } from './SidebarWorkerHeartbeat';
 
 interface SidebarProps {
   collapsed?: boolean;
@@ -17,7 +18,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ collapsed = false, onToggle })
     { path: '/dashboard', label: '仪表盘', icon: LayoutDashboard },
     { path: '/md5', label: 'MD5 校验', icon: Calculator },
     { path: '/bom', label: 'BOM 管理', icon: Package },
-    { path: '/bom/jobs', label: '下载任务', icon: HardDriveDownload },
+    { path: '/bom/jobs', label: 'BOM 任务', icon: HardDriveDownload },
     { path: '/settings', label: '系统设置', icon: Settings },
   ];
 
@@ -30,7 +31,9 @@ export const Sidebar: React.FC<SidebarProps> = ({ collapsed = false, onToggle })
   const displayName = user?.email?.split('@')[0] || 'User';
 
   return (
-    <div className={`${collapsed ? 'w-20' : 'w-64'} bg-white border-r border-gray-200 flex flex-col h-full sticky top-0 transition-all duration-300 relative`}>
+    <div
+      className={`${collapsed ? 'w-20' : 'w-64'} bg-white border-r border-gray-200 flex flex-col h-full sticky top-0 transition-all duration-300 relative`}
+    >
       {/* Toggle Button */}
       <button
         onClick={onToggle}
@@ -82,8 +85,9 @@ export const Sidebar: React.FC<SidebarProps> = ({ collapsed = false, onToggle })
         })}
       </nav>
 
-      {/* Footer / User Profile / Logout */}
+      {/* Footer: worker heartbeat + user + logout */}
       <div className="p-4 border-t border-gray-100 space-y-4">
+        <SidebarWorkerHeartbeat collapsed={collapsed} />
          {!collapsed && (
            <div className="flex items-center gap-3 px-2">
               <img

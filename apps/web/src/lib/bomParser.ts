@@ -16,6 +16,31 @@ function normalizeMarkdownLink(text: string): string {
   return text.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '$2');
 }
 
+/** 空表头占位名；若该列全行无内容则从预览/入库结构中剔除，避免 Excel 尾部多余制表符产生空列 */
+const SYNTHETIC_HEADER = /^col_\d+$/i;
+
+function pruneEmptySyntheticColumns(headers: string[], rows: BomRowRecord[]): { headers: string[]; rows: BomRowRecord[] } {
+  const keep = headers.map((h) => {
+    if (!SYNTHETIC_HEADER.test(h)) return true;
+    return rows.some((r) => (r[h] ?? '').trim().length > 0);
+  });
+  const nextHeaders = headers.filter((_, i) => keep[i]);
+  if (nextHeaders.length === 0) {
+    return { headers, rows };
+  }
+  if (nextHeaders.length === headers.length) {
+    return { headers, rows };
+  }
+  const nextRows = rows.map((r) => {
+    const row: BomRowRecord = {};
+    for (const h of nextHeaders) {
+      row[h] = r[h] ?? '';
+    }
+    return row;
+  });
+  return { headers: nextHeaders, rows: nextRows };
+}
+
 function rowsToRecords(tableRows: string[][]): { headers: string[]; rows: BomRowRecord[] } {
   if (tableRows.length < 2) {
     throw new Error('至少需要 1 行表头 + 1 行数据');
@@ -62,7 +87,7 @@ function rowsToRecords(tableRows: string[][]): { headers: string[]; rows: BomRow
     }
   }
 
-  return { headers, rows };
+  return pruneEmptySyntheticColumns(headers, rows);
 }
 
 function pickDelimiter(headerLine: string): string {

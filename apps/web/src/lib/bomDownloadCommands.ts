@@ -3,6 +3,7 @@ import type { BomBatchRow } from './bomBatches';
 import type { BomJsonKeyMap } from './bomScannerSettings';
 import {
   extractDownloadUrlRaw,
+  extractExtUrlFromRow,
   extractHttpUrlFromDownloadCell,
   fileBasename,
 } from './bomRowFields';
@@ -63,6 +64,13 @@ export function rowHasArtifactoryHttpUrl(row: BomBatchRow, keyMap: BomJsonKeyMap
   return Boolean(url && /artifactory/i.test(url));
 }
 
+/** ext_url 等别名列中的 http(s) Artifactory 链接（阶段 5 写入后可批量复制 curl/wget） */
+export function rowHasExtArtifactoryHttpUrl(row: BomBatchRow, keyMap: BomJsonKeyMap): boolean {
+  const raw = extractExtUrlFromRow(row.bom_row, keyMap);
+  const url = raw ? extractHttpUrlFromDownloadCell(raw) : null;
+  return Boolean(url && /artifactory/i.test(url));
+}
+
 export function buildCurlDownloadCommand(url: string, apiKey: string, outFile: string): string {
   const q = shellSingleQuote;
   const fn = outFile.trim() || 'download.bin';
@@ -116,6 +124,41 @@ export function buildCopyCommandsForRows(
         ? buildCurlDownloadCommand(url, picked.apiKey, out)
         : buildWgetDownloadCommand(url, picked.apiKey, out);
     blocks.push(`# 第 ${displayLine} 行 · ${picked.keyKind === 'ext' ? '扩展实例' : '主实例'} · ${out}`);
+    blocks.push(cmd);
+    blocks.push('');
+  }
+  return { text: blocks.join('\n').trimEnd(), errors };
+}
+
+export function buildCopyCommandsForExtRows(
+  items: { row: BomBatchRow; displayLine: number }[],
+  keyMap: BomJsonKeyMap,
+  cfg: ArtifactoryConfig,
+  tool: 'curl' | 'wget',
+): { text: string; errors: string[] } {
+  const errors: string[] = [];
+  const blocks: string[] = [];
+  for (const { row: lr, displayLine } of items) {
+    const raw = extractExtUrlFromRow(lr.bom_row, keyMap);
+    const url = raw ? extractHttpUrlFromDownloadCell(raw) : null;
+    if (!url || !/artifactory/i.test(url)) {
+      errors.push(`第 ${displayLine} 行：无有效 ext-Artifactory http(s) 链接（ext_url / 转存地址）`);
+      continue;
+    }
+    const picked = pickArtifactoryApiKeyForUrl(url, cfg);
+    if (!picked) {
+      errors.push(
+        `第 ${displayLine} 行：无法匹配 API Key（请核对系统设置中主/扩展 Base URL 与 ext 链接主机是否一致）`,
+      );
+      continue;
+    }
+    const pathOnly = url.split(/[?#]/)[0] ?? url;
+    const out = fileBasename(pathOnly);
+    const cmd =
+      tool === 'curl'
+        ? buildCurlDownloadCommand(url, picked.apiKey, out)
+        : buildWgetDownloadCommand(url, picked.apiKey, out);
+    blocks.push(`# 第 ${displayLine} 行 · ext · ${picked.keyKind === 'ext' ? '扩展实例' : '主实例'} · ${out}`);
     blocks.push(cmd);
     blocks.push('');
   }

@@ -9,9 +9,12 @@ import {
 } from '../lib/artifactorySettings';
 import {
   fetchBomScannerSettings,
+  mergeWorkerTuning,
   saveBomScannerSettings,
   type BomScannerConfig,
+  type BomWorkerTuning,
 } from '../lib/bomScannerSettings';
+import { useBomWorkerHeartbeat } from '../lib/useBomWorkerHeartbeat';
 import {
   fetchLatestBomScanJob,
   fetchLocalFileStats,
@@ -75,6 +78,7 @@ export const Settings: React.FC = () => {
     artifactoryExtBaseUrl: '',
     artifactoryExtApiKey: '',
   });
+  const [savedArtifactory, setSavedArtifactory] = useState<ArtifactoryConfig | null>(null);
   const [artifactoryLoading, setArtifactoryLoading] = useState(false);
   const [artifactorySaveStatus, setArtifactorySaveStatus] = useState<'idle' | 'success' | 'error'>('idle');
 
@@ -90,6 +94,14 @@ export const Settings: React.FC = () => {
   const [bomScanStats, setBomScanStats] = useState<{ fileCount: number; md5Count: number }>({ fileCount: 0, md5Count: 0 });
   const [bomScanLoading, setBomScanLoading] = useState(false);
   const [bomScanMessage, setBomScanMessage] = useState<string>('');
+  const [showWorkerTuning, setShowWorkerTuning] = useState(false);
+  const bomWorkerHeartbeat = useBomWorkerHeartbeat(bomScanner);
+
+  const patchWorkerTuning = (patch: Partial<BomWorkerTuning>) => {
+    setBomScanner((s) =>
+      s ? { ...s, workerTuning: mergeWorkerTuning({ ...s.workerTuning, ...patch }) } : s,
+    );
+  };
 
   // 与 supabase 客户端一致：优先 window.__APP_CONFIG__，否则 VITE_*
   const { supabaseUrl: envSupabaseUrl } = getAppConfig();
@@ -120,6 +132,7 @@ export const Settings: React.FC = () => {
         const cfg = await fetchArtifactorySettings();
         if (cancelled || !cfg) return;
         setArtifactory(cfg);
+        setSavedArtifactory(cfg);
       } catch (e) {
         console.error(e);
       }
@@ -128,6 +141,18 @@ export const Settings: React.FC = () => {
       cancelled = true;
     };
   }, []);
+
+  const artifactoryDirty = (() => {
+    const base = savedArtifactory;
+    if (!base) return false;
+    const norm = (s: string | undefined) => (s ?? '').trim();
+    return (
+      norm(artifactory.artifactoryBaseUrl) !== norm(base.artifactoryBaseUrl) ||
+      norm(artifactory.artifactoryApiKey) !== norm(base.artifactoryApiKey) ||
+      norm(artifactory.artifactoryExtBaseUrl) !== norm(base.artifactoryExtBaseUrl) ||
+      norm(artifactory.artifactoryExtApiKey) !== norm(base.artifactoryExtApiKey)
+    );
+  })();
 
   const loadBomScanRuntime = async () => {
     const [latestJob, stats] = await Promise.all([fetchLatestBomScanJob(), fetchLocalFileStats()]);
@@ -191,7 +216,11 @@ export const Settings: React.FC = () => {
         expectedMd5: arr('expectedMd5'),
         arch: arr('arch'),
         extUrl: o.extUrl !== undefined ? arr('extUrl') : undefined,
+        releaseVersion: o.releaseVersion !== undefined ? arr('releaseVersion') : undefined,
+        releaseBatch: o.releaseBatch !== undefined ? arr('releaseBatch') : undefined,
+        moduleName: o.moduleName !== undefined ? arr('moduleName') : undefined,
         fileSizeBytes: o.fileSizeBytes !== undefined ? arr('fileSizeBytes') : undefined,
+        extFileSizeBytes: o.extFileSizeBytes !== undefined ? arr('extFileSizeBytes') : undefined,
         remark: o.remark !== undefined ? arr('remark') : undefined,
       };
     } catch (e) {
@@ -204,6 +233,7 @@ export const Settings: React.FC = () => {
       await saveBomScannerSettings({
         ...bomScanner,
         jsonKeyMap: parsed,
+        extArtifactoryRepo: bomScanner.extArtifactoryRepo?.trim() ?? '',
       });
       const next = await fetchBomScannerSettings();
       setBomScanner(next);
@@ -238,6 +268,7 @@ export const Settings: React.FC = () => {
       setArtifactoryLoading(true);
       await saveArtifactorySettings(artifactory);
       setArtifactorySaveStatus('success');
+      setSavedArtifactory(artifactory);
       setTimeout(() => setArtifactorySaveStatus('idle'), 3000);
     } catch (err: any) {
       setArtifactorySaveStatus('error');
@@ -287,6 +318,10 @@ export const Settings: React.FC = () => {
   };
 
   const handleTestArtifactory = async () => {
+    if (artifactoryDirty) {
+      alert('请先保存 Artifactory 配置，再点击“测试凭证”。（测试逻辑只读取数据库已保存的配置）');
+      return;
+    }
     const url = testUrl.trim();
     if (!url) {
       alert('请输入要测试的 Artifactory URL');
@@ -437,6 +472,91 @@ export const Settings: React.FC = () => {
               <p className="text-xs text-slate-500 mt-1">
                 与 worker 主循环睡眠、定时自动入队共用同一数值；保存后 worker 下一轮从数据库读取即可生效。
               </p>
+              <p className="text-xs text-slate-600 mt-2">
+                当前 worker 生效本地目录：
+                <code className="bg-gray-100 px-1 rounded ml-1">
+                  {bomScanner.workerLocalRoot?.trim() || '（尚未回报）'}
+                </code>
+              </p>
+              {bomWorkerHeartbeat ? (
+                <p
+                  className={`text-xs mt-1.5 leading-snug ${
+                    bomWorkerHeartbeat.level === 'ok_idle'
+                      ? 'text-emerald-800'
+                      : bomWorkerHeartbeat.level === 'ok_busy'
+                        ? 'text-orange-800'
+                        : 'text-red-800'
+                  }`}
+                >
+                  <span className="font-medium">Worker 心跳：</span>
+                  {bomWorkerHeartbeat.summary}
+                </p>
+              ) : null}
+            </div>
+
+            <div className="rounded-lg border border-slate-200 bg-slate-50/80 p-3 space-y-2">
+              <button
+                type="button"
+                onClick={() => setShowWorkerTuning((v) => !v)}
+                className="text-sm font-medium text-slate-800 hover:text-slate-950"
+              >
+                {showWorkerTuning ? '▼' : '▶'} Worker 队列 / 心跳（毫秒或秒，保存后 worker 下一轮从数据库读取）
+              </button>
+              {showWorkerTuning && bomScanner ? (
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1 text-sm">
+                  <label className="block space-y-1">
+                    <span className="text-xs text-slate-600">heartbeatMs（心跳 / 进度上报 / 取消轮询间隔，5000–120000）</span>
+                    <input
+                      type="number"
+                      min={5000}
+                      max={120000}
+                      value={bomScanner.workerTuning.heartbeatMs}
+                      onChange={(e) => patchWorkerTuning({ heartbeatMs: Number(e.target.value) })}
+                      className="w-full px-3 py-1.5 border border-gray-200 rounded-lg font-mono text-xs"
+                    />
+                  </label>
+                  <label className="block space-y-1">
+                    <span className="text-xs text-slate-600">httpTimeoutMs（单次下载/上传 HTTP 超时，≥1000）</span>
+                    <input
+                      type="number"
+                      min={1000}
+                      value={bomScanner.workerTuning.httpTimeoutMs}
+                      onChange={(e) => patchWorkerTuning({ httpTimeoutMs: Number(e.target.value) })}
+                      className="w-full px-3 py-1.5 border border-gray-200 rounded-lg font-mono text-xs"
+                    />
+                  </label>
+                  <label className="block space-y-1">
+                    <span className="text-xs text-slate-600">httpRetries（HTTP 失败最大重试次数，0~10）</span>
+                    <input
+                      type="number"
+                      min={0}
+                      max={10}
+                      value={bomScanner.workerTuning.httpRetries}
+                      onChange={(e) => patchWorkerTuning({ httpRetries: Number(e.target.value) })}
+                      className="w-full px-3 py-1.5 border border-gray-200 rounded-lg font-mono text-xs"
+                    />
+                  </label>
+                </div>
+              ) : null}
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium text-slate-700 mb-1">
+                ext-Artifactory 目标仓库 key（阶段 5）
+              </label>
+              <input
+                type="text"
+                value={bomScanner.extArtifactoryRepo}
+                onChange={(e) =>
+                  setBomScanner((s) => (s ? { ...s, extArtifactoryRepo: e.target.value } : s))
+                }
+                placeholder="例如 software-bom-bucket"
+                className="w-full max-w-md px-4 py-2 border border-gray-200 rounded-lg font-mono text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
+              />
+              <p className="text-xs text-slate-500 mt-1">
+                同步时制品 Deploy/Copy 到此仓库；路径为 <span className="font-mono">产品版本/发布版本/模块/文件名</span>（对应 jsonKeyMap 的 releaseVersion、releaseBatch、moduleName 等列）。
+                凭据为扩展实例：环境变量 <span className="font-mono">IT_ARTIFACTORY_EXT_*</span> 或「Artifactory 凭据」中的扩展 Base URL / API Key。
+              </p>
             </div>
             <div>
               <label className="block text-sm font-medium text-slate-700 mb-1">jsonKeyMap（JSON）</label>
@@ -452,7 +572,11 @@ export const Settings: React.FC = () => {
                 <code className="bg-gray-100 px-1 rounded">expectedMd5</code>、
                 <code className="bg-gray-100 px-1 rounded">arch</code>、
                 <code className="bg-gray-100 px-1 rounded">extUrl</code>、
+                <code className="bg-gray-100 px-1 rounded">releaseVersion</code>、
+                <code className="bg-gray-100 px-1 rounded">releaseBatch</code>、
+                <code className="bg-gray-100 px-1 rounded">moduleName</code>、
                 <code className="bg-gray-100 px-1 rounded">fileSizeBytes</code>、
+                <code className="bg-gray-100 px-1 rounded">extFileSizeBytes</code>、
                 <code className="bg-gray-100 px-1 rounded">remark</code>（可选）；值为字符串数组，表示 jsonb 中可能出现的列名。
               </p>
             </div>
@@ -560,7 +684,7 @@ export const Settings: React.FC = () => {
               <button
                 type="button"
                 onClick={handleTestArtifactory}
-                disabled={artifactoryTestLoading}
+                disabled={artifactoryTestLoading || artifactoryDirty}
                 className="flex items-center gap-2 px-6 py-2 bg-blue-600 text-white font-medium rounded-lg hover:bg-blue-700 transition-colors shadow-sm disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 {artifactoryTestLoading ? (

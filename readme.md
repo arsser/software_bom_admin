@@ -11,21 +11,49 @@ cd apps/supabase
 pnpm exec supabase start
 ```
 
-### 1.2 启动 worker
+### 1.2 数据库迁移（保留数据）
+
+迁移文件位于 `apps/supabase/migrations/`。升级结构时请**不要**使用 `supabase db reset`：会重建本地数据库并清空**全部数据**（含 `auth` 用户与业务表）。
+
+**本地（`supabase start` 已运行、需应用新迁移且保留现有数据）**
+
+```bash
+cd apps/supabase
+pnpm exec supabase migration up
+```
+
+查看迁移状态：
+
+```bash
+pnpm exec supabase migration list
+```
+
+**已 link 的远端项目（开发 / 预发 / 生产）**
+
+将本地 migrations 推送到链接的数据库（需先 `supabase link` 并具备权限）：
+
+```bash
+cd apps/supabase
+pnpm exec supabase db push
+```
+
+说明：`db push` 与 `migration up` 均只执行尚未应用的迁移；与 `db reset` 不同，不会主动清空业务数据。
+
+### 1.3 启动 worker
 
 ```bash
 cd /path/to/software_bom_admin/apps/bom-scanner-worker
 npm run start:env
 ```
 
-### 1.3 启动 edge function
+### 1.4 启动 edge function
 
 ```bash
 cd /path/to/software_bom_admin/apps/supabase
 pnpm exec supabase functions serve artifactory-api-info --no-verify-jwt
 ```
 
-### 1.4 在网页设置中配置 Artifactory
+### 1.5 在网页设置中配置 Artifactory
 
 打开“系统设置”页面，填写并保存：
 
@@ -52,3 +80,4 @@ cd deploy/production
 
 - worker 与 edge function 运行时都读取数据库配置，不再要求容器注入 `IT_ARTIFACTORY_*`。
 - 建议仅对受信管理员开放 Artifactory 凭据编辑权限。
+

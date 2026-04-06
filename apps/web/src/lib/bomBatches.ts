@@ -8,7 +8,7 @@ import {
   type BomWarning,
   type HeaderValidationResult,
 } from './bomParser';
-import { isBomRowStatus, type BomRowStatus } from './bomRowStatus';
+import { mergeLocalFetchError, parseBomRowStatus, type BomRowStatusJson } from './bomRowStatus';
 
 export type BomBatch = {
   id: string;
@@ -23,9 +23,8 @@ export type BomBatch = {
 export type BomBatchRow = {
   id: string;
   bom_row: BomRowRecord;
-  status: BomRowStatus;
-  /** 阶段 4：自动下载失败等简要原因 */
-  lastFetchError?: string | null;
+  /** JSONB：local / ext 及可选 local_fetch_error、ext_fetch_error */
+  status: BomRowStatusJson;
 };
 
 export async function fetchBomBatches(): Promise<BomBatch[]> {
@@ -71,18 +70,35 @@ export async function updateBomBatchHeaderOrder(batchId: string, headerOrder: st
   if (error) throw error;
 }
 
+/**
+ * 按当前 local_file 索引重算该版本内行状态（与 worker 扫描结束时的规则一致，不含 synced_or_skipped）。
+ * 用于网页加载/刷新时对齐，避免文件已从索引 prune 而 bom_rows 仍为校验通过。
+ */
+export async function refreshBomRowStatusesForBatch(batchId: string): Promise<number> {
+  const { data, error } = await supabase.rpc('bom_refresh_local_found_statuses_for_batch', {
+    p_batch_id: batchId,
+  });
+  if (error) throw error;
+  if (typeof data === 'number' && Number.isFinite(data)) return data;
+  if (typeof data === 'string' && data.trim() !== '') {
+    const n = Number(data);
+    if (Number.isFinite(n)) return n;
+  }
+  return 0;
+}
+
 export async function fetchBomRows(batchId: string): Promise<BomBatchRow[]> {
   const { data, error } = await supabase
     .from('bom_rows')
-    .select('id,bom_row,status,last_fetch_error')
+    .select('id,bom_row,status')
     .eq('batch_id', batchId)
-    .order('created_at', { ascending: true });
+    .order('sort_order', { ascending: true })
+    .order('id', { ascending: true });
   if (error) throw error;
   return (data ?? []).map((raw: any) => ({
     id: String(raw.id),
     bom_row: raw.bom_row as BomRowRecord,
-    status: isBomRowStatus(String(raw.status)) ? (String(raw.status) as BomRowStatus) : 'pending',
-    lastFetchError: (raw.last_fetch_error as string | null | undefined) ?? null,
+    status: parseBomRowStatus(raw.status),
   }));
 }
 
@@ -99,7 +115,11 @@ export async function createBatchWithRows(payload: { name: string; productId: st
     .single();
   if (batchError) throw batchError;
 
-  const rowPayload = payload.rows.map((r) => ({ batch_id: batch.id, bom_row: r }));
+  const rowPayload = payload.rows.map((r, idx) => ({
+    batch_id: batch.id,
+    bom_row: r,
+    sort_order: idx,
+  }));
   const { error: rowsError } = await supabase.from('bom_rows').insert(rowPayload);
   if (rowsError) throw rowsError;
 
@@ -108,6 +128,19 @@ export async function createBatchWithRows(payload: { name: string; productId: st
 
 export async function updateBomRowRecord(rowId: string, bom_row: BomRowRecord): Promise<void> {
   const { error } = await supabase.from('bom_rows').update({ bom_row }).eq('id', rowId);
+  if (error) throw error;
+}
+
+/** 同时更新 bom_row 与 status.local_fetch_error（如「补全 MD5」写入状态说明·本地） */
+export async function updateBomRowBomAndFetchError(
+  rowId: string,
+  bom_row: BomRowRecord,
+  local_fetch_error: string | null,
+): Promise<void> {
+  const { data: row, error: selErr } = await supabase.from('bom_rows').select('status').eq('id', rowId).maybeSingle();
+  if (selErr) throw selErr;
+  const status = mergeLocalFetchError(parseBomRowStatus(row?.status), local_fetch_error);
+  const { error } = await supabase.from('bom_rows').update({ bom_row, status }).eq('id', rowId);
   if (error) throw error;
 }
 
@@ -159,7 +192,7 @@ export async function replaceBatchRows(batchId: string, rows: BomRowRecord[]): P
 
   if (rows.length === 0) return;
 
-  const payload = rows.map((r) => ({ batch_id: batchId, bom_row: r }));
+  const payload = rows.map((r, idx) => ({ batch_id: batchId, bom_row: r, sort_order: idx }));
   const { error: insertError } = await supabase.from('bom_rows').insert(payload);
   if (insertError) throw insertError;
 }

@@ -1,5 +1,6 @@
 import { supabase } from './supabase';
 import type { ArtifactoryConfig } from './artifactorySettings';
+import { formatFunctionsInvokeError } from './supabaseFunctionsInvokeError';
 
 export interface ApiInfo {
   repo?: string;
@@ -42,7 +43,7 @@ export async function getArtifactoryApiInfo(payload: {
   });
 
   if (error) {
-    throw new Error(error.message || 'Edge Function 调用失败');
+    throw new Error(await formatFunctionsInvokeError(error));
   }
 
   if (data && typeof data === 'object' && 'error' in data && !Array.isArray(data)) {

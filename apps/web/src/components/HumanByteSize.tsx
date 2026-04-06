@@ -63,18 +63,31 @@ export function HumanByteSize({ bytes, variantLabel, className = '' }: Props) {
   );
 }
 
-type DualProps = {
+type TripleProps = {
   localBytes: number | null;
+  extBytes: number | null;
+  /** it-Artifactory 等写入 fileSizeBytes 列的大小 */
   remoteBytes: number | null;
 };
 
-/** 本地优先；无本地时显示远端（Artifactory 写入 jsonb 的大小） */
-export function BomRowByteSizeCell({ localBytes, remoteBytes }: DualProps) {
-  if (localBytes != null) {
-    return <HumanByteSize bytes={localBytes} variantLabel="本地" />;
+/**
+ * 自上而下与「选取」优先级一致：ext → 本地（索引）→ Artifactory（it / fileSizeBytes 列）。
+ */
+export function BomRowByteSizeCell({ localBytes, extBytes, remoteBytes }: TripleProps) {
+  const segments: Array<{ bytes: number; label: string }> = [];
+  if (extBytes != null) segments.push({ bytes: extBytes, label: 'extArtifactory' });
+  if (localBytes != null) segments.push({ bytes: localBytes, label: '本地文件' });
+  if (remoteBytes != null) segments.push({ bytes: remoteBytes, label: 'Artifactory' });
+
+  if (segments.length === 0) {
+    return <span className="text-slate-400">—</span>;
   }
-  if (remoteBytes != null) {
-    return <HumanByteSize bytes={remoteBytes} variantLabel="远端" />;
-  }
-  return <span className="text-slate-400">—</span>;
+
+  return (
+    <div className="flex flex-col gap-0.5 min-w-0">
+      {segments.map((s, i) => (
+        <HumanByteSize key={`${i}-${s.label}`} bytes={s.bytes} variantLabel={s.label} className="text-[11px]" />
+      ))}
+    </div>
+  );
 }

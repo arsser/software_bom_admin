@@ -5,6 +5,18 @@ import path from 'node:path';
 import { pipeline } from 'node:stream/promises';
 import { Readable, Transform } from 'node:stream';
 import { createClient } from '@supabase/supabase-js';
+import { drainExtSyncJobs, failStaleExtSyncJobs } from './extArtifactorySync.mjs';
+import {
+  fetchBomScannerWorkerConfig,
+  isRetriableSettingsFetchError,
+  resolveWorkerTuning,
+  WORKER_DB_RETRY_MS,
+  IDLE_POLL_MS,
+  JOB_STALE_SECONDS,
+  SCAN_STALE_SECONDS,
+} from './workerTuning.mjs';
+import { patchBomRowLocalStatus } from './bomRowStatusJson.mjs';
+import { reportBomLocalRootRuntime } from './workerRuntimeReport.mjs';
 
 function log(...args) {
   console.log(new Date().toISOString(), ...args);
@@ -12,6 +24,25 @@ function log(...args) {
 
 function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));
+}
+
+const MAX_HTTP_RETRIES = 2;
+const RETRY_BASE_DELAY_MS = 3000;
+
+/** 网络或 5xx 错误可重试；4xx / 取消 / 超时不重试 */
+function isRetriableHttpError(e) {
+  if (!e || typeof e !== 'object') return false;
+  const msg = String(e.message || '').toLowerCase();
+  if (e.name === 'AbortError' || msg === 'aborted') return false;
+  if (msg.includes('timeout')) return false;
+  if (msg.includes('fetch failed') || msg.includes('econnreset') || msg.includes('econnrefused') ||
+      msg.includes('epipe') || msg.includes('socket hang up') || msg.includes('network')) return true;
+  const httpMatch = msg.match(/^http (\d+)/);
+  if (httpMatch) {
+    const code = Number(httpMatch[1]);
+    return code >= 500 || code === 408 || code === 429;
+  }
+  return false;
 }
 
 function requireEnv(name) {
@@ -97,34 +128,6 @@ async function fetchLocalFileRow(supabase, relPath) {
 /**
  * @param {import('@supabase/supabase-js').SupabaseClient} supabase
  */
-function clampScanSeconds(n) {
-  if (!Number.isFinite(n)) return 30;
-  return Math.min(86400, Math.max(5, Math.round(n)));
-}
-
-/**
- * 与 Web 设置一致：scanIntervalSeconds；兼容历史 scanIntervalMinutes
- * @param {import('@supabase/supabase-js').SupabaseClient} supabase
- */
-async function fetchScanIntervalSeconds(supabase) {
-  const { data, error } = await supabase.from('system_settings').select('value').eq('key', 'bom_scanner').maybeSingle();
-  if (error) {
-    log('WARN fetch bom_scanner settings', error.message);
-    return 30;
-  }
-  const v = data?.value;
-  if (typeof v?.scanIntervalSeconds === 'number' && Number.isFinite(v.scanIntervalSeconds)) {
-    return clampScanSeconds(v.scanIntervalSeconds);
-  }
-  if (typeof v?.scanIntervalMinutes === 'number' && Number.isFinite(v.scanIntervalMinutes)) {
-    return clampScanSeconds(v.scanIntervalMinutes * 60);
-  }
-  return 30;
-}
-
-/**
- * @param {import('@supabase/supabase-js').SupabaseClient} supabase
- */
 async function pickQueuedJob(supabase) {
   const { data, error } = await supabase
     .from('bom_scan_jobs')
@@ -167,11 +170,29 @@ async function lastSucceededFinishedAt(supabase) {
 }
 
 /**
+ * running 过久未结束（worker 崩溃等）会阻塞 bom_request_scan；与下载任务类似，定期标记为 failed。
+ * @param {import('@supabase/supabase-js').SupabaseClient} supabase
+ * @param {number} staleSec
+ */
+async function failStaleScanJobs(supabase, staleSec) {
+  const sec = Number.isFinite(staleSec) && staleSec >= 300 ? Math.floor(staleSec) : 7200;
+  const { data, error } = await supabase.rpc('bom_fail_stale_scan_jobs', { p_stale_seconds: sec });
+  if (error) {
+    log('WARN bom_fail_stale_scan_jobs', error.message);
+    return 0;
+  }
+  const n = typeof data === 'number' ? data : 0;
+  if (n > 0) log('bom_fail_stale_scan_jobs', n, 'cutoffSec=', sec);
+  return n;
+}
+
+/**
  * @param {import('@supabase/supabase-js').SupabaseClient} supabase
  * @param {string} jobId
  * @param {string} rootAbs
+ * @param {import('./workerTuning.mjs').WorkerTuning} tuning
  */
-async function runScanJob(supabase, jobId, rootAbs) {
+async function runScanJob(supabase, jobId, rootAbs, tuning) {
   let filesSeen = 0;
   let filesMd5Updated = 0;
 
@@ -180,6 +201,13 @@ async function runScanJob(supabase, jobId, rootAbs) {
     p_message: 'scanning',
   });
   if (startErr) throw startErr;
+
+  let globalHbTimer = null;
+  try {
+    await reportBomLocalRootRuntime(supabase, rootAbs, { phase: 'busy', busyHint: 'scan' });
+    globalHbTimer = setInterval(() => {
+      void reportBomLocalRootRuntime(supabase, rootAbs, { phase: 'busy', busyHint: 'scan' });
+    }, tuning.heartbeatMs);
 
   for await (const abs of walkFiles(rootAbs)) {
     const rel = path.relative(rootAbs, abs).split(path.sep).join('/');
@@ -224,7 +252,7 @@ async function runScanJob(supabase, jobId, rootAbs) {
   }
 
   const summary = `files_seen=${filesSeen} md5_updated=${filesMd5Updated}`;
-  const { error: finErr } = await supabase.rpc('bom_finalize_scan', {
+  const { data: finRows, error: finErr } = await supabase.rpc('bom_finalize_scan', {
     p_job_id: jobId,
     p_success: true,
     p_files_seen: filesSeen,
@@ -234,7 +262,23 @@ async function runScanJob(supabase, jobId, rootAbs) {
     p_prune_missing: true,
   });
   if (finErr) throw finErr;
-  log('job done', jobId, summary);
+  const fr = Array.isArray(finRows) && finRows[0] ? finRows[0] : null;
+  log(
+    'job done',
+    jobId,
+    summary,
+    fr ? `prune_removed=${fr.removed_count} bom_status_updates=${fr.status_updates}` : '(no finalize row)',
+  );
+  const { data: sizeSynced, error: sizeSyncErr } = await supabase.rpc('bom_sync_bom_row_local_size_from_index');
+  if (sizeSyncErr) {
+    log('WARN bom_sync_bom_row_local_size_from_index', sizeSyncErr.message);
+  } else {
+    log('bom_row local size synced rows_updated=', sizeSynced ?? 0);
+  }
+  } finally {
+    if (globalHbTimer) clearInterval(globalHbTimer);
+    await reportBomLocalRootRuntime(supabase, rootAbs, { phase: 'idle' });
+  }
 }
 
 /**
@@ -401,11 +445,23 @@ async function patchDownloadJob(supabase, jobId, patch) {
  * @param {{ id: string, downloadUrl: string }} row
  * @param {object} [opts]
  * @param {(n: { runningDownloaded: number, runningTotal: number | null, fileName: string }) => void} [opts.onProgress]
+ * @param {AbortSignal} [opts.signal]
+ * @param {number} [opts.timeoutMs]
+ * @param {number} [opts.maxRetries]
  */
 async function downloadItArtifactRow(supabase, rootAbs, creds, row, opts = {}) {
   const id = row.id;
   const url = String(row.downloadUrl).trim();
   const onProgress = opts.onProgress;
+  const signal = opts.signal;
+  const timeoutMs =
+    typeof opts.timeoutMs === 'number' && Number.isFinite(opts.timeoutMs) && opts.timeoutMs > 0
+      ? opts.timeoutMs
+      : 3600000;
+  const maxRetries =
+    typeof opts.maxRetries === 'number' && Number.isFinite(opts.maxRetries) && opts.maxRetries >= 0
+      ? opts.maxRetries
+      : MAX_HTTP_RETRIES;
   if (!/^https?:\/\//i.test(url)) {
     return { ok: false, message: '非 http(s) URL' };
   }
@@ -413,11 +469,7 @@ async function downloadItArtifactRow(supabase, rootAbs, creds, row, opts = {}) {
   if (!itUrlAllowedForBase(url, creds.baseUrl)) {
     const msg = `URL 主机与配置的 it Base URL 不一致`;
     log('it-download skip host mismatch', id, url);
-    const { error: upErr } = await supabase
-      .from('bom_rows')
-      .update({ status: 'error', last_fetch_error: msg.slice(0, 1000) })
-      .eq('id', id);
-    if (upErr) log('WARN set fetch error', upErr.message);
+    await patchBomRowLocalStatus(supabase, id, 'error', msg.slice(0, 1000));
     return { ok: false, message: msg };
   }
 
@@ -439,8 +491,6 @@ async function downloadItArtifactRow(supabase, rootAbs, creds, row, opts = {}) {
   }
 
   const tmpAbs = `${destAbs}.part`;
-  const timeoutMsRaw = Number(process.env.IT_ARTIFACTORY_DOWNLOAD_TIMEOUT_MS || 3600000);
-  const timeoutMs = Number.isFinite(timeoutMsRaw) && timeoutMsRaw > 0 ? timeoutMsRaw : 3600000;
   let urlHost = '';
   let urlPathPrefix = '';
   try {
@@ -460,68 +510,78 @@ async function downloadItArtifactRow(supabase, rootAbs, creds, row, opts = {}) {
     auth: 'Bearer + X-JFrog-Art-Api (same key; JFrog 通常认后者)',
   });
 
+  let retries = 0;
   try {
     let totalBytes = null;
-    await Promise.race([
-      (async () => {
-        const key = creds.apiKey;
-        const res = await fetch(url, {
-          redirect: 'follow',
-          headers: {
-            // 与网页复制的 curl、artifactory-api-info Edge 一致：JFrog API Key 主要靠 X-JFrog-Art-Api；
-            // 仅 Bearer 时部分实例会 401（Bad props auth token / basictoken=…）。
-            Authorization: `Bearer ${key}`,
-            'X-JFrog-Art-Api': key,
-            'X-Api-Key': key,
-            Accept: '*/*',
-          },
+    const doFetch = async () => {
+      totalBytes = null;
+      const key = creds.apiKey;
+      const res = await fetch(url, {
+        signal,
+        redirect: 'follow',
+        headers: {
+          Authorization: `Bearer ${key}`,
+          'X-JFrog-Art-Api': key,
+          'X-Api-Key': key,
+          Accept: '*/*',
+        },
+      });
+      if (!res.ok) {
+        let bodySnippet = '';
+        try {
+          bodySnippet = (await res.text()).slice(0, 400).replace(/\s+/g, ' ');
+        } catch {
+          /* ignore */
+        }
+        const wwwAuth = res.headers.get('www-authenticate');
+        const reqId = res.headers.get('x-request-id') || res.headers.get('x-jfrog-request-id');
+        log('it-download http error', id, {
+          status: res.status,
+          statusText: res.statusText,
+          wwwAuthenticate: wwwAuth,
+          requestId: reqId,
+          bodySnippet: bodySnippet || '(empty)',
         });
-        if (!res.ok) {
-          let bodySnippet = '';
-          try {
-            bodySnippet = (await res.text()).slice(0, 400).replace(/\s+/g, ' ');
-          } catch {
-            /* ignore */
+        const msg = `HTTP ${res.status} ${res.statusText || ''}`.trim().slice(0, 1000);
+        throw new Error(msg);
+      }
+      if (!res.body) throw new Error('响应无正文');
+      const cl = res.headers.get('content-length');
+      if (cl) {
+        const parsed = Number(cl);
+        if (Number.isFinite(parsed) && parsed >= 0) totalBytes = parsed;
+      }
+      const ws = createWriteStream(tmpAbs, { flags: 'w' });
+      let running = 0;
+      const counter = new Transform({
+        transform(chunk, _enc, cb) {
+          running += chunk.length;
+          if (onProgress) {
+            onProgress({ runningDownloaded: running, runningTotal: totalBytes, fileName: destName });
           }
-          const wwwAuth = res.headers.get('www-authenticate');
-          const reqId = res.headers.get('x-request-id') || res.headers.get('x-jfrog-request-id');
-          log('it-download http error', id, {
-            status: res.status,
-            statusText: res.statusText,
-            wwwAuthenticate: wwwAuth,
-            requestId: reqId,
-            bodySnippet: bodySnippet || '(empty)',
-          });
-          const msg = `HTTP ${res.status} ${res.statusText || ''}`.trim().slice(0, 1000);
-          throw new Error(msg);
-        }
-        if (!res.body) throw new Error('响应无正文');
-        const cl = res.headers.get('content-length');
-        if (cl) {
-          const parsed = Number(cl);
-          if (Number.isFinite(parsed) && parsed >= 0) totalBytes = parsed;
-        }
-        const ws = createWriteStream(tmpAbs, { flags: 'w' });
-        let running = 0;
-        const counter = new Transform({
-          transform(chunk, _enc, cb) {
-            running += chunk.length;
-            if (onProgress) {
-              onProgress({
-                runningDownloaded: running,
-                runningTotal: totalBytes,
-                fileName: destName,
-              });
-            }
-            cb(null, chunk);
-          },
-        });
-        await pipeline(Readable.fromWeb(res.body), counter, ws);
-      })(),
-      new Promise((_, reject) => {
-        setTimeout(() => reject(new Error('download timeout')), timeoutMs);
-      }),
-    ]);
+          cb(null, chunk);
+        },
+      });
+      await pipeline(Readable.fromWeb(res.body), counter, ws);
+    };
+
+    for (let attempt = 0; ; attempt++) {
+      try {
+        await Promise.race([
+          doFetch(),
+          new Promise((_, reject) => { setTimeout(() => reject(new Error('download timeout')), timeoutMs); }),
+        ]);
+        break;
+      } catch (fetchErr) {
+        try { await fs.unlink(tmpAbs); } catch { /* ignore */ }
+        if (signal?.aborted) throw fetchErr;
+        if (attempt >= maxRetries || !isRetriableHttpError(fetchErr)) throw fetchErr;
+        retries += 1;
+        const delay = RETRY_BASE_DELAY_MS * (attempt + 1);
+        log('it-download retry', id, `attempt ${attempt + 1}/${maxRetries}`, fetchErr.message, `wait ${delay}ms`);
+        await sleep(delay);
+      }
+    }
     let fileSize = 0;
     try {
       const st = await fs.stat(tmpAbs);
@@ -531,40 +591,84 @@ async function downloadItArtifactRow(supabase, rootAbs, creds, row, opts = {}) {
     }
     await fs.rename(tmpAbs, destAbs);
     log('it-download ok', id, destName);
-    const { error: upErr } = await supabase
-      .from('bom_rows')
-      .update({ status: 'pending', last_fetch_error: null })
-      .eq('id', id);
-    if (upErr) log('WARN clear fetch error after ok', upErr.message);
-    return { ok: true, fileName: destName, bytes: fileSize };
+
+    const relPath = destName.split(path.sep).join('/');
+    let md5Hex = null;
+    try {
+      md5Hex = await md5File(destAbs);
+    } catch (e) {
+      log('WARN it-download md5', id, e instanceof Error ? e.message : e);
+    }
+    let mtimeIso = new Date().toISOString();
+    try {
+      const stFinal = await fs.stat(destAbs);
+      mtimeIso = new Date(stFinal.mtimeMs).toISOString();
+    } catch {
+      /* keep default */
+    }
+    const { error: upLfErr } = await supabase.rpc('bom_upsert_local_file_web', {
+      p_path: relPath,
+      p_size_bytes: fileSize,
+      p_mtime: mtimeIso,
+      p_md5: md5Hex,
+    });
+    if (upLfErr) {
+      log('WARN bom_upsert_local_file_web', id, upLfErr.message);
+    }
+    const { error: refErr } = await supabase.rpc('bom_refresh_local_found_statuses');
+    if (refErr) {
+      log('WARN bom_refresh after it-download', id, refErr.message);
+    }
+
+    return { ok: true, fileName: destName, bytes: fileSize, retries };
   } catch (e) {
     try {
       await fs.unlink(tmpAbs);
     } catch {
       /* ignore */
     }
+    const aborted =
+      (signal && signal.aborted) ||
+      (e instanceof Error && (e.name === 'AbortError' || e.message === 'aborted'));
+    if (aborted) {
+      log('it-download aborted', id);
+      return { ok: false, message: '用户取消', cancelled: true, retries };
+    }
     const msg = (e instanceof Error ? e.message : String(e)).slice(0, 1000);
     log('it-download error', id, msg);
-    const { error: upErr } = await supabase.from('bom_rows').update({ status: 'error', last_fetch_error: msg }).eq('id', id);
-    if (upErr) log('WARN set fetch error', upErr.message);
-    return { ok: false, message: msg };
+    await patchBomRowLocalStatus(supabase, id, 'error', msg);
+    return { ok: false, message: msg, retries };
   }
 }
 
 
 /**
  * @param {import('@supabase/supabase-js').SupabaseClient} supabase
+ * @param {number} staleSec
  */
-async function failStaleDownloadJobs(supabase) {
-  const staleRaw = Number(process.env.BOM_DOWNLOAD_STALE_SECONDS || 900);
-  const staleSec = Number.isFinite(staleRaw) && staleRaw >= 60 ? Math.floor(staleRaw) : 900;
-  const { data, error } = await supabase.rpc('bom_fail_stale_download_jobs', { p_stale_seconds: staleSec });
+async function failStaleDownloadJobs(supabase, staleSec) {
+  const sec = Number.isFinite(staleSec) && staleSec >= 60 ? Math.floor(staleSec) : 900;
+  const { data, error } = await supabase.rpc('bom_fail_stale_download_jobs', { p_stale_seconds: sec });
   if (error) {
     log('WARN bom_fail_stale_download_jobs', error.message);
     return;
   }
   const n = typeof data === 'number' ? data : Number(data);
   if (n > 0) log('bom_fail_stale_download_jobs', n);
+}
+
+/** @param {import('@supabase/supabase-js').SupabaseClient} supabase @param {string} jobId */
+async function isDownloadJobCancelRequested(supabase, jobId) {
+  const { data, error } = await supabase
+    .from('bom_download_jobs')
+    .select('cancel_requested')
+    .eq('id', jobId)
+    .maybeSingle();
+  if (error) {
+    log('WARN cancel_requested read', error.message);
+    return false;
+  }
+  return Boolean(data?.cancel_requested);
 }
 
 /**
@@ -587,21 +691,20 @@ async function claimDownloadJob(supabase) {
  * @param {import('@supabase/supabase-js').SupabaseClient} supabase
  * @param {string} rootAbs
  * @param {{ id: string, row_ids: string[], progress_total: number }} job
+ * @param {import('./workerTuning.mjs').WorkerTuning} tuning
  */
-async function executeDownloadJob(supabase, rootAbs, job) {
+async function executeDownloadJob(supabase, rootAbs, job, tuning) {
   const jobId = job.id;
   const rowIds = Array.isArray(job.row_ids) ? job.row_ids : [];
   const total = rowIds.length;
-  const heartbeatMsRaw = Number(process.env.BOM_DOWNLOAD_HEARTBEAT_MS || 15000);
-  const heartbeatMs = Number.isFinite(heartbeatMsRaw) && heartbeatMsRaw >= 5000 ? Math.min(heartbeatMsRaw, 120000) : 15000;
-  const progressFlushMsRaw = Number(process.env.BOM_DOWNLOAD_PROGRESS_FLUSH_MS || 10000);
-  const progressFlushMs = Number.isFinite(progressFlushMsRaw) && progressFlushMsRaw >= 2000 ? Math.min(progressFlushMsRaw, 60000) : 10000;
+  const heartbeatMs = tuning.heartbeatMs;
 
   if (!total) {
     await patchDownloadJob(supabase, jobId, {
       status: 'failed',
       finished_at: new Date().toISOString(),
       last_message: '任务无行',
+      cancel_requested: false,
     });
     return;
   }
@@ -613,6 +716,7 @@ async function executeDownloadJob(supabase, rootAbs, job) {
       finished_at: new Date().toISOString(),
       last_message:
         '未配置 it Artifactory API Key（请在数据库 system_settings.artifactory_config 配置主/扩展 Key）',
+      cancel_requested: false,
     });
     return;
   }
@@ -623,13 +727,17 @@ async function executeDownloadJob(supabase, rootAbs, job) {
       status: 'failed',
       finished_at: new Date().toISOString(),
       last_message: tErr.message.slice(0, 2000),
+      cancel_requested: false,
     });
     return;
   }
 
   const urlMap = new Map((targets ?? []).map((t) => [t.id, t.download_url]));
 
+  await reportBomLocalRootRuntime(supabase, rootAbs, { phase: 'busy', busyHint: 'it-download' });
   let heartbeatTimer = null;
+  /** @type {AbortController | null} */
+  let currentRowAbort = null;
   const touchHeartbeat = async () => {
     await patchDownloadJob(supabase, jobId, {
       heartbeat_at: new Date().toISOString(),
@@ -637,16 +745,29 @@ async function executeDownloadJob(supabase, rootAbs, job) {
   };
   heartbeatTimer = setInterval(() => {
     void touchHeartbeat();
+    void reportBomLocalRootRuntime(supabase, rootAbs, { phase: 'busy', busyHint: 'it-download' });
+    void (async () => {
+      if (await isDownloadJobCancelRequested(supabase, jobId)) {
+        if (currentRowAbort) currentRowAbort.abort();
+      }
+    })();
   }, heartbeatMs);
 
   let completed = 0;
   let nOk = 0;
   let nFail = 0;
   let nSkip = 0;
+  let nRetries = 0;
   let bytesDoneTotal = 0;
+  let userCancelled = false;
 
   try {
     for (const rowId of rowIds) {
+      if (await isDownloadJobCancelRequested(supabase, jobId)) {
+        userCancelled = true;
+        break;
+      }
+
       const { data: still, error: e1 } = await supabase.rpc('bom_row_still_eligible_for_it_download', { p_row_id: rowId });
       if (e1) log('WARN bom_row_still_eligible', e1.message);
 
@@ -699,11 +820,7 @@ async function executeDownloadJob(supabase, rootAbs, job) {
           '环境变量中的 IT_ARTIFACTORY_BASE_URL / IT_ARTIFACTORY_EXT_BASE_URL 与下载 URL 主机无法匹配（或对应 Key 为空）';
         nFail += 1;
         completed += 1;
-        const { error: upErr } = await supabase
-          .from('bom_rows')
-          .update({ status: 'error', last_fetch_error: msg.slice(0, 1000) })
-          .eq('id', rowId);
-        if (upErr) log('WARN set fetch error', upErr.message);
+        await patchBomRowLocalStatus(supabase, rowId, 'error', msg.slice(0, 1000));
         await patchDownloadJob(supabase, jobId, {
           progress_current: completed,
           bytes_downloaded_total: bytesDoneTotal,
@@ -717,10 +834,14 @@ async function executeDownloadJob(supabase, rootAbs, job) {
         continue;
       }
 
+      currentRowAbort = new AbortController();
       const r = await downloadItArtifactRow(supabase, rootAbs, rowCreds, { id: rowId, downloadUrl: url }, {
+        signal: currentRowAbort.signal,
+        timeoutMs: tuning.httpTimeoutMs,
+        maxRetries: tuning.httpRetries,
         onProgress: ({ runningDownloaded, runningTotal, fileName }) => {
           const now = Date.now();
-          if (now - lastFlush < progressFlushMs) return;
+          if (now - lastFlush < heartbeatMs) return;
           lastFlush = now;
           const msg =
             runningTotal != null
@@ -735,6 +856,14 @@ async function executeDownloadJob(supabase, rootAbs, job) {
           });
         },
       });
+      currentRowAbort = null;
+
+      if (r.retries) nRetries += r.retries;
+
+      if (r.cancelled) {
+        userCancelled = true;
+        break;
+      }
 
       if (r.ok) {
         nOk += 1;
@@ -744,7 +873,8 @@ async function executeDownloadJob(supabase, rootAbs, job) {
         nFail += 1;
       }
       completed += 1;
-      const tail = r.ok ? `→ ${r.fileName}` : r.message ?? '失败';
+      const retryTag = r.retries ? ` (重试${r.retries})` : '';
+      const tail = r.ok ? `→ ${r.fileName}${retryTag}` : `${r.message ?? '失败'}${retryTag}`;
       await patchDownloadJob(supabase, jobId, {
         progress_current: completed,
         bytes_downloaded_total: bytesDoneTotal,
@@ -757,18 +887,37 @@ async function executeDownloadJob(supabase, rootAbs, job) {
       await touchHeartbeat();
     }
 
+    if (userCancelled) {
+      await patchDownloadJob(supabase, jobId, {
+        status: 'cancelled',
+        finished_at: new Date().toISOString(),
+        last_message: `用户取消（已完成 ${completed}/${total}）`.slice(0, 2000),
+        cancel_requested: false,
+        running_row_id: null,
+        running_file_name: null,
+        running_bytes_downloaded: 0,
+        running_bytes_total: null,
+        bytes_downloaded_total: bytesDoneTotal,
+        progress_current: completed,
+      });
+      log('web-download-job cancelled', jobId);
+      return;
+    }
+
     let finalStatus = 'succeeded';
-    let summary = `完成：成功 ${nOk}，失败 ${nFail}，跳过 ${nSkip}`;
+    const retryNote = nRetries > 0 ? `，重试 ${nRetries}` : '';
+    let summary = `完成：成功 ${nOk}，失败 ${nFail}，跳过 ${nSkip}${retryNote}`;
     if (nOk === 0 && nFail > 0) {
       finalStatus = 'failed';
     } else if (nOk > 0 && nFail > 0) {
-      summary = `部分失败：成功 ${nOk}，失败 ${nFail}，跳过 ${nSkip}`;
+      summary = `部分失败：成功 ${nOk}，失败 ${nFail}，跳过 ${nSkip}${retryNote}`;
     }
 
     await patchDownloadJob(supabase, jobId, {
       status: finalStatus,
       finished_at: new Date().toISOString(),
       last_message: summary.slice(0, 2000),
+      cancel_requested: false,
       running_row_id: null,
       running_file_name: null,
       running_bytes_downloaded: 0,
@@ -777,6 +926,8 @@ async function executeDownloadJob(supabase, rootAbs, job) {
     log('web-download-job done', jobId, summary);
   } finally {
     if (heartbeatTimer) clearInterval(heartbeatTimer);
+    currentRowAbort = null;
+    await reportBomLocalRootRuntime(supabase, rootAbs, { phase: 'idle' });
   }
 }
 
@@ -784,12 +935,21 @@ async function executeDownloadJob(supabase, rootAbs, job) {
  * @param {import('@supabase/supabase-js').SupabaseClient} supabase
  * @param {string} rootAbs
  */
-async function drainWebDownloadJobs(supabase, rootAbs) {
+/** 距上次「磁盘缺失则删索引」的最小间隔，避免与主循环、idle 轮询叠加重试 */
+let lastPruneMissingOnDiskAt = 0;
+const PRUNE_MISSING_MIN_MS = 12000;
+
+/**
+ * @param {import('@supabase/supabase-js').SupabaseClient} supabase
+ * @param {string} rootAbs
+ * @param {import('./workerTuning.mjs').WorkerTuning} tuning
+ */
+async function drainWebDownloadJobs(supabase, rootAbs, tuning) {
   for (;;) {
     const job = await claimDownloadJob(supabase);
     if (!job) break;
     try {
-      await executeDownloadJob(supabase, rootAbs, job);
+      await executeDownloadJob(supabase, rootAbs, job, tuning);
     } catch (e) {
       const msg = (e instanceof Error ? e.message : String(e)).slice(0, 2000);
       log('ERROR executeDownloadJob', job.id, msg);
@@ -799,28 +959,94 @@ async function drainWebDownloadJobs(supabase, rootAbs) {
         last_message: msg,
         running_row_id: null,
         running_file_name: null,
+        cancel_requested: false,
       });
     }
   }
 }
 
 /**
+ * 删除索引中磁盘已不存在的文件记录，并刷新 bom_rows 状态。
+ * 解决：手动删除暂存文件后，在下次全量扫描 finalize 之前 local_file 仍保留 MD5，界面长期显示「校验通过」。
+ * @param {import('@supabase/supabase-js').SupabaseClient} supabase
+ * @param {string} rootAbs
+ * @param {number} [limit]
+ */
+async function pruneLocalIndexEntriesMissingOnDisk(supabase, rootAbs, limit = 400) {
+  const now = Date.now();
+  if (now - lastPruneMissingOnDiskAt < PRUNE_MISSING_MIN_MS) return 0;
+  lastPruneMissingOnDiskAt = now;
+
+  const lim = Math.min(Math.max(Number(limit) || 400, 1), 800);
+  const { data, error } = await supabase
+    .from('local_file')
+    .select('path')
+    .order('updated_at', { ascending: true })
+    .limit(lim);
+  if (error) {
+    log('WARN prune-missing select', error.message);
+    return 0;
+  }
+  const rows = data ?? [];
+  const missing = [];
+  for (const r of rows) {
+    const rel = r?.path;
+    if (!rel || typeof rel !== 'string') continue;
+    const t = rel.trim();
+    if (!t || t.includes('..')) continue;
+    const abs = path.join(rootAbs, t.split('/').join(path.sep));
+    try {
+      const st = await fs.stat(abs);
+      if (!st.isFile()) missing.push(t);
+    } catch {
+      missing.push(t);
+    }
+  }
+  if (missing.length === 0) return 0;
+
+  let removed = 0;
+  const chunkSize = 80;
+  for (let i = 0; i < missing.length; i += chunkSize) {
+    const chunk = missing.slice(i, i + chunkSize);
+    const { error: delErr } = await supabase.from('local_file').delete().in('path', chunk);
+    if (delErr) {
+      log('WARN prune-missing delete', delErr.message);
+      continue;
+    }
+    removed += chunk.length;
+  }
+  if (removed > 0) {
+    const { error: refErr } = await supabase.rpc('bom_refresh_local_found_statuses');
+    if (refErr) log('WARN prune-missing bom_refresh', refErr.message);
+    else log('prune-missing-on-disk', removed, 'local_file rows removed');
+  }
+  return removed;
+}
+
+/**
  * @param {import('@supabase/supabase-js').SupabaseClient} supabase
  * @param {string} rootAbs
  * @param {number} intervalMs
+ * @param {import('./workerTuning.mjs').WorkerTuning} tuning
  */
-async function sleepWithDownloadPoll(supabase, rootAbs, intervalMs) {
-  const tickRaw = Number(process.env.BOM_WORKER_IDLE_TICK_MS || 3000);
-  const tickMs = Number.isFinite(tickRaw) && tickRaw >= 500 ? Math.min(tickRaw, 10000) : 3000;
+async function sleepWithDownloadPoll(supabase, rootAbs, intervalMs, tuning) {
   let remaining = intervalMs;
   while (remaining > 0) {
     try {
-      await failStaleDownloadJobs(supabase);
-      await drainWebDownloadJobs(supabase, rootAbs);
+      await failStaleExtSyncJobs(supabase, JOB_STALE_SECONDS);
+      await failStaleDownloadJobs(supabase, JOB_STALE_SECONDS);
+      await failStaleScanJobs(supabase, SCAN_STALE_SECONDS);
+      await drainWebDownloadJobs(supabase, rootAbs, tuning);
+      await drainExtSyncJobs(supabase, rootAbs, tuning);
+      try {
+        await pruneLocalIndexEntriesMissingOnDisk(supabase, rootAbs, 300);
+      } catch (e) {
+        log('WARN idle prune-missing-on-disk', e instanceof Error ? e.message : e);
+      }
     } catch (e) {
       log('WARN idle download poll', e instanceof Error ? e.message : e);
     }
-    const nap = Math.min(tickMs, remaining);
+    const nap = Math.min(IDLE_POLL_MS, remaining);
     await sleep(nap);
     remaining -= nap;
   }
@@ -846,23 +1072,47 @@ async function main() {
   log('bom-scanner-worker start', {
     root: rootAbs,
     cwd: process.cwd(),
-    note: 'interval from system_settings.bom_scanner.scanIntervalSeconds; it downloads only via bom_download_jobs queue',
+    note:
+      'scan interval + workerTuning from system_settings.bom_scanner; it downloads via bom_download_jobs; ext sync via bom_ext_sync_jobs',
   });
 
   await logItArtifactoryDbAtStartup(supabase);
+  await reportBomLocalRootRuntime(supabase, rootAbs, { phase: 'idle' });
 
   while (true) {
     let intervalSec = 30;
+    let tuning = resolveWorkerTuning(null);
     try {
-      intervalSec = await fetchScanIntervalSeconds(supabase);
+      const cfg = await fetchBomScannerWorkerConfig(supabase);
+      intervalSec = cfg.intervalSec;
+      tuning = cfg.tuning;
+    } catch (e) {
+      log('WARN fetch bom_scanner', e instanceof Error ? e.message : e);
+      if (isRetriableSettingsFetchError(e)) {
+        await sleep(WORKER_DB_RETRY_MS);
+        continue;
+      }
+    }
 
-      await failStaleDownloadJobs(supabase);
-      await drainWebDownloadJobs(supabase, rootAbs);
+    try {
+      await reportBomLocalRootRuntime(supabase, rootAbs, { phase: 'idle' });
+
+      await failStaleExtSyncJobs(supabase, JOB_STALE_SECONDS);
+      await failStaleDownloadJobs(supabase, JOB_STALE_SECONDS);
+      await failStaleScanJobs(supabase, SCAN_STALE_SECONDS);
+      await drainWebDownloadJobs(supabase, rootAbs, tuning);
+      await drainExtSyncJobs(supabase, rootAbs, tuning);
+
+      try {
+        await pruneLocalIndexEntriesMissingOnDisk(supabase, rootAbs);
+      } catch (e) {
+        log('WARN prune-missing-on-disk', e instanceof Error ? e.message : e);
+      }
 
       let jobId = await pickQueuedJob(supabase);
       while (jobId) {
         try {
-          await runScanJob(supabase, jobId, rootAbs);
+          await runScanJob(supabase, jobId, rootAbs, tuning);
         } catch (e) {
           const msg = e instanceof Error ? e.message : String(e);
           log('ERROR job failed', jobId, msg);
@@ -884,7 +1134,7 @@ async function main() {
     } catch (e) {
       log('ERROR tick', e instanceof Error ? e.stack : e);
     }
-    await sleepWithDownloadPoll(supabase, rootAbs, intervalSec * 1000);
+    await sleepWithDownloadPoll(supabase, rootAbs, intervalSec * 1000, tuning);
   }
 }
 

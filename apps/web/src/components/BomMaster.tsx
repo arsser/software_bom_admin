@@ -2,7 +2,10 @@ import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Package, Plus, RefreshCcw } from 'lucide-react';
 import { fetchBomBatches, type BomBatch } from '../lib/bomBatches';
+import { fetchBomScannerSettings, type BomScannerConfig } from '../lib/bomScannerSettings';
+import { useBomWorkerHeartbeat } from '../lib/useBomWorkerHeartbeat';
 import { fetchProducts, type Product } from '../lib/products';
+import { BomWorkerHeartbeatAlert } from './BomWorkerHeartbeatAlert';
 
 type ProductWithBatches = {
   product: Product;
@@ -15,14 +18,21 @@ export const BomMaster: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
   const [products, setProducts] = useState<Product[]>([]);
   const [batches, setBatches] = useState<BomBatch[]>([]);
+  const [bomScanner, setBomScanner] = useState<BomScannerConfig | null>(null);
+  const workerHeartbeat = useBomWorkerHeartbeat(bomScanner);
 
   const load = async () => {
     setLoading(true);
     setError(null);
     try {
-      const [p, b] = await Promise.all([fetchProducts(), fetchBomBatches()]);
+      const [p, b, scanner] = await Promise.all([
+        fetchProducts(),
+        fetchBomBatches(),
+        fetchBomScannerSettings(),
+      ]);
       setProducts(p);
       setBatches(b);
+      setBomScanner(scanner);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -55,7 +65,7 @@ export const BomMaster: React.FC = () => {
           <div>
             <h2 className="text-2xl font-bold text-slate-900">BOM 管理</h2>
             <p className="text-slate-500 mt-1">
-              产品清单与版本（批次）列表。新增或编辑将进入明细页。
+              产品清单与版本列表。新增或编辑将进入明细页。
             </p>
           </div>
         </div>
@@ -75,7 +85,7 @@ export const BomMaster: React.FC = () => {
             className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-indigo-600 text-white hover:bg-indigo-700"
           >
             <Plus size={16} />
-            新建批次
+            新建版本
           </button>
         </div>
       </div>
@@ -86,11 +96,13 @@ export const BomMaster: React.FC = () => {
         </div>
       ) : null}
 
+      <BomWorkerHeartbeatAlert info={workerHeartbeat} settingsLoading={loading} />
+
       <div className="bg-white rounded-xl border border-gray-200 shadow-sm">
         <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between">
-          <div className="text-sm font-medium text-slate-800">产品与版本（批次）</div>
+          <div className="text-sm font-medium text-slate-800">产品与版本</div>
           <div className="text-xs text-slate-500">
-            {loading ? '加载中…' : `产品 ${products.length}，批次 ${batches.length}`}
+            {loading ? '加载中…' : `产品 ${products.length}，版本 ${batches.length}`}
           </div>
         </div>
 
@@ -103,7 +115,7 @@ export const BomMaster: React.FC = () => {
                     {product.name}
                   </div>
                   <div className="text-xs text-slate-500 mt-0.5">
-                    批次数：{bs.length}
+                    版本数：{bs.length}
                   </div>
                 </div>
                 <button
@@ -120,7 +132,7 @@ export const BomMaster: React.FC = () => {
                   <table className="min-w-full text-sm">
                     <thead className="bg-slate-50">
                       <tr>
-                        <th className="px-3 py-2 text-left text-xs font-semibold text-slate-700 border-b border-slate-200">版本（批次）</th>
+                        <th className="px-3 py-2 text-left text-xs font-semibold text-slate-700 border-b border-slate-200">版本名称</th>
                         <th className="px-3 py-2 text-left text-xs font-semibold text-slate-700 border-b border-slate-200">行数</th>
                         <th className="px-3 py-2 text-left text-xs font-semibold text-slate-700 border-b border-slate-200">创建时间</th>
                         <th className="px-3 py-2 text-right text-xs font-semibold text-slate-700 border-b border-slate-200">操作</th>
@@ -150,7 +162,7 @@ export const BomMaster: React.FC = () => {
                   </table>
                 </div>
               ) : (
-                <div className="mt-3 text-sm text-slate-500">暂无批次。</div>
+                <div className="mt-3 text-sm text-slate-500">暂无版本。</div>
               )}
             </div>
           ))}

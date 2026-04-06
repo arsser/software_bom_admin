@@ -6,7 +6,7 @@ export type BomDownloadJobStatus = 'queued' | 'running' | 'succeeded' | 'failed'
 export type BomDownloadJob = {
   id: string;
   batchId: string;
-  /** 关联批次名称（全局列表查询时填充） */
+  /** 关联版本名称（全局列表查询时填充） */
   batchName?: string | null;
   status: BomDownloadJobStatus;
   progressCurrent: number;
@@ -69,7 +69,7 @@ function mapJob(raw: Record<string, unknown>, batchName?: string | null): BomDow
 const JOB_SELECT =
   'id,batch_id,status,progress_current,progress_total,last_message,created_at,finished_at,started_at,heartbeat_at,running_file_name,running_bytes_downloaded,running_bytes_total,bytes_downloaded_total,bytes_total';
 
-/** 创建拉取任务：p_row_ids 为空表示当前批次全部 eligible 行 */
+/** 创建拉取任务：p_row_ids 为空表示当前版本全部 eligible 行 */
 export async function requestBomItDownload(batchId: string, rowIds?: string[] | null): Promise<string> {
   const { data, error } = await supabase.rpc('bom_request_download', {
     p_batch_id: batchId,
@@ -80,11 +80,12 @@ export async function requestBomItDownload(batchId: string, rowIds?: string[] | 
   return data;
 }
 
-/** 仅「排队中」可取消；已开始执行则返回 false */
+/** 排队中立即取消；执行中则标记 cancel_requested；失败可关闭为 cancelled；已成功/已取消幂等 true */
 export async function cancelBomDownloadJob(jobId: string): Promise<boolean> {
   const { data, error } = await supabase.rpc('bom_cancel_download_job', { p_job_id: jobId });
   if (error) throw error;
-  return Boolean(data);
+  // 勿用 Boolean(data)：[] 等为 truthy，会导致误判成功
+  return data === true;
 }
 
 export async function fetchBomDownloadJobsForBatch(batchId: string, limit = 12): Promise<BomDownloadJob[]> {

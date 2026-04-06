@@ -82,11 +82,14 @@
 | 项 | 说明 |
 |----|------|
 | 前置条件 | **仅在校验通过后**再查重/上传（与 PRD §7.3 一致）。 |
-| 查重 | 调用 Checksum Search（如 `api/search/checksum?md5=...`）；已存在则只写回 **已有 URI** 到 jsonb（如 `ext_url`）。 |
-| 上传 | 不存在则部署；远端路径：`{repo}/{md5前2位}/{完整32位md5小写}/{存储用文件名}`，避免重名覆盖。 |
-| 状态 | 「已转存（或跳过）」区分「仅记 URI」与「新上传成功」。 |
+| 队列与 worker | 网页 `bom_request_ext_sync` → `bom_ext_sync_jobs`，`bom-scanner-worker` 抢占 `bom_claim_ext_sync_job` 执行。 |
+| 配置 | `bom_scanner.extArtifactoryRepo`（目标仓库 key）；凭据 `IT_ARTIFACTORY_EXT_*` 或 `artifactory_config` 扩展实例。 |
+| 查重 | Checksum Search；多命中取 **第一条**（URI 字典序稳定可选）；已存在则 **Copy** 到 **版本目录** `{version}/{batch}/{module}/{文件名}`。 |
+| 上传 | 不存在则从 **本地已校验文件** 流式 PUT 至同一路径约定。 |
+| 写回 | 仅 jsonb：`ext_url`（及 `ext_sync_kind`：`copied` / `uploaded`）。 |
+| 状态 | `synced_or_skipped`；失败 `error` + `last_fetch_error`。 |
 
-**里程碑**：验收「完整 MD5 入路径 + checksum 查重 + 不因重名覆盖错文件」。
+**里程碑**：版本树可浏览；checksum 查重 + Copy/上传；不因同名覆盖错内容（文件名 + 路径约定）。
 
 ---
 

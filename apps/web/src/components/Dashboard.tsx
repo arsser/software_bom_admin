@@ -1,268 +1,155 @@
-import React, { useEffect, useMemo } from 'react';
-import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell } from 'recharts';
-import { Globe2, CheckCircle, XCircle, Clock } from 'lucide-react';
-import { usePingStore } from '../stores/pingStore';
+import React, { useCallback, useEffect, useState } from 'react';
+import { Link } from 'react-router-dom';
+import type { LucideIcon } from 'lucide-react';
+import { Package, Database, HardDrive, Share2, Loader2, AlertCircle } from 'lucide-react';
+import { fetchBomDashboardStats, type BomDashboardStats } from '../lib/bomDashboardStats';
+import { formatBytesHuman } from '../lib/bytesFormat';
 
-const StatCard = ({ icon: Icon, label, value, subtext, color }: any) => (
+const StatCard = ({
+  icon: Icon,
+  label,
+  value,
+  subtext,
+  color,
+}: {
+  icon: LucideIcon;
+  label: string;
+  value: string;
+  subtext?: string;
+  color: string;
+}) => (
   <div className="bg-white p-6 rounded-xl border border-gray-200 shadow-sm flex items-start justify-between">
-    <div>
+    <div className="min-w-0 flex-1">
       <p className="text-sm font-medium text-slate-500 mb-1">{label}</p>
-      <h3 className="text-2xl font-bold text-slate-800">{value}</h3>
-      <div className="flex items-center gap-1 mt-2 text-xs font-medium text-slate-400">
-        {subtext}
-      </div>
+      <h3 className="text-2xl font-bold text-slate-800 truncate" title={value}>
+        {value}
+      </h3>
+      {subtext ? <p className="mt-2 text-xs text-slate-400">{subtext}</p> : null}
     </div>
-    <div className={`p-3 rounded-lg ${color} text-white`}>
+    <div className={`p-3 rounded-lg ${color} text-white shrink-0 ml-3`}>
       <Icon size={20} />
     </div>
   </div>
 );
 
 export const Dashboard: React.FC = () => {
-  const { targets, fetchTargets } = usePingStore();
+  const [stats, setStats] = useState<BomDashboardStats | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState<string | null>(null);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    setErr(null);
+    try {
+      const s = await fetchBomDashboardStats();
+      setStats(s);
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e));
+      setStats(null);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
 
   useEffect(() => {
-    fetchTargets();
-  }, [fetchTargets]);
+    void load();
+  }, [load]);
 
-  // 计算统计数据
-  const stats = useMemo(() => {
-    const totalTargets = targets.length;
-    const enabledTargets = targets.filter(t => t.enabled).length;
-
-    let totalSuccess = 0;
-    let totalFailure = 0;
-    let totalLatency = 0;
-    let successfulChecks = 0;
-
-    targets.forEach(t => {
-      totalSuccess += t.successCount;
-      totalFailure += t.failureCount;
-      if (t.successCount > 0) {
-        totalLatency += t.totalLatencyMs;
-        successfulChecks += t.successCount;
-      }
-    });
-
-    const totalChecks = totalSuccess + totalFailure;
-    const successRate = totalChecks > 0 ? Math.round((totalSuccess / totalChecks) * 100) : 0;
-    const avgLatency = successfulChecks > 0 ? Math.round(totalLatency / successfulChecks) : 0;
-
-    return {
-      totalTargets,
-      enabledTargets,
-      successRate,
-      avgLatency,
-      totalChecks
-    };
-  }, [targets]);
-
-  // 准备柱状图数据 - 显示各域名的成功率
-  const chartData = useMemo(() => {
-    return targets
-      .filter(t => t.successCount + t.failureCount > 0)
-      .map(t => {
-        const total = t.successCount + t.failureCount;
-        const rate = Math.round((t.successCount / total) * 100);
-        return {
-          name: t.label || t.domain.replace(/^https?:\/\//, ''),
-          successRate: rate,
-          domain: t.domain,
-          checks: total
-        };
-      })
-      .sort((a, b) => b.successRate - a.successRate)
-      .slice(0, 10)
-      .map((item, index) => ({
-        ...item,
-        name: `${index + 1}. ${item.name}`
-      }));
-  }, [targets]);
-
-  // 准备域名状态列表数据
-  const statusList = useMemo(() => {
-    return targets.map(t => {
-      const total = t.successCount + t.failureCount;
-      const rate = total > 0 ? Math.round((t.successCount / total) * 100) : null;
-      const avgLat = t.successCount > 0 ? Math.round(t.totalLatencyMs / t.successCount) : null;
-      return {
-        ...t,
-        rate,
-        avgLat,
-        total
-      };
-    });
-  }, [targets]);
-
-  const getBarColor = (rate: number) => {
-    if (rate >= 95) return '#22c55e';
-    if (rate >= 80) return '#eab308';
-    return '#ef4444';
-  };
+  const extPct =
+    stats && stats.bomRowCount > 0
+      ? Math.round((stats.rowsExtSynced / stats.bomRowCount) * 100)
+      : stats && stats.bomRowCount === 0
+        ? 0
+        : null;
 
   return (
     <div className="space-y-6">
-      <div>
-        <h2 className="text-2xl font-bold text-slate-900">仪表盘</h2>
-        <p className="text-slate-500">系统概览</p>
+      <div className="flex flex-wrap items-end justify-between gap-4">
+        <div>
+          <h2 className="text-2xl font-bold text-slate-900">仪表盘</h2>
+          <p className="text-slate-500">软件 BOM 与本地暂存概览</p>
+        </div>
+        <button
+          type="button"
+          onClick={() => void load()}
+          disabled={loading}
+          className="inline-flex items-center gap-2 px-3 py-1.5 text-sm rounded-lg border border-slate-200 bg-white text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+        >
+          {loading ? <Loader2 size={14} className="animate-spin" /> : null}
+          刷新数据
+        </button>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
-        <StatCard
-          icon={Globe2}
-          label="监测域名"
-          value={stats.totalTargets}
-          subtext={`${stats.enabledTargets} 个启用`}
-          color="bg-blue-600"
-        />
-        <StatCard
-          icon={CheckCircle}
-          label="总成功率"
-          value={`${stats.successRate}%`}
-          subtext={`共 ${stats.totalChecks} 次检测`}
-          color="bg-green-600"
-        />
-        <StatCard
-          icon={Clock}
-          label="平均延迟"
-          value={stats.avgLatency > 0 ? `${stats.avgLatency}ms` : '-'}
-          subtext="所有域名平均"
-          color="bg-purple-600"
-        />
-        <StatCard
-          icon={XCircle}
-          label="异常域名"
-          value={targets.filter(t => {
-            const total = t.successCount + t.failureCount;
-            return total > 0 && (t.successCount / total) < 0.8;
-          }).length}
-          subtext="成功率低于 80%"
-          color="bg-red-500"
-        />
-      </div>
-
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {/* 域名成功率柱状图 */}
-        <div className="bg-white p-6 rounded-xl border border-gray-200 shadow-sm">
-          <h3 className="text-lg font-bold text-slate-800 mb-6">域名成功率</h3>
-          <div className="h-[300px] w-full">
-            {chartData.length > 0 ? (
-              <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={chartData} layout="vertical" margin={{ left: 20, right: 20, top: 10, bottom: 10 }}>
-                  <CartesianGrid strokeDasharray="3 3" horizontal={false} vertical={true} stroke="#f1f5f9" />
-                  <XAxis type="number" domain={[0, 100]} tick={{ fill: '#64748b', fontSize: 12 }} axisLine={false} tickLine={false} />
-                  <YAxis
-                    type="category"
-                    dataKey="name"
-                    axisLine={false}
-                    tickLine={false}
-                    width={160}
-                    interval={0}
-                    tick={(props: any) => {
-                      const { y, payload } = props;
-                      const maxLength = 18;
-                      const text = payload.value || '';
-                      const displayText = text.length > maxLength
-                        ? `${text.substring(0, maxLength)}...`
-                        : text;
-
-                      return (
-                        <g transform={`translate(0,${y})`}>
-                          <title>{text}</title>
-                          <text
-                            x={10}
-                            y={0}
-                            dy={4}
-                            textAnchor="start"
-                            fill="#64748b"
-                            fontSize={12}
-                          >
-                            {displayText}
-                          </text>
-                        </g>
-                      );
-                    }}
-                  />
-                  <Tooltip
-                    formatter={(value: number) => [`${value}%`, '成功率']}
-                    contentStyle={{ borderRadius: '8px', border: 'none', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)', backgroundColor: 'white', fontSize: '12px' }}
-                  />
-                  <Bar dataKey="successRate" radius={[0, 8, 8, 0]}>
-                    {chartData.map((entry, index) => (
-                      <Cell key={`cell-${index}`} fill={getBarColor(entry.successRate)} />
-                    ))}
-                  </Bar>
-                </BarChart>
-              </ResponsiveContainer>
-            ) : (
-              <div className="h-full flex items-center justify-center text-slate-400">
-                暂无检测数据
-              </div>
-            )}
+      {err ? (
+        <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900 flex items-start gap-2">
+          <AlertCircle size={18} className="shrink-0 mt-0.5" />
+          <div>
+            <p className="font-medium">无法加载统计</p>
+            <p className="text-amber-800/90 mt-1">{err}</p>
+            <p className="text-xs text-amber-800/80 mt-2">
+              若刚部署，请确认已执行迁移 <code className="font-mono">20260409110000_bom_dashboard_stats</code>。
+            </p>
           </div>
         </div>
+      ) : null}
 
-        {/* 域名状态列表 */}
-        <div className="bg-white p-6 rounded-xl border border-gray-200 shadow-sm">
-          <h3 className="text-lg font-bold text-slate-800 mb-4">域名状态</h3>
-          <div className="overflow-auto max-h-[300px]">
-            {statusList.length > 0 ? (
-              <table className="w-full text-sm">
-                <thead className="sticky top-0 bg-white">
-                  <tr className="text-left text-slate-500 border-b">
-                    <th className="pb-2 font-medium">域名</th>
-                    <th className="pb-2 font-medium text-center">状态</th>
-                    <th className="pb-2 font-medium text-right">成功率</th>
-                    <th className="pb-2 font-medium text-right">延迟</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {statusList.map(t => (
-                    <tr key={t.id} className="border-b border-gray-100 last:border-0">
-                      <td className="py-2">
-                        <div className="truncate max-w-[150px]" title={t.domain}>
-                          {t.label || t.domain.replace(/^https?:\/\//, '')}
-                        </div>
-                      </td>
-                      <td className="py-2 text-center">
-                        {t.enabled ? (
-                          t.rate !== null ? (
-                            t.rate >= 80 ? (
-                              <span className="inline-flex items-center gap-1 text-green-600">
-                                <CheckCircle size={14} /> 正常
-                              </span>
-                            ) : (
-                              <span className="inline-flex items-center gap-1 text-red-600">
-                                <XCircle size={14} /> 异常
-                              </span>
-                            )
-                          ) : (
-                            <span className="text-slate-400">待检测</span>
-                          )
-                        ) : (
-                          <span className="text-slate-400">已禁用</span>
-                        )}
-                      </td>
-                      <td className="py-2 text-right">
-                        {t.rate !== null ? (
-                          <span className={t.rate >= 80 ? 'text-green-600' : 'text-red-600'}>
-                            {t.rate}%
-                          </span>
-                        ) : '-'}
-                      </td>
-                      <td className="py-2 text-right text-slate-600">
-                        {t.avgLat !== null ? `${t.avgLat}ms` : '-'}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            ) : (
-              <div className="h-[200px] flex items-center justify-center text-slate-400">
-                暂无监测域名
-              </div>
-            )}
-          </div>
+      <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-6">
+        <StatCard
+          icon={Package}
+          label="BOM 版本（批次）"
+          value={loading && !stats ? '…' : String(stats?.bomBatchCount ?? 0)}
+          subtext="已创建的 BOM 批次数量"
+          color="bg-indigo-600"
+        />
+        <StatCard
+          icon={Database}
+          label="BOM 行（软件包条目）"
+          value={loading && !stats ? '…' : String(stats?.bomRowCount ?? 0)}
+          subtext="所有批次中行总数"
+          color="bg-slate-700"
+        />
+        <StatCard
+          icon={Share2}
+          label="ext 转存已完成"
+          value={loading && !stats ? '…' : String(stats?.rowsExtSynced ?? 0)}
+          subtext={extPct != null ? `约占全部行的 ${extPct}%` : undefined}
+          color="bg-emerald-600"
+        />
+        <StatCard
+          icon={HardDrive}
+          label="本地暂存文件"
+          value={loading && !stats ? '…' : String(stats?.localFileCount ?? 0)}
+          subtext={
+            stats != null
+              ? `不同 MD5 数 ${stats.localDistinctMd5} · 合计 ${formatBytesHuman(stats.localTotalBytes)}`
+              : undefined
+          }
+          color="bg-blue-600"
+        />
+      </div>
+
+      <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-6">
+        <h3 className="text-sm font-semibold text-slate-800 mb-3">快捷入口</h3>
+        <div className="flex flex-wrap gap-3 text-sm">
+          <Link
+            to="/bom"
+            className="inline-flex items-center gap-2 px-4 py-2 rounded-lg border border-indigo-200 bg-indigo-50 text-indigo-900 hover:bg-indigo-100"
+          >
+            <Package size={16} />
+            BOM 管理
+          </Link>
+          <Link
+            to="/bom/jobs"
+            className="inline-flex items-center gap-2 px-4 py-2 rounded-lg border border-slate-200 bg-slate-50 text-slate-800 hover:bg-slate-100"
+          >
+            下载与同步任务
+          </Link>
+          <Link
+            to="/settings"
+            className="inline-flex items-center gap-2 px-4 py-2 rounded-lg border border-slate-200 bg-slate-50 text-slate-800 hover:bg-slate-100"
+          >
+            系统设置
+          </Link>
         </div>
       </div>
     </div>

@@ -60,7 +60,8 @@ schema_paths = []
 enabled = true
 # Specifies an ordered list of seed files to load during db reset.
 # Path relative to supabase directory (apps/supabase); seed.sql moved to deploy/production
-sql_paths = ["../../deploy/production/seed.sql"]
+# 使用 supabase/seed.sql → 符号链接到 deploy/production/scripts/seed.sql（单一来源）
+sql_paths = ["seed.sql"]
 
 [db.network_restrictions]
 # Enable management of network restrictions.
@@ -104,12 +105,6 @@ port = 54324
 enabled = true
 # The maximum file size allowed (e.g. "5MB", "500KB").
 file_size_limit = "50MiB"
-
-# Downloaded images bucket for user-managed images
-[storage.buckets.downloaded-images]
-public = true
-file_size_limit = "50MiB"
-allowed_mime_types = ["image/png", "image/jpeg", "image/gif", "image/webp", "image/svg+xml"]
 
 # Allow connections via S3 compatible clients
 [storage.s3_protocol]
@@ -346,9 +341,6 @@ enabled = false
 authorization_url_path = "/oauth/consent"
 # Allow dynamic client registration
 allow_dynamic_registration = false
-
-[functions.download-image]
-verify_jwt = false
 
 [functions.artifactory-api-info]
 verify_jwt = true

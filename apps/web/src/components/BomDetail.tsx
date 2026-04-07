@@ -1154,7 +1154,7 @@ export const BomDetail: React.FC = () => {
           </div>
 
           <div>
-            <label className="block text-sm font-medium text-slate-700 mb-1">快速新增产品/分类</label>
+            <label className="block text-sm font-medium text-slate-700 mb-1">快速新增产品</label>
             <div className="flex gap-2">
               <input
                 type="text"
@@ -1696,13 +1696,13 @@ export const BomDetail: React.FC = () => {
                       </th>
                       <th
                         className="px-3 py-2 text-left font-semibold text-slate-700 border-b border-gray-200 whitespace-nowrap min-w-[9.5rem] max-w-[11rem] w-[10rem]"
-                        title="上行：本地（暂存/校验）；下行：ext（转存是否完成）。均由现有 status 与 ext_url 等推导。"
+                        title="上行：ext（转存是否完成）；下行：本地（暂存/校验）。均由现有 status 与 ext_url 等推导。"
                       >
                         状态
                       </th>
                       <th
                         className="px-3 py-2 text-left font-semibold text-slate-700 border-b border-gray-200 whitespace-nowrap min-w-[10rem] max-w-[14rem] w-[12rem]"
-                        title="与「状态」列对应拆分：上行「本地」为 status.local_fetch_error；下行「ext」为 status.ext_fetch_error；与 local/ext 枚举同条 JSON，刷新规则仍只读 local_fetch_error 判断 pending→error"
+                        title="与「状态」列对应：上行「ext」为 status.ext_fetch_error；下行「本地」为 status.local_fetch_error；与 local/ext 枚举同条 JSON。"
                       >
                         状态说明
                       </th>
@@ -1792,8 +1792,8 @@ export const BomDetail: React.FC = () => {
                       const extExplainLine = extExplainRaw;
                       const statusExplainTitle =
                         [
-                          localExplainLine ? `本地：${localExplainLine}` : null,
                           extExplainLine ? `ext：${extExplainLine}` : null,
+                          localExplainLine ? `本地：${localExplainLine}` : null,
                         ]
                           .filter(Boolean)
                           .join('\n') || undefined;
@@ -1880,14 +1880,14 @@ export const BomDetail: React.FC = () => {
                                   lr.status.local === 'local_found' ||
                                   lr.status.ext === 'synced_or_skipped')
                                   ? `整行状态：${formatBomRowStatusTooltip(lr.status)}。本地侧显示为「文件不存在」：local_file 中无此期望 MD5（可能已删除或未扫描）；可点「拉取」重新下载，或「刷新」按索引重算状态。`
-                                  : `整行状态：${formatBomRowStatusTooltip(lr.status)}。上行/下行为本地与 ext 的展示拆分。`
+                                  : `整行状态：${formatBomRowStatusTooltip(lr.status)}。上行为 ext，下行为本地。`
                               }
                             >
                               <div className="text-[11px] font-medium">
-                                本地：{localLabel}
+                                ext：{extLabel}
                               </div>
                               <div className="text-[11px] font-medium mt-0.5">
-                                ext：{extLabel}
+                                本地：{localLabel}
                               </div>
                             </div>
                           </td>
@@ -1895,7 +1895,11 @@ export const BomDetail: React.FC = () => {
                             className="px-3 py-2 align-middle min-w-[10rem] max-w-[14rem] w-[12rem] text-slate-700"
                             title={statusExplainTitle}
                           >
-                            <div className="text-left text-[11px] leading-snug line-clamp-3 whitespace-pre-line break-words">
+                            <div className="text-left text-[11px] leading-snug line-clamp-3 whitespace-pre-line break-words text-slate-800">
+                              <span className="font-medium text-slate-600">ext：</span>
+                              <span>{extExplainLine ?? '—'}</span>
+                            </div>
+                            <div className="text-left text-[11px] leading-snug mt-1.5 pt-1.5 border-t border-slate-100 line-clamp-3 whitespace-pre-line break-words">
                               <span className="font-medium text-slate-600">本地：</span>
                               <span
                                 className={
@@ -1906,10 +1910,6 @@ export const BomDetail: React.FC = () => {
                               >
                                 {localExplainLine ?? '—'}
                               </span>
-                            </div>
-                            <div className="text-left text-[11px] leading-snug mt-1.5 pt-1.5 border-t border-slate-100 line-clamp-3 whitespace-pre-line break-words text-slate-800">
-                              <span className="font-medium text-slate-600">ext：</span>
-                              <span>{extExplainLine ?? '—'}</span>
                             </div>
                           </td>
                           <td className="px-3 py-2 align-middle min-w-[10rem] max-w-[14rem] w-[12rem] text-slate-700">

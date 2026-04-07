@@ -2,10 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Package, Plus, RefreshCcw } from 'lucide-react';
 import { fetchBomBatches, type BomBatch } from '../lib/bomBatches';
-import { fetchBomScannerSettings, type BomScannerConfig } from '../lib/bomScannerSettings';
-import { useBomWorkerHeartbeat } from '../lib/useBomWorkerHeartbeat';
 import { fetchProducts, type Product } from '../lib/products';
-import { BomWorkerHeartbeatAlert } from './BomWorkerHeartbeatAlert';
 
 type ProductWithBatches = {
   product: Product;
@@ -18,21 +15,17 @@ export const BomMaster: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
   const [products, setProducts] = useState<Product[]>([]);
   const [batches, setBatches] = useState<BomBatch[]>([]);
-  const [bomScanner, setBomScanner] = useState<BomScannerConfig | null>(null);
-  const workerHeartbeat = useBomWorkerHeartbeat(bomScanner);
 
   const load = async () => {
     setLoading(true);
     setError(null);
     try {
-      const [p, b, scanner] = await Promise.all([
+      const [p, b] = await Promise.all([
         fetchProducts(),
         fetchBomBatches(),
-        fetchBomScannerSettings(),
       ]);
       setProducts(p);
       setBatches(b);
-      setBomScanner(scanner);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -95,8 +88,6 @@ export const BomMaster: React.FC = () => {
           加载失败：{error}
         </div>
       ) : null}
-
-      <BomWorkerHeartbeatAlert info={workerHeartbeat} settingsLoading={loading} />
 
       <div className="bg-white rounded-xl border border-gray-200 shadow-sm">
         <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between">
@@ -169,7 +160,7 @@ export const BomMaster: React.FC = () => {
 
           {!loading && grouped.length === 0 ? (
             <div className="px-5 py-10 text-center text-slate-500">
-              暂无产品。请先在明细页通过“快速新增产品/分类”创建一个产品。
+              暂无产品。请先在明细页通过“快速新增产品”创建一个产品。
             </div>
           ) : null}
         </div>

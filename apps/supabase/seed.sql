@@ -1,0 +1,1 @@
+../../deploy/production/scripts/seed.sql

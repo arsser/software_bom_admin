@@ -19,9 +19,6 @@ import {
   type BomExtSyncJobStatus,
 } from '../lib/bomExtSyncJobs';
 import { fetchBomBatches, type BomBatch } from '../lib/bomBatches';
-import { fetchBomScannerSettings, type BomScannerConfig } from '../lib/bomScannerSettings';
-import { useBomWorkerHeartbeat } from '../lib/useBomWorkerHeartbeat';
-import { BomWorkerHeartbeatAlert } from './BomWorkerHeartbeatAlert';
 
 type StatusFilter = 'all' | BomDownloadJobStatus | BomExtSyncJobStatus;
 
@@ -35,8 +32,6 @@ export const BomDownloadJobsPage: React.FC = () => {
   const [batches, setBatches] = useState<BomBatch[]>([]);
   const [cancelBusy, setCancelBusy] = useState<string | null>(null);
   const [extCancelBusy, setExtCancelBusy] = useState<string | null>(null);
-  const [bomScanner, setBomScanner] = useState<BomScannerConfig | null>(null);
-  const workerHeartbeat = useBomWorkerHeartbeat(bomScanner);
 
   const batchIdFilter = searchParams.get('batchId') ?? '';
   const statusFilter = (searchParams.get('status') as StatusFilter) || 'all';
@@ -59,7 +54,7 @@ export const BomDownloadJobsPage: React.FC = () => {
     setLoading(true);
     setError(null);
     try {
-      const [bs, js, ej, scanner] = await Promise.all([
+      const [bs, js, ej] = await Promise.all([
         fetchBomBatches(),
         fetchBomDownloadJobsForUser({
           batchId: batchIdFilter || null,
@@ -71,10 +66,8 @@ export const BomDownloadJobsPage: React.FC = () => {
           status: statusFilter,
           limit: 100,
         }),
-        fetchBomScannerSettings(),
       ]);
       setBatches(bs);
-      setBomScanner(scanner);
       const idToLabel = new Map(bs.map((b) => [b.id, `${b.productName} · ${b.name}`]));
       setJobs(js.map((j) => ({ ...j, batchName: j.batchName ?? idToLabel.get(j.batchId) ?? null })));
       setExtJobs(ej.map((j) => ({ ...j, batchName: j.batchName ?? idToLabel.get(j.batchId) ?? null })));
@@ -185,8 +178,6 @@ export const BomDownloadJobsPage: React.FC = () => {
       {error ? (
         <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{error}</div>
       ) : null}
-
-      <BomWorkerHeartbeatAlert info={workerHeartbeat} settingsLoading={loading} />
 
       <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-4 flex flex-wrap gap-3 items-end">
         <div>

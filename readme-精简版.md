@@ -20,24 +20,32 @@ pnpm exec supabase migration up
 pnpm exec supabase migration list
 ```
 
-### 3. Worker
+### 3. Seed（默认登录账号）
+
+1. 进入 Supabase 管理页面（SQL Editor）。
+2. 打开并复制 `apps/supabase/seed.sql`（等价 `deploy/production/scripts/seed.sql`）全部内容。
+3. 在 SQL Editor 执行。
+
+web默认账号：`test@example.com` / `test123456`
+
+### 4. Worker
 
 ```bash
 cp apps/bom-scanner-worker/.env.example apps/bom-scanner-worker/.env
-# 编辑 .env：SUPABASE_URL、SUPABASE_SERVICE_ROLE_KEY、BOM_LOCAL_ROOT（本机 BOM 目录绝对路径）
+# 按 apps/bom-scanner-worker/.env.example 注释填写 .env
 
 cd apps/bom-scanner-worker
 npm run start:env
 ```
 
-### 4. Edge Function
+### 5. Edge Function
 
 ```bash
 cd apps/supabase
 pnpm exec supabase functions serve artifactory-api-info --no-verify-jwt
 ```
 
-### 5. Web
+### 6. Web
 
 ```bash
 cp apps/web/public/app-config.js.example apps/web/public/app-config.js
@@ -47,7 +55,7 @@ cd apps/web && pnpm dev
 
 浏览器访问终端输出的地址（默认 `http://localhost:5173`）。
 
-### 6. 系统设置 · Artifactory
+### 7. 系统设置 · Artifactory
 
 浏览器打开「系统设置」，填写内部/外部 Artifactory Base URL 与 API Key 并保存。
 
@@ -110,26 +118,14 @@ echo '<PAT>' | docker login ghcr.io -u '<GitHub用户名>' --password-stdin
 cp deploy/production/.deploy.env.example deploy/production/.deploy.env
 ```
 
-编辑 `.deploy.env`，至少填写：
-
-
-| 变量                          | 示例或说明                                                               |
-| --------------------------- | ------------------------------------------------------------------- |
-| `GITHUB_REPO`               | `your-org/software_bom_admin`                                       |
-| `DATABASE_URL`              | `postgres://postgres:密码@supabase-db:5432/postgres?sslmode=disable`  |
-| `SUPABASE_DIR`              | 自建 Supabase 工程根目录（含 `docker-compose.yml`、`volumes/functions`）       |
-| `SUPABASE_URL`              | 部署机宿主机网络可访问的 API 根地址（如 `http://127.0.0.1:8000`）                     |
-| `SUPABASE_SERVICE_ROLE_KEY` | 与当前 Supabase 一致的 service_role JWT                                   |
-| `SUPABASE_URL_FOR_DOCKER`   | 与 Kong 同网时用 `http://kong:8000`                                      |
-| `BOM_HOST_STORE`            | 宿主机 BOM 目录；不设 compose 时默认 `./data/host_bom`（相对 `deploy/production`） |
-| `BOM_LOCAL_ROOT`            | 与 `deploy/production/docker-compose.yml` 卷挂载容器路径一致，默认 `/bom_store`  |
+按 `deploy/production/.deploy.env.example` 中的注释逐项填写 `.deploy.env` 即可。
 
 
 复制并编辑前端配置：
 
 ```bash
 cp deploy/production/app-config.js.example deploy/production/app-config.js
-# 按环境修改其中的 Supabase URL / anon key 等
+# 按 deploy/production/app-config.js.example 中的注释填写
 ```
 
 ### 5. 部署命令
@@ -140,6 +136,14 @@ cd deploy/production
 ```
 
 示例：`./deploy.sh v1.0.5`
+
+首次部署后（或需要重建默认账号）执行一次 seed：
+
+1. 进入 Supabase 管理页面（SQL Editor）。
+2. 打开并复制 `deploy/production/scripts/seed.sql` 全部内容。
+3. 在 SQL Editor 执行。
+
+web默认账号：`test@example.com` / `test123456`
 
 ### 6. 仅更新 compose（不跑 deploy.sh 时）
 

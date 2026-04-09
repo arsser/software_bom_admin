@@ -8,7 +8,7 @@
 
 ## 目标摘要
 
-在单一部署上实现：**BOM 自由结构入库（jsonb）→ 本地扁平目录暂存与索引 → MD5 校验 → ext-Artifactory 查重与上传 → 告警与离线 wget/curl 导出**。规模假设：BOM 行数小于 1000，优先功能与数据模型，性能/存储/安全不作为 Lite 版硬约束。
+在单一部署上实现：**BOM 自由结构入库（jsonb）→ 本地扁平目录暂存与索引 → MD5 校验 → 外部 Artifactory 查重与上传 → 告警与离线 wget/curl 导出**。规模假设：BOM 行数小于 1000，优先功能与数据模型，性能/存储/安全不作为 Lite 版硬约束。
 
 ---
 
@@ -77,13 +77,13 @@
 
 ---
 
-## 阶段 5：ext-Artifactory 同步
+## 阶段 5：外部 Artifactory 同步
 
 | 项 | 说明 |
 |----|------|
 | 前置条件 | **仅在校验通过后**再查重/上传（与 PRD §7.3 一致）。 |
 | 队列与 worker | 网页 `bom_request_ext_sync` → `bom_ext_sync_jobs`，`bom-scanner-worker` 抢占 `bom_claim_ext_sync_job` 执行。 |
-| 配置 | `bom_scanner.extArtifactoryRepo`（目标仓库 key）；凭据 `IT_ARTIFACTORY_EXT_*` 或 `artifactory_config` 扩展实例。 |
+| 配置 | `bom_scanner.extArtifactoryRepo`（目标仓库 key）；凭据 `IT_ARTIFACTORY_EXT_*` 或 `artifactory_config` 外部实例。 |
 | 查重 | Checksum Search；多命中取 **第一条**（URI 字典序稳定可选）；已存在则 **Copy** 到 **版本目录** `{version}/{batch}/{module}/{文件名}`。 |
 | 上传 | 不存在则从 **本地已校验文件** 流式 PUT 至同一路径约定。 |
 | 写回 | 仅 jsonb：`ext_url`（及 `ext_sync_kind`：`copied` / `uploaded`）。 |

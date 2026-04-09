@@ -17,7 +17,7 @@ export type BomRowStatusJson = {
   ext: BomRowExtStatus;
   /** it/本地拉取、补全 MD5 等说明（与 status.local 配套） */
   local_fetch_error?: string | null;
-  /** ext-Artifactory 查重/同步等说明（与 status.ext 配套） */
+  /** 外部 Artifactory 查重/同步等说明（与 status.ext 配套） */
   ext_fetch_error?: string | null;
 };
 
@@ -133,4 +133,4 @@ export const BOM_STATUS_LEGEND_MANUAL =
 
 /** 自动拉取或 ext 同步失败等：原因在 status.local_fetch_error / status.ext_fetch_error，页面「状态说明」列以「本地：」「ext：」前缀同行展示。 */
 export const BOM_STATUS_LEGEND_ERROR =
-  '自动从 it-Artifactory 拉取失败、ext-Artifactory 同步失败或主机与配置不一致；详见「状态说明」列（对应 JSON 内 local_fetch_error / ext_fetch_error）。';
+  '自动从内部 Artifactory 拉取失败、外部 Artifactory 同步失败或主机与配置不一致；详见「状态说明」列（对应 JSON 内 local_fetch_error / ext_fetch_error）。';

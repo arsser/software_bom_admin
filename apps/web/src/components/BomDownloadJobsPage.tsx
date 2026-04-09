@@ -161,7 +161,7 @@ export const BomDownloadJobsPage: React.FC = () => {
             </button>
             <h2 className="text-2xl font-bold text-slate-900 mt-1">BOM 后台任务</h2>
             <p className="text-slate-500 mt-1 text-sm">
-              it-Artifactory 拉取与 ext-Artifactory 同步队列（均由 bom-scanner-worker 执行）。
+              内部 Artifactory 拉取与外部 Artifactory 同步队列（均由 bom-scanner-worker 执行）。
             </p>
           </div>
         </div>
@@ -218,7 +218,7 @@ export const BomDownloadJobsPage: React.FC = () => {
 
       <div className="flex items-center gap-2 text-sm font-medium text-slate-800">
         <HardDriveDownload size={18} className="text-indigo-600" />
-        it-Artifactory 拉取
+        内部 Artifactory 拉取
       </div>
 
       <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
@@ -326,7 +326,7 @@ export const BomDownloadJobsPage: React.FC = () => {
 
       <div className="flex items-center gap-2 text-sm font-medium text-slate-800 pt-2">
         <Upload size={18} className="text-emerald-600" />
-        ext-Artifactory 同步（阶段 5）
+        外部 Artifactory 同步（阶段 5）
       </div>
 
       <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">

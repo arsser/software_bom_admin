@@ -60,6 +60,11 @@ if [ -z "${SUPABASE_DIR:-}" ]; then
     exit 1
 fi
 
+if [ -z "${SUPABASE_URL:-}" ]; then
+    error "SUPABASE_URL is not set in .deploy.env (host-reachable Supabase API URL, e.g. http://127.0.0.1:8000 — not http://kong:8000)"
+    exit 1
+fi
+
 if [ ! -f "$SCRIPT_DIR/scripts/sync-edge-functions.sh" ]; then
     error "sync-edge-functions.sh not found in $SCRIPT_DIR/scripts"
     exit 1

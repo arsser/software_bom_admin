@@ -66,18 +66,18 @@ export function HumanByteSize({ bytes, variantLabel, className = '' }: Props) {
 type TripleProps = {
   localBytes: number | null;
   extBytes: number | null;
-  /** it-Artifactory 等写入 fileSizeBytes 列的大小 */
+  /** 内部 Artifactory 等写入 fileSizeBytes 列的大小 */
   remoteBytes: number | null;
 };
 
 /**
- * 自上而下与「选取」优先级一致：ext → 本地（索引）→ Artifactory（it / fileSizeBytes 列）。
+ * 自上而下与「选取」优先级一致：外部(ext) → 本地（索引）→ 内部 Artifactory（fileSizeBytes 列）。
  */
 export function BomRowByteSizeCell({ localBytes, extBytes, remoteBytes }: TripleProps) {
   const segments: Array<{ bytes: number; label: string }> = [];
-  if (extBytes != null) segments.push({ bytes: extBytes, label: 'extArtifactory' });
+  if (extBytes != null) segments.push({ bytes: extBytes, label: '外部 Artifactory' });
   if (localBytes != null) segments.push({ bytes: localBytes, label: '本地文件' });
-  if (remoteBytes != null) segments.push({ bytes: remoteBytes, label: 'Artifactory' });
+  if (remoteBytes != null) segments.push({ bytes: remoteBytes, label: '内部 Artifactory' });
 
   if (segments.length === 0) {
     return <span className="text-slate-400">—</span>;

@@ -438,7 +438,7 @@ export const Settings: React.FC = () => {
 
             <div>
               <label className="block text-sm font-medium text-slate-700 mb-1">
-                ext-Artifactory 目标仓库 key（阶段 5）
+                外部 Artifactory 目标仓库 key（阶段 5）
               </label>
               <input
                 type="text"
@@ -451,7 +451,7 @@ export const Settings: React.FC = () => {
               />
               <p className="text-xs text-slate-500 mt-1">
                 同步时制品 Deploy/Copy 到此仓库；路径为 <span className="font-mono">产品版本/发布版本/模块/文件名</span>（对应 jsonKeyMap 的 releaseVersion、releaseBatch、moduleName 等列）。
-                凭据为扩展实例：环境变量 <span className="font-mono">IT_ARTIFACTORY_EXT_*</span> 或「Artifactory 凭据」中的扩展 Base URL / API Key。
+                凭据为外部实例：环境变量 <span className="font-mono">IT_ARTIFACTORY_EXT_*</span> 或「Artifactory 凭据」中的外部 Base URL / API Key。
               </p>
             </div>
             <div>
@@ -512,7 +512,7 @@ export const Settings: React.FC = () => {
         </p>
         <div className="grid gap-4 md:grid-cols-2">
           <div>
-            <label className="block text-sm font-medium text-slate-700 mb-1">主实例 Base URL</label>
+            <label className="block text-sm font-medium text-slate-700 mb-1">内部 Artifactory Base URL</label>
             <input
               type="url"
               value={artifactory.artifactoryBaseUrl ?? ''}
@@ -522,7 +522,7 @@ export const Settings: React.FC = () => {
             />
           </div>
           <div>
-            <label className="block text-sm font-medium text-slate-700 mb-1">主实例 API Key</label>
+            <label className="block text-sm font-medium text-slate-700 mb-1">内部 Artifactory API Key</label>
             <div className="relative">
               <input
                 type={showMainApiKey ? 'text' : 'password'}
@@ -543,7 +543,7 @@ export const Settings: React.FC = () => {
             </div>
           </div>
           <div>
-            <label className="block text-sm font-medium text-slate-700 mb-1">扩展实例 Base URL</label>
+            <label className="block text-sm font-medium text-slate-700 mb-1">外部 Artifactory Base URL</label>
             <input
               type="url"
               value={artifactory.artifactoryExtBaseUrl ?? ''}
@@ -553,7 +553,7 @@ export const Settings: React.FC = () => {
             />
           </div>
           <div>
-            <label className="block text-sm font-medium text-slate-700 mb-1">扩展实例 API Key</label>
+            <label className="block text-sm font-medium text-slate-700 mb-1">外部 Artifactory API Key</label>
             <div className="relative">
               <input
                 type={showExtApiKey ? 'text' : 'password'}

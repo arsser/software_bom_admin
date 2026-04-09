@@ -365,7 +365,7 @@ function itDbBundleHasAnyKey(bundle) {
 }
 
 /**
- * 按下载 URL 主机与 DB 中 base URL 匹配主/扩展实例。
+ * 按下载 URL 主机与 DB 中 base URL 匹配内部/外部 Artifactory。
  * @param {string} downloadUrl
  * @param {{ primary: { apiKey: string, baseUrl: string }, ext: { apiKey: string, baseUrl: string } }} bundle
  * @returns {{ apiKey: string, baseUrl: string } | null}
@@ -413,7 +413,7 @@ async function logItArtifactoryDbAtStartup(supabase) {
     anyKey: itDbBundleHasAnyKey(bundle),
   });
   if (!itDbBundleHasAnyKey(bundle)) {
-    log('WARN it-artifactory DB artifactory_config 未配置主/扩展 API Key，队列拉取将失败');
+    log('WARN it-artifactory DB artifactory_config 未配置内部/外部 API Key，队列拉取将失败');
   }
 }
 
@@ -715,7 +715,7 @@ async function executeDownloadJob(supabase, rootAbs, job, tuning) {
       status: 'failed',
       finished_at: new Date().toISOString(),
       last_message:
-        '未配置 it Artifactory API Key（请在数据库 system_settings.artifactory_config 配置主/扩展 Key）',
+        '未配置 it Artifactory API Key（请在数据库 system_settings.artifactory_config 配置内部/外部 Key）',
       cancel_requested: false,
     });
     return;

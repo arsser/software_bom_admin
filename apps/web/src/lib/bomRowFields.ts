@@ -102,7 +102,7 @@ export function extractRemoteSizeBytesFromRow(row: BomRowRecord, keyMap: BomJson
   return parseByteSizeFromCell(raw);
 }
 
-/** ext-Artifactory 写入 jsonb 的大小（字节） */
+/** 外部 Artifactory 写入 jsonb 的大小（字节） */
 export function extractExtSizeBytesFromRow(row: BomRowRecord, keyMap: BomJsonKeyMap): number | null {
   const keys = keyMap.extFileSizeBytes ?? [];
   if (!keys.length) return null;
@@ -137,7 +137,7 @@ export function headerMatchesAny(header: string, keys: string[]): boolean {
   return keys.some((k) => norm(k) === n);
 }
 
-/** 与 DB eligible 语义对齐：可网页/worker 从 it-Artifactory 拉取 */
+/** 与 DB eligible 语义对齐：可网页/worker 从内部 Artifactory 拉取 */
 export function rowEligibleForItPull(
   row: BomBatchRow,
   keyMap: BomJsonKeyMap,

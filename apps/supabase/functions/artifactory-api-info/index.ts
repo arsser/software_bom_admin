@@ -180,7 +180,7 @@ async function getApiInfo(dto: GetApiInfoBody): Promise<ApiInfoResult[]> {
 
   const dbCfg = await readDbArtifactoryConfig()
   if (!hasAnyApiKey(dbCfg)) {
-    throw new Error('数据库 artifactory_config 未配置主/扩展 API Key')
+    throw new Error('数据库 artifactory_config 未配置内部/外部 API Key')
   }
 
   const results = await Promise.all(

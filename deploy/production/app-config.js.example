@@ -3,10 +3,11 @@
 // 部署时通过 volume 挂载到容器内 /usr/share/nginx/html/app-config.js
 // 示例：
 //   - 直接使用云端 Supabase：https://your-project.supabase.co
+//   - 自建的 Supabase： http://10.40.29.45:8000
 //   - 通过自建 Nginx 反代： http://10.40.29.45/supabase，不要用127.0.0.1，因为是在客户端的浏览器执行
-
+//   - ⚠️http还是https需注意
 
 window.__APP_CONFIG__ = {
-    supabaseUrl: 'https://your-project.supabase.co',
-    supabaseAnonKey: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...'
+    supabaseUrl: 'https-or-http://xxx',
+    supabaseAnonKey: 'xxx'
 };

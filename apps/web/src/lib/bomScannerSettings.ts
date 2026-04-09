@@ -15,9 +15,9 @@ export type BomJsonKeyMap = {
   moduleName?: string[];
   /** ext 同步目录：分组子目录（对应 bom_row 中的列名别名） */
   groupSegment?: string[];
-  /** 写入 it-Artifactory 拉取/补全的大小（字节，整数字符串） */
+  /** 写入内部 Artifactory 拉取/补全的大小（字节，整数字符串） */
   fileSizeBytes?: string[];
-  /** ext-Artifactory 侧大小（字节，整数字符串） */
+  /** 外部 Artifactory 侧大小（字节，整数字符串） */
   extFileSizeBytes?: string[];
   /** 拉取失败等说明 */
   remark?: string[];
@@ -61,7 +61,7 @@ type BomScannerRaw = Partial<{
   scanIntervalSeconds: number;
   scanIntervalMinutes: number;
   jsonKeyMap: BomJsonKeyMap;
-  /** ext-Artifactory 仓库 key（阶段 5 同步目标） */
+  /** 外部 Artifactory 仓库 key（阶段 5 同步目标） */
   extArtifactoryRepo: string;
   workerTuning: Partial<BomWorkerTuning> | Record<string, unknown>;
   runtime: Partial<{

@@ -400,7 +400,7 @@ export async function executeExtSyncJob(supabase, rootAbs, job, tuning) {
     await patchExtSyncJob(supabase, jobId, {
       status: 'failed',
       finished_at: new Date().toISOString(),
-      last_message: '未配置 ext Artifactory（IT_ARTIFACTORY_EXT_* 环境变量或 artifactory_config 扩展实例）',
+      last_message: '未配置外部 Artifactory（IT_ARTIFACTORY_EXT_* 环境变量或 artifactory_config 外部实例）',
       cancel_requested: false,
     });
     return;

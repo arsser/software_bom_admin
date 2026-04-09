@@ -136,7 +136,7 @@ export const BomDetail: React.FC = () => {
   const [extCheckDetailToast, setExtCheckDetailToast] = useState<string | null>(null);
   const [showAdvancedTools, setShowAdvancedTools] = useState(false);
   const [showExtAdvancedTools, setShowExtAdvancedTools] = useState(false);
-  /** 已入库表格：勾选用于复制 curl/wget 的行 id（it-Artifactory / BOM 下载列） */
+  /** 已入库表格：勾选用于复制 curl/wget 的行 id（内部 Artifactory / BOM 下载列） */
   const [copyRowIds, setCopyRowIds] = useState<Set<string>>(() => new Set());
   /** 勾选用于复制 ext 转存链接 curl/wget 的行 id */
   const [extCopyRowIds, setExtCopyRowIds] = useState<Set<string>>(() => new Set());
@@ -772,14 +772,14 @@ export const BomDetail: React.FC = () => {
       return;
     }
     if (!(af.artifactoryApiKey || '').trim() && !(af.artifactoryExtApiKey || '').trim()) {
-      alert('请先在「系统设置」中配置 Artifactory API Key（主实例或扩展实例）。');
+      alert('请先在「系统设置」中配置 Artifactory API Key（内部或外部）。');
       return;
     }
     const items = loadedBomRows
       .map((lr, idx) => ({ row: lr, displayLine: idx + 1 }))
       .filter(({ row }) => copyRowIds.has(row.id));
     if (items.length === 0) {
-      alert('请先勾选表格左侧复选框（需为含 it-Artifactory 链接的行）。');
+      alert('请先勾选表格左侧复选框（需为含 内部 Artifactory 链接的行）。');
       return;
     }
     const { text, errors } = buildCopyCommandsForRows(items, config.jsonKeyMap, af, tool);
@@ -812,14 +812,14 @@ export const BomDetail: React.FC = () => {
       return;
     }
     if (!(af.artifactoryApiKey || '').trim() && !(af.artifactoryExtApiKey || '').trim()) {
-      alert('请先在「系统设置」中配置 Artifactory API Key（主实例或扩展实例）。');
+      alert('请先在「系统设置」中配置 Artifactory API Key（内部或外部）。');
       return;
     }
     const items = loadedBomRows
       .map((lr, idx) => ({ row: lr, displayLine: idx + 1 }))
       .filter(({ row }) => extCopyRowIds.has(row.id));
     if (items.length === 0) {
-      alert('请先勾选「ext」列复选框（需为已写入 ext-Artifactory http(s) 链接的行）。');
+      alert('请先勾选「ext」列复选框（需为已写入 外部 Artifactory http(s) 链接的行）。');
       return;
     }
     const { text, errors } = buildCopyCommandsForExtRows(items, config.jsonKeyMap, af, tool);
@@ -932,7 +932,7 @@ export const BomDetail: React.FC = () => {
     }
     const targets = loadedBomRows.filter((lr) => rowHasArtifactoryHttpUrl(lr, config.jsonKeyMap));
     if (targets.length === 0) {
-      alert('没有含 it-Artifactory http(s) 下载路径的行。');
+      alert('没有含 内部 Artifactory http(s) 下载路径的行。');
       return;
     }
     setArtifactoryRemoteSizeLoading(true);
@@ -971,7 +971,7 @@ export const BomDetail: React.FC = () => {
         parts.push(`API 成功但未返回可用 size：${summary.apiOkButNoSizeCount} 行`);
       }
       if (summary.skippedNoUrl > 0) {
-        parts.push(`未发起请求（无 it-Artifactory 链接）：${summary.skippedNoUrl} 行`);
+        parts.push(`未发起请求（无 内部 Artifactory 链接）：${summary.skippedNoUrl} 行`);
       }
       if (summary.failedChunks > 0) {
         parts.push(`整批请求抛错 ${summary.failedChunks} 次：${summary.chunkErrorMessages.join('；')}`);
@@ -1336,7 +1336,7 @@ export const BomDetail: React.FC = () => {
               <div className="rounded-lg border border-indigo-100 bg-indigo-50/90 p-3 md:p-4 space-y-3">
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <div>
-                    <div className="text-sm font-medium text-indigo-950">it-Artifactory</div>
+                    <div className="text-sm font-medium text-indigo-950">内部 Artifactory</div>
                     
                   </div>
                   <div className="flex flex-wrap items-center gap-2">
@@ -1344,7 +1344,7 @@ export const BomDetail: React.FC = () => {
                       type="button"
                       onClick={() => void handleArtifactoryEnrich()}
                       disabled={artifactoryEnrichLoading || missingMd5Count === 0}
-                      title="对含 it-Artifactory 链接且缺 MD5 的行调用 Storage 信息补全"
+                      title="对含 内部 Artifactory 链接且缺 MD5 的行调用 Storage 信息补全"
                       className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg border border-amber-300 bg-amber-50 text-amber-950 text-sm font-medium hover:bg-amber-100 disabled:opacity-50 disabled:cursor-not-allowed"
                     >
                       {artifactoryEnrichLoading ? <Loader2 size={16} className="animate-spin" /> : <Hash size={16} />}
@@ -1358,7 +1358,7 @@ export const BomDetail: React.FC = () => {
                         artifactoryEnrichLoading ||
                         artifactoryRemoteSizeRowCount === 0
                       }
-                      title="对含 it-Artifactory 链接的行调用 Storage API，写回 jsonKeyMap.fileSizeBytes 别名列"
+                      title="对含 内部 Artifactory 链接的行调用 Storage API，写回 jsonKeyMap.fileSizeBytes 别名列"
                       className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg border border-slate-300 bg-white text-slate-800 text-sm font-medium hover:bg-slate-50 disabled:opacity-50 disabled:cursor-not-allowed"
                     >
                       {artifactoryRemoteSizeLoading ? (
@@ -1435,7 +1435,7 @@ export const BomDetail: React.FC = () => {
                         <p className="text-xs text-emerald-800 font-medium px-0.5">{copyCmdToast}</p>
                       ) : null}
                       <p className="text-[11px] text-slate-600 leading-snug">
-                        在下方表格「it」列（展开本工具后显示）勾选含 BOM 下载列 it-Artifactory 链接的行，再复制终端命令（与 worker 相同 Bearer 与 JFrog 头）。命令含敏感信息，请勿泄露剪贴板内容。ext 转存链接请在 ext-Artifactory 卡片展开「高级/排障工具」。
+                        在下方表格「it」列（展开本工具后显示）勾选含 BOM 下载列 内部 Artifactory 链接的行，再复制终端命令（与 worker 相同 Bearer 与 JFrog 头）。命令含敏感信息，请勿泄露剪贴板内容。ext 转存链接请在 外部 Artifactory 卡片展开「高级/排障工具」。
                       </p>
                     </div>
                   ) : null}
@@ -1483,7 +1483,7 @@ export const BomDetail: React.FC = () => {
               <div className="rounded-lg border border-emerald-100 bg-emerald-50/90 p-3 md:p-4 space-y-3">
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <div>
-                    <div className="text-sm font-medium text-emerald-950">ext-Artifactory</div>
+                    <div className="text-sm font-medium text-emerald-950">外部 Artifactory</div>
                     
                   </div>
                   <div className="flex flex-wrap items-center gap-2">
@@ -1578,7 +1578,7 @@ export const BomDetail: React.FC = () => {
                         <p className="text-xs text-emerald-800 font-medium px-0.5">{extCopyCmdToast}</p>
                       ) : null}
                       <p className="text-[11px] text-slate-600 leading-snug">
-                        在下方表格「ext」列（展开本工具后显示；若同时展开 it 高级工具则在第二列复选）勾选含 ext-Artifactory 转存链接的行，再复制终端命令（与 worker 相同 Bearer 与 JFrog 头）。命令含敏感信息，请勿泄露剪贴板内容。
+                        在下方表格「ext」列（展开本工具后显示；若同时展开 it 高级工具则在第二列复选）勾选含 外部 Artifactory 转存链接的行，再复制终端命令（与 worker 相同 Bearer 与 JFrog 头）。命令含敏感信息，请勿泄露剪贴板内容。
                       </p>
                     </div>
                   ) : null}
@@ -1617,7 +1617,7 @@ export const BomDetail: React.FC = () => {
                 ) : null}
                 {!(config?.extArtifactoryRepo ?? '').trim() ? (
                   <p className="text-xs text-amber-900 bg-amber-50 border border-amber-200 rounded-md px-2.5 py-2">
-                    请先在<strong>系统设置 → BOM 本地扫描</strong>中填写 <span className="font-mono">ext-Artifactory 目标仓库 key</span>。
+                    请先在<strong>系统设置 → BOM 本地扫描</strong>中填写 <span className="font-mono">外部 Artifactory 目标仓库 key</span>。
                   </p>
                 ) : null}
                 {latestExtSyncJob ? (
@@ -1661,14 +1661,14 @@ export const BomDetail: React.FC = () => {
                       {showAdvancedTools ? (
                         <th
                           className="px-2 py-2 text-center font-semibold text-slate-700 border-b border-gray-200 whitespace-nowrap w-9"
-                          title="it：BOM 下载列 · 全选含 it-Artifactory 链接的行"
+                          title="it：BOM 下载列 · 全选含 内部 Artifactory 链接的行"
                         >
                           <input
                             type="checkbox"
                             checked={allCopyableRowsSelected}
                             disabled={copyableRowIds.length === 0}
                             onChange={toggleSelectAllCopyableRows}
-                            aria-label="全选 it-Artifactory 可复制行"
+                            aria-label="全选 内部 Artifactory 可复制行"
                             className="h-3.5 w-3.5 rounded border-slate-400 align-middle cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
                           />
                         </th>
@@ -1676,14 +1676,14 @@ export const BomDetail: React.FC = () => {
                       {showExtAdvancedTools ? (
                         <th
                           className="px-2 py-2 text-center font-semibold text-slate-700 border-b border-gray-200 whitespace-nowrap w-9"
-                          title="ext：转存链接列 · 全选含 ext-Artifactory 链接的行"
+                          title="ext：转存链接列 · 全选含 外部 Artifactory 链接的行"
                         >
                           <input
                             type="checkbox"
                             checked={allExtCopyableRowsSelected}
                             disabled={extCopyableRowIds.length === 0}
                             onChange={toggleSelectAllExtCopyableRows}
-                            aria-label="全选 ext-Artifactory 可复制行"
+                            aria-label="全选 外部 Artifactory 可复制行"
                             className="h-3.5 w-3.5 rounded border-slate-400 align-middle cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
                           />
                         </th>
@@ -1710,7 +1710,7 @@ export const BomDetail: React.FC = () => {
                         className="px-3 py-2 text-left font-semibold text-slate-700 border-b border-gray-200 whitespace-nowrap min-w-[10rem] max-w-[14rem] w-[12rem]"
                         title="jsonb 中 ext_url 等别名对应的可下载 URI（阶段 5 同步后写入）"
                       >
-                        ext-Artifactory 下载链接
+                        外部 Artifactory 下载链接
                       </th>
                       <th
                         className="px-3 py-2 text-left font-semibold text-slate-700 border-b border-gray-200 min-w-[14rem] max-w-[28rem] w-[18rem]"
@@ -1807,7 +1807,7 @@ export const BomDetail: React.FC = () => {
                                 checked={copyRowIds.has(lr.id)}
                                 disabled={!canCopyCmd}
                                 onChange={() => toggleCopyRowId(lr.id)}
-                                title={canCopyCmd ? '勾选后可批量复制 it 侧 curl/wget' : '无 it-Artifactory 链接'}
+                                title={canCopyCmd ? '勾选后可批量复制 it 侧 curl/wget' : '无 内部 Artifactory 链接'}
                                 className="h-3.5 w-3.5 rounded border-slate-400 align-middle cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed"
                               />
                             </td>
@@ -1822,7 +1822,7 @@ export const BomDetail: React.FC = () => {
                                 title={
                                   canExtCopyCmd
                                     ? '勾选后可批量复制 ext 侧 curl/wget'
-                                    : '无 ext-Artifactory 链接（需先有 ext_url 等）'
+                                    : '无 外部 Artifactory 链接（需先有 ext_url 等）'
                                 }
                                 className="h-3.5 w-3.5 rounded border-slate-400 align-middle cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed"
                               />
@@ -1834,7 +1834,7 @@ export const BomDetail: React.FC = () => {
                                 type="button"
                                 disabled={downloadBusy !== null || hasActiveDownloadJob}
                                 onClick={() => void handleDownloadOneIt(lr.id)}
-                                title="拉取本行 it-Artifactory 制品"
+                                title="拉取本行 内部 Artifactory 制品"
                                 className="inline-flex items-center justify-center p-1 rounded-md border border-indigo-200 bg-indigo-50 text-indigo-800 hover:bg-indigo-100 disabled:opacity-45 disabled:cursor-not-allowed"
                               >
                                 {downloadBusy === lr.id ? (
@@ -1857,7 +1857,7 @@ export const BomDetail: React.FC = () => {
                                   !(config?.extArtifactoryRepo ?? '').trim()
                                 }
                                 onClick={() => void handleExtSyncOne(lr.id)}
-                                title="本地已有文件：查重并 Copy 到 ext 版本目录（必要时排队 PUT）；无本地文件请用顶部「extArtifactory 全部检查」"
+                                title="本地已有文件：查重并 Copy 到 ext 版本目录（必要时排队 PUT）；无本地文件请用顶部「外部 Artifactory 全部检查」"
                                 className="inline-flex items-center justify-center p-1 rounded-md border border-emerald-200 bg-emerald-50 text-emerald-900 hover:bg-emerald-100 disabled:opacity-45 disabled:cursor-not-allowed"
                               >
                                 {extSyncBusy === lr.id ? (

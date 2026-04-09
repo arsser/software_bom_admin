@@ -22,7 +22,7 @@ export type RemoteArtifactorySizeSummary = {
 };
 
 /**
- * 仅通过 it-Artifactory Storage API 拉取 size 并写入 jsonKeyMap.fileSizeBytes 别名列（不改动 MD5 / status）。
+ * 仅通过内部 Artifactory Storage API 拉取 size 并写入 jsonKeyMap.fileSizeBytes 别名列（不改动 MD5 / status）。
  */
 export async function enrichBomRowsRemoteSizeFromArtifactory(
   rows: BomBatchRow[],

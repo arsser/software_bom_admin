@@ -84,13 +84,13 @@ export const Md5Calculator: React.FC = () => {
           </div>
           <div className="grid gap-4 md:grid-cols-2 text-sm">
             <div className="space-y-1">
-              <div className="text-slate-500">主实例 Base URL</div>
+              <div className="text-slate-500">内部 Artifactory Base URL</div>
               <div className="font-mono text-slate-800 break-all">
                 {config.artifactoryBaseUrl || '未配置'}
               </div>
             </div>
             <div className="space-y-1">
-              <div className="text-slate-500">扩展实例 Base URL</div>
+              <div className="text-slate-500">外部 Artifactory Base URL</div>
               <div className="font-mono text-slate-800 break-all">
                 {config.artifactoryExtBaseUrl || '未配置'}
               </div>

@@ -1284,7 +1284,7 @@ $_$;
 -- Name: FUNCTION bom_rows_for_it_download(p_limit integer); Type: COMMENT; Schema: public; Owner: -
 --
 
-COMMENT ON FUNCTION public.bom_rows_for_it_download(p_limit integer) IS '阶段 4：返回待由 worker 从 it-Artifactory 拉取的 BOM 行（service_role）';
+COMMENT ON FUNCTION public.bom_rows_for_it_download(p_limit integer) IS '阶段 4：返回待由 worker 从内部 Artifactory 拉取的 BOM 行（service_role）';
 
 
 --
@@ -1459,7 +1459,7 @@ $$;
 -- Name: FUNCTION bom_url_looks_like_it_artifactory(p text); Type: COMMENT; Schema: public; Owner: -
 --
 
-COMMENT ON FUNCTION public.bom_url_looks_like_it_artifactory(p text) IS '粗判是否为 it-Artifactory 类链接（阶段 4 自动下载）；其它来源走待人工下载';
+COMMENT ON FUNCTION public.bom_url_looks_like_it_artifactory(p text) IS '粗判是否为内部 Artifactory 类链接（阶段 4 自动下载）；其它来源走待人工下载';
 
 
 --
@@ -1585,7 +1585,7 @@ CREATE TABLE public.bom_download_jobs (
 -- Name: TABLE bom_download_jobs; Type: COMMENT; Schema: public; Owner: -
 --
 
-COMMENT ON TABLE public.bom_download_jobs IS '网页或后台触发的 it-Artifactory 批量拉取任务（worker 消费）';
+COMMENT ON TABLE public.bom_download_jobs IS '网页或后台触发的内部 Artifactory 批量拉取任务（worker 消费）';
 
 
 --
@@ -1679,7 +1679,7 @@ CREATE TABLE public.bom_ext_sync_jobs (
 -- Name: TABLE bom_ext_sync_jobs; Type: COMMENT; Schema: public; Owner: -
 --
 
-COMMENT ON TABLE public.bom_ext_sync_jobs IS '网页触发的 ext-Artifactory 同步任务（worker 消费）：校验通过后 checksum 查重、Copy 或上传';
+COMMENT ON TABLE public.bom_ext_sync_jobs IS '网页触发的外部 Artifactory 同步任务（worker 消费）：校验通过后 checksum 查重、Copy 或上传';
 
 
 --

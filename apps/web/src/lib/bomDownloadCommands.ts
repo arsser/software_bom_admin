@@ -25,7 +25,7 @@ function normalizeHost(base: string): string | null {
 }
 
 /**
- * 按下载 URL 主机与系统设置中的 Base URL 匹配主/扩展实例 API Key（与 worker 的 host 校验语义一致）。
+ * 按下载 URL 主机与系统设置中的 Base URL 匹配内部/外部 Artifactory API Key（与 worker 的 host 校验语义一致）。
  */
 export function pickArtifactoryApiKeyForUrl(
   downloadUrl: string,
@@ -107,13 +107,13 @@ export function buildCopyCommandsForRows(
     const raw = extractDownloadUrlRaw(lr.bom_row, keyMap);
     const url = raw ? extractHttpUrlFromDownloadCell(raw) : null;
     if (!url || !/artifactory/i.test(url)) {
-      errors.push(`第 ${displayLine} 行：无有效 it-Artifactory http(s) 链接`);
+      errors.push(`第 ${displayLine} 行：无有效内部 Artifactory http(s) 链接`);
       continue;
     }
     const picked = pickArtifactoryApiKeyForUrl(url, cfg);
     if (!picked) {
       errors.push(
-        `第 ${displayLine} 行：无法匹配 API Key（请核对系统设置中主/扩展 Base URL 与下载链接主机是否一致）`,
+        `第 ${displayLine} 行：无法匹配 API Key（请核对系统设置中内部/外部 Base URL 与下载链接主机是否一致）`,
       );
       continue;
     }
@@ -123,7 +123,7 @@ export function buildCopyCommandsForRows(
       tool === 'curl'
         ? buildCurlDownloadCommand(url, picked.apiKey, out)
         : buildWgetDownloadCommand(url, picked.apiKey, out);
-    blocks.push(`# 第 ${displayLine} 行 · ${picked.keyKind === 'ext' ? '扩展实例' : '主实例'} · ${out}`);
+    blocks.push(`# 第 ${displayLine} 行 · ${picked.keyKind === 'ext' ? '外部' : '内部'} · ${out}`);
     blocks.push(cmd);
     blocks.push('');
   }
@@ -142,13 +142,13 @@ export function buildCopyCommandsForExtRows(
     const raw = extractExtUrlFromRow(lr.bom_row, keyMap);
     const url = raw ? extractHttpUrlFromDownloadCell(raw) : null;
     if (!url || !/artifactory/i.test(url)) {
-      errors.push(`第 ${displayLine} 行：无有效 ext-Artifactory http(s) 链接（ext_url / 转存地址）`);
+      errors.push(`第 ${displayLine} 行：无有效外部 Artifactory http(s) 链接（ext_url / 转存地址）`);
       continue;
     }
     const picked = pickArtifactoryApiKeyForUrl(url, cfg);
     if (!picked) {
       errors.push(
-        `第 ${displayLine} 行：无法匹配 API Key（请核对系统设置中主/扩展 Base URL 与 ext 链接主机是否一致）`,
+        `第 ${displayLine} 行：无法匹配 API Key（请核对系统设置中内部/外部 Base URL 与 ext 链接主机是否一致）`,
       );
       continue;
     }
@@ -158,7 +158,7 @@ export function buildCopyCommandsForExtRows(
       tool === 'curl'
         ? buildCurlDownloadCommand(url, picked.apiKey, out)
         : buildWgetDownloadCommand(url, picked.apiKey, out);
-    blocks.push(`# 第 ${displayLine} 行 · ext · ${picked.keyKind === 'ext' ? '扩展实例' : '主实例'} · ${out}`);
+    blocks.push(`# 第 ${displayLine} 行 · ext · ${picked.keyKind === 'ext' ? '外部' : '内部'} · ${out}`);
     blocks.push(cmd);
     blocks.push('');
   }

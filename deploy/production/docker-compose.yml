@@ -43,12 +43,11 @@ services:
     container_name: softwarebomadmin-bom-scanner
     restart: unless-stopped
     environment:
-      SUPABASE_URL: ${SUPABASE_URL_FOR_WORKER:-http://kong:8000}
+      SUPABASE_URL: ${SUPABASE_URL_FOR_DOCKER:-http://kong:8000}
       SUPABASE_SERVICE_ROLE_KEY: ${SUPABASE_SERVICE_ROLE_KEY}
-      BOM_LOCAL_ROOT: ${BOM_LOCAL_ROOT:-/data/bom_store}
+      BOM_LOCAL_ROOT: ${BOM_LOCAL_ROOT:-/bom_store}
     volumes:
-      # 阶段 4 需写入 it-Artifactory 拉取的文件；须与 BOM_LOCAL_ROOT 一致
-      - ${BOM_HOST_STORE:-./data/bom_store}:/data/bom_store
+      - ${BOM_HOST_STORE:-./data/host_bom}:/bom_store
     networks:
       - softwarebomadmin-network
       - supabase-network

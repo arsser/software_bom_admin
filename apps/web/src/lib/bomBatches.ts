@@ -70,6 +70,23 @@ export async function updateBomBatchHeaderOrder(batchId: string, headerOrder: st
   if (error) throw error;
 }
 
+export async function updateBomBatchMeta(batchId: string, payload: { name: string; productId?: string }): Promise<void> {
+  const patch: { name: string; product_id?: string } = {
+    name: payload.name.trim(),
+  };
+  if (payload.productId) patch.product_id = payload.productId;
+  const { error } = await supabase
+    .from('bom_batches')
+    .update(patch)
+    .eq('id', batchId);
+  if (error) throw error;
+}
+
+export async function deleteBomBatch(batchId: string): Promise<void> {
+  const { error } = await supabase.from('bom_batches').delete().eq('id', batchId);
+  if (error) throw error;
+}
+
 /**
  * 按当前 local_file 索引重算该版本内行状态（与 worker 扫描结束时的规则一致，不含 synced_or_skipped）。
  * 用于网页加载/刷新时对齐，避免文件已从索引 prune 而 bom_rows 仍为校验通过。

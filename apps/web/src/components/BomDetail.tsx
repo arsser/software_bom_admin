@@ -19,6 +19,7 @@ import { defaultBomScannerConfig, fetchBomScannerSettings, type BomScannerConfig
 import {
   buildBomWarnings,
   createBatchWithRows,
+  updateBomBatchMeta,
   fetchBomBatchById,
   fetchBomRows,
   fetchLocalFileInfoByMd5,
@@ -83,7 +84,6 @@ import { BomRowByteSizeCell } from './HumanByteSize';
 import { BomDataTableCell, headerIsDownloadColumn, headerIsMd5Column } from '../lib/bomTableCell';
 import { formatBomRowStatusTooltip } from '../lib/bomRowStatus';
 import {
-  createProduct,
   fetchProducts,
   type Product,
 } from '../lib/products';
@@ -104,7 +104,6 @@ export const BomDetail: React.FC = () => {
   const [batchName, setBatchName] = useState('');
   const [selectedProductId, setSelectedProductId] = useState('');
   const [products, setProducts] = useState<Product[]>([]);
-  const [newProductName, setNewProductName] = useState('');
 
   const [pastedText, setPastedText] = useState('');
   const [selectedRows, setSelectedRows] = useState<BomRowRecord[]>([]);
@@ -984,18 +983,6 @@ export const BomDetail: React.FC = () => {
     }
   };
 
-  const handleCreateProduct = async () => {
-    try {
-      const id = await createProduct({ name: newProductName });
-      setNewProductName('');
-      const prods = await fetchProducts();
-      setProducts(prods);
-      setSelectedProductId(id);
-    } catch (e) {
-      alert(e instanceof Error ? e.message : String(e));
-    }
-  };
-
   const handleSave = async () => {
     if (!config) return;
     if (!selectedProductId) {
@@ -1028,6 +1015,7 @@ export const BomDetail: React.FC = () => {
         setLastMessage(`已创建版本，共 ${parsed.rows.length} 行；告警 ${buildBomWarnings(parsed.rows, config.jsonKeyMap).length} 条`);
         navigate(`/bom/${id}`, { replace: true });
       } else {
+        await updateBomBatchMeta(batchId, { name: batchName, productId: selectedProductId });
         await updateBomBatchHeaderOrder(batchId, parsed.headers);
         await replaceBatchRows(batchId, parsed.rows);
         setBatchHeaderOrder(parsed.headers);
@@ -1125,8 +1113,7 @@ export const BomDetail: React.FC = () => {
           </div>
         </div>
 
-        <div className="grid md:grid-cols-2 gap-4">
-          <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-600">
+        <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-600">
             <p className="font-medium text-slate-700 mb-2">表头示例（`…` 表示其它任意列名；彩色列为必选表头）</p>
             <div className="overflow-x-auto rounded-md border border-slate-200 bg-white">
               <table className="min-w-full border-collapse text-left">
@@ -1151,28 +1138,6 @@ export const BomDetail: React.FC = () => {
               </table>
             </div>
             <p className="text-slate-500 mt-2">具体列名以系统设置 jsonKeyMap 为准。</p>
-          </div>
-
-          <div>
-            <label className="block text-sm font-medium text-slate-700 mb-1">快速新增产品</label>
-            <div className="flex gap-2">
-              <input
-                type="text"
-                value={newProductName}
-                onChange={(e) => setNewProductName(e.target.value)}
-                placeholder="产品名称"
-                className="flex-1 px-3 py-2 border border-gray-200 rounded-lg"
-              />
-              <button
-                type="button"
-                onClick={handleCreateProduct}
-                className="px-3 py-2 rounded-lg bg-slate-800 text-white hover:bg-slate-900 disabled:opacity-50"
-                disabled={!newProductName.trim()}
-              >
-                新增产品
-              </button>
-            </div>
-          </div>
         </div>
 
         <div>

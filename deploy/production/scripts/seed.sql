@@ -93,7 +93,7 @@ VALUES
   (
     'bom_scanner',
     '{
-      "scanIntervalSeconds": 30,
+      "scanIntervalSeconds": 10,
       "jsonKeyMap": {
         "downloadUrl": ["下载路径", "url", "download_url", "下载地址"],
         "expectedMd5": ["MD5", "md5", "checksum"],
@@ -109,7 +109,7 @@ VALUES
       },
       "extArtifactoryRepo": "",
       "workerTuning": {
-        "heartbeatMs": 15000,
+        "heartbeatMs": 5000,
         "httpTimeoutMs": 3600000,
         "httpRetries": 5
       }

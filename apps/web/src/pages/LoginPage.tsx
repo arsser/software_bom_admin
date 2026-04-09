@@ -41,7 +41,7 @@ export const LoginPage: React.FC = () => {
           <div className="w-16 h-16 bg-blue-600 rounded-xl mx-auto flex items-center justify-center text-white mb-4 shadow-lg shadow-blue-200">
             <ShieldCheck size={32} />
           </div>
-          <h1 className="text-3xl font-bold text-slate-900">software bom admin</h1>
+          <h1 className="text-3xl font-bold text-slate-900">软件BOM管理</h1>
           <p className="text-slate-500 mt-2">登录以管理您的后台</p>
         </div>
 

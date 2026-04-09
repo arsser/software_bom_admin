@@ -100,9 +100,12 @@ export const BomDetail: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [saveLoading, setSaveLoading] = useState(false);
+  const [metaSaveLoading, setMetaSaveLoading] = useState(false);
 
   const [batchName, setBatchName] = useState('');
   const [selectedProductId, setSelectedProductId] = useState('');
+  const [initialBatchName, setInitialBatchName] = useState('');
+  const [initialProductId, setInitialProductId] = useState('');
   const [products, setProducts] = useState<Product[]>([]);
 
   const [pastedText, setPastedText] = useState('');
@@ -142,7 +145,7 @@ export const BomDetail: React.FC = () => {
   const [copyCmdToast, setCopyCmdToast] = useState<string | null>(null);
   const [extCopyCmdToast, setExtCopyCmdToast] = useState<string | null>(null);
 
-  // 编辑模式下：用于控制「覆盖并保存」按钮可用性
+  // 编辑模式下：用于控制「覆盖 BOM 清单」按钮可用性（仅 BOM 原始内容是否相对上次入库有改动）
   // 覆盖保存成功后，把 lastSavedPastedText 更新为当前 pastedText；之后 pastedText 未改动则按钮置灰。
   const [lastSavedPastedText, setLastSavedPastedText] = useState<string | null>(null);
 
@@ -289,7 +292,9 @@ export const BomDetail: React.FC = () => {
         const b = await fetchBomBatchById(batchId);
         if (!b) throw new Error('未找到该版本');
         setBatchName(b.name);
+        setInitialBatchName(b.name);
         setSelectedProductId(b.productId);
+        setInitialProductId(b.productId);
         setBatchHeaderOrder(b.headerOrder ?? []);
 
         try {
@@ -305,7 +310,7 @@ export const BomDetail: React.FC = () => {
         setLoadedBomRows(rows);
         setSelectedRows(rows.map((x) => x.bom_row));
 
-        // 反向生成 BOM 原始内容：当打开已有版本页面时自动加载到高级输入框 + 预览
+        // 反向生成 BOM 原始内容：用于预览与「覆盖并保存」；高级文本框默认折叠
         try {
           const headerFromDb = Array.isArray(b.headerOrder) && b.headerOrder.length ? b.headerOrder : [];
           const firstRow = rows[0]?.bom_row ?? {};
@@ -323,7 +328,7 @@ export const BomDetail: React.FC = () => {
 
           const raw = rows.length ? stringifyBomToPasteText(mergedHeaders, rows.map((x) => x.bom_row)) : '';
           setPastedText(raw);
-          setShowRawInput(true);
+          setShowRawInput(false);
           setLastSavedPastedText(raw);
 
           const parsed = parsePastedBom(raw);
@@ -983,6 +988,29 @@ export const BomDetail: React.FC = () => {
     }
   };
 
+  const handleSaveMeta = async () => {
+    if (isNew || !batchId) return;
+    if (!selectedProductId) {
+      alert('请选择产品');
+      return;
+    }
+    if (!batchName.trim()) {
+      alert('请填写版本名称');
+      return;
+    }
+    setMetaSaveLoading(true);
+    try {
+      await updateBomBatchMeta(batchId, { name: batchName, productId: selectedProductId });
+      setInitialBatchName(batchName);
+      setInitialProductId(selectedProductId);
+      setLastMessage('已保存版本信息（名称与所属产品）');
+    } catch (e) {
+      alert(e instanceof Error ? e.message : String(e));
+    } finally {
+      setMetaSaveLoading(false);
+    }
+  };
+
   const handleSave = async () => {
     if (!config) return;
     if (!selectedProductId) {
@@ -1015,16 +1043,15 @@ export const BomDetail: React.FC = () => {
         setLastMessage(`已创建版本，共 ${parsed.rows.length} 行；告警 ${buildBomWarnings(parsed.rows, config.jsonKeyMap).length} 条`);
         navigate(`/bom/${id}`, { replace: true });
       } else {
-        await updateBomBatchMeta(batchId, { name: batchName, productId: selectedProductId });
         await updateBomBatchHeaderOrder(batchId, parsed.headers);
         await replaceBatchRows(batchId, parsed.rows);
         setBatchHeaderOrder(parsed.headers);
-        setLastMessage(`已覆盖版本，共 ${parsed.rows.length} 行；告警 ${buildBomWarnings(parsed.rows, config.jsonKeyMap).length} 条`);
+        setLastMessage(`已覆盖 BOM 清单，共 ${parsed.rows.length} 行；告警 ${buildBomWarnings(parsed.rows, config.jsonKeyMap).length} 条`);
         const refreshed = await fetchBomRows(batchId);
         setLoadedBomRows(refreshed);
         setSelectedRows(refreshed.map((x) => x.bom_row));
       }
-      // 覆盖保存后：按钮置灰直到用户再次修改 pastedText
+      // 覆盖 BOM 清单后：按钮置灰直到用户再次修改 pastedText
       if (!isNew) setLastSavedPastedText(pastedText);
       // 新建版本：入库后页面跳转，清空输入框更符合预期
       // 覆盖保存：用户希望在高级输入框里仍能看到「BOM 原始内容」，因此不要清空。
@@ -1039,8 +1066,11 @@ export const BomDetail: React.FC = () => {
     }
   };
 
-  const canSave =
-    pastedText.trim().length > 0 && (isNew || lastSavedPastedText == null || pastedText !== lastSavedPastedText);
+  const hasMetaChanged = !isNew && (
+    batchName.trim() !== initialBatchName.trim() || selectedProductId !== initialProductId
+  );
+  const hasPastedChanged = isNew || lastSavedPastedText == null || pastedText !== lastSavedPastedText;
+  const canSaveBomList = pastedText.trim().length > 0 && hasPastedChanged;
 
   return (
     <div className="max-w-[96rem] mx-auto space-y-5 pb-2">
@@ -1102,7 +1132,21 @@ export const BomDetail: React.FC = () => {
             </select>
           </div>
           <div>
-            <label className="block text-sm font-medium text-slate-700 mb-1">版本名称</label>
+            <div className="flex items-center justify-between gap-2 mb-1">
+              <label className="block text-sm font-medium text-slate-700">版本名称</label>
+              {!isNew ? (
+                <button
+                  type="button"
+                  onClick={() => void handleSaveMeta()}
+                  disabled={loading || metaSaveLoading || !hasMetaChanged}
+                  className="inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium rounded-md border border-indigo-200 bg-indigo-50 text-indigo-800 hover:bg-indigo-100 disabled:opacity-50 disabled:cursor-not-allowed shrink-0"
+                  title="保存版本名称与所属产品（不修改 BOM 清单）"
+                >
+                  {metaSaveLoading ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />}
+                  保存版本信息
+                </button>
+              ) : null}
+            </div>
             <input
               type="text"
               value={batchName}
@@ -1281,7 +1325,8 @@ export const BomDetail: React.FC = () => {
           <button
             type="button"
             onClick={handleSave}
-            disabled={saveLoading || !canSave}
+            disabled={saveLoading || !canSaveBomList}
+            title={isNew ? undefined : '仅覆盖 BOM 清单（表头顺序与行数据），不修改版本名称与所属产品'}
             className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-indigo-600 text-white hover:bg-indigo-700 disabled:opacity-60"
           >
             {saveLoading ? <Loader2 size={16} className="animate-spin" /> : <Save size={16} />}

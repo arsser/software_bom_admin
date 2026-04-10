@@ -186,6 +186,15 @@ export function rowEligibleForExtCheckCopy(row: BomBatchRow, keyMap: BomJsonKeyM
 }
 
 /**
+ * 与表格「ext」摘要一致：已写入 ext 转存链接，或 DB 中 ext 状态为已转存/跳过，即视为 ext 侧已完成。
+ */
+export function rowExtUiComplete(row: BomBatchRow, keyMap: BomJsonKeyMap): boolean {
+  const extRaw = extractExtUrlFromRow(row.bom_row, keyMap);
+  if (Boolean(extRaw?.trim())) return true;
+  return row.status.ext === 'synced_or_skipped';
+}
+
+/**
  * 不增 DB 列：由 status.local / status.ext、ext_url、索引命中推导「本地 / ext」两行摘要。
  * @param indexedMd5Hit `true`/`false`：当前页已加载的 local_file（按 MD5）是否命中；`null`：尚无 MD5 或索引查询未完成，不覆盖展示。
  */
@@ -194,14 +203,12 @@ export function deriveLocalExtStatusLabels(
   keyMap: BomJsonKeyMap,
   indexedMd5Hit: boolean | null,
 ): { localLabel: string; extLabel: string } {
-  const extRaw = extractExtUrlFromRow(row.bom_row, keyMap);
-  const hasExtUrl = Boolean(extRaw?.trim());
   const { local, ext } = row.status;
 
   let localLabel = BOM_ROW_LOCAL_STATUS_LABEL[local];
 
   let extLabel: string;
-  if (hasExtUrl || ext === 'synced_or_skipped') {
+  if (rowExtUiComplete(row, keyMap)) {
     extLabel = '已完成';
   } else if (ext === 'error') {
     extLabel = '同步失败';

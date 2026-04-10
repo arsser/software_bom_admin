@@ -79,6 +79,7 @@ import {
   rowEligibleForExtCheckCopy,
   rowEligibleForItPull,
   deriveLocalExtStatusLabels,
+  rowExtUiComplete,
 } from '../lib/bomRowFields';
 import { BomRowByteSizeCell } from './HumanByteSize';
 import { BomDataTableCell, headerIsDownloadColumn, headerIsMd5Column } from '../lib/bomTableCell';
@@ -144,9 +145,9 @@ export const BomDetail: React.FC = () => {
   const [extCopyRowIds, setExtCopyRowIds] = useState<Set<string>>(() => new Set());
   const [copyCmdToast, setCopyCmdToast] = useState<string | null>(null);
   const [extCopyCmdToast, setExtCopyCmdToast] = useState<string | null>(null);
-  /** 已入库表格：仅显示本地侧非「校验通过」的行 */
+  /** 已入库表格：仅显示本地侧非「校验通过」的行（与「只看本地校验未通过」一致） */
   const [filterStoredLocalNotVerifiedOk, setFilterStoredLocalNotVerifiedOk] = useState(false);
-  /** 已入库表格：仅显示 ext 非「已转存（或跳过）」的行 */
+  /** 已入库表格：仅显示 ext 侧未完成行（与表格 ext「已完成」判定一致，含已写入 ext 链接） */
   const [filterStoredExtNotComplete, setFilterStoredExtNotComplete] = useState(false);
 
   // 编辑模式下：用于控制「覆盖 BOM 清单」按钮可用性（仅 BOM 原始内容是否相对上次入库有改动）
@@ -463,10 +464,10 @@ export const BomDetail: React.FC = () => {
   const filteredStoredBomRows = useMemo(() => {
     return loadedBomRows.filter((lr) => {
       if (filterStoredLocalNotVerifiedOk && lr.status.local === 'verified_ok') return false;
-      if (filterStoredExtNotComplete && lr.status.ext === 'synced_or_skipped') return false;
+      if (filterStoredExtNotComplete && rowExtUiComplete(lr, tableKeyMap)) return false;
       return true;
     });
-  }, [loadedBomRows, filterStoredLocalNotVerifiedOk, filterStoredExtNotComplete]);
+  }, [loadedBomRows, filterStoredLocalNotVerifiedOk, filterStoredExtNotComplete, tableKeyMap]);
 
   const hasActiveDownloadJob = useMemo(
     () => downloadJobs.some((j) => j.status === 'queued' || j.status === 'running'),
@@ -1682,7 +1683,7 @@ export const BomDetail: React.FC = () => {
                       onChange={(e) => setFilterStoredLocalNotVerifiedOk(e.target.checked)}
                       className="h-3.5 w-3.5 rounded border-slate-400 text-indigo-600 focus:ring-indigo-500"
                     />
-                    <span title="隐藏本地状态为「校验通过」的行">只看本地非校验通过</span>
+                    <span title="隐藏本地状态为「校验通过」的行">只看本地校验未通过</span>
                   </label>
                   <label className="inline-flex items-center gap-2 cursor-pointer select-none">
                     <input
@@ -1691,7 +1692,7 @@ export const BomDetail: React.FC = () => {
                       onChange={(e) => setFilterStoredExtNotComplete(e.target.checked)}
                       className="h-3.5 w-3.5 rounded border-slate-400 text-indigo-600 focus:ring-indigo-500"
                     />
-                    <span title="隐藏 ext 为「已转存（或跳过）」的行">只看 ext 非已完成</span>
+                    <span title="隐藏 ext 侧已完成的行（已写入转存链接，或状态为已转存/跳过）">只看 ext 未完成</span>
                   </label>
                 </div>
                 {(filterStoredLocalNotVerifiedOk || filterStoredExtNotComplete) ? (

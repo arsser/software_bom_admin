@@ -3,8 +3,10 @@
 # Software Bom Admin 生产部署脚本
 # 用法:
 #   ./deploy.sh <version>
+# Git 标签为 v1.0.5 时，可传 v1.0.5 或 1.0.5：脚本会去掉开头的 v，与 CI 推送到 GHCR 的无 v 镜像 tag（如 1.0.5）一致。
 # 示例:
 #   ./deploy.sh v1.0.5
+#   ./deploy.sh 1.0.5
 
 set -e
 
@@ -16,6 +18,13 @@ NC='\033[0m'
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 VERSION="${1:-latest}"
+# 与 GitHub Actions（semver 镜像 tag，无 v 前缀）对齐：去掉参数开头的单个 v
+if [ "$VERSION" != "latest" ]; then
+  case "$VERSION" in
+    v*) VERSION="${VERSION#v}" ;;
+  esac
+fi
+
 REGISTRY="ghcr.io"
 GITHUB_REPO="${GITHUB_REPO:-your-org/softwarebomadmin}"
 

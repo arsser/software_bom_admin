@@ -135,7 +135,7 @@ cd deploy/production
 ./deploy.sh <version>
 ```
 
-示例：`./deploy.sh v1.0.5`
+示例：`./deploy.sh v1.0.5`（与 `./deploy.sh 1.0.5` 等价，脚本会去掉开头的 `v` 以匹配 GHCR 上无 `v` 的镜像 tag）
 
 首次部署后（或需要重建默认账号）执行一次 seed：
 
@@ -160,4 +160,4 @@ cd deploy/production
 docker compose --env-file .deploy.env up -d
 ```
 
-（`VERSION`、`GITHUB_REPO` 等需已在环境中导出或与 compose 默认值一致。）
+（`VERSION`、`GITHUB_REPO` 等需已在环境中导出或与 compose 默认值一致；`VERSION` 请用与 GHCR 一致的 tag，一般为无 `v` 的 `1.0.5`，因 compose 不会像 `deploy.sh` 那样自动去 `v`。）

@@ -218,6 +218,8 @@ cd deploy/production
 ./deploy.sh <version>
 ```
 
+`<version>` 与 GHCR 上镜像 tag 一致。CI 对 Git 标签 `v1.0.5` 推送的镜像 tag 多为无 `v` 的 `1.0.5`；你可传 `./deploy.sh v1.0.5` 或 `./deploy.sh 1.0.5`，脚本会自动去掉参数开头的 `v` 再拉镜像。
+
 说明：
 
 - worker 与 edge function 运行时都读取数据库配置，不再要求容器注入 `IT_ARTIFACTORY_*`。

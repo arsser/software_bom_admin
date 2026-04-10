@@ -1,14 +1,11 @@
 name: Build and Push Docker Images
 
+# 仅在推送版本标签（如 v1.0.0）时自动构建并推送镜像；不再因 main 推送或 PR 触发。
+# 需要手动补构建时可使用 workflow_dispatch。
 on:
   push:
-    branches:
-      - main
     tags:
       - 'v*'
-  pull_request:
-    branches:
-      - main
   workflow_dispatch:
 
 env:
@@ -16,36 +13,7 @@ env:
   IMAGE_NAME: ${{ github.repository }}
 
 jobs:
-  check-changes:
-    runs-on: ubuntu-latest
-    outputs:
-      web: ${{ steps.filter.outputs.web }}
-      migrations: ${{ steps.filter.outputs.migrations }}
-      nginx: ${{ steps.filter.outputs.nginx }}
-      bom_scanner: ${{ steps.filter.outputs.bom_scanner }}
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: dorny/paths-filter@v3
-        id: filter
-        with:
-          filters: |
-            web:
-              - 'apps/web/**'
-              - '.github/workflows/docker-build.yml'
-            migrations:
-              - 'apps/supabase/migrations/**'
-              - 'deploy/ci/supabase/Dockerfile.migrator'
-              - 'deploy/ci/supabase/migrate-entrypoint.sh'
-            nginx:
-              - 'deploy/production/nginx.conf'
-            bom_scanner:
-              - 'apps/bom-scanner-worker/**'
-              - '.github/workflows/docker-build.yml'
-
   build-web:
-    needs: check-changes
-    if: github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/') || needs.check-changes.outputs.web == 'true'
     runs-on: ubuntu-latest
     environment: prod
     permissions:
@@ -57,7 +25,6 @@ jobs:
       - uses: docker/setup-buildx-action@v3
 
       - name: Log in to GitHub Container Registry
-        if: github.event_name != 'pull_request'
         uses: docker/login-action@v3
         with:
           registry: ${{ env.REGISTRY }}
@@ -71,12 +38,10 @@ jobs:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           tags: |
             type=ref,event=branch
-            type=ref,event=pr
-            type=raw,value=latest,enable={{is_default_branch}}
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
             type=semver,pattern={{major}}
-            type=sha,prefix=sha-,enable={{is_default_branch}}
+            type=sha,prefix=sha-,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
           flavor: |
             latest=false
 
@@ -101,7 +66,7 @@ jobs:
           context: ./apps/web
           file: ./apps/web/Dockerfile
           platforms: linux/amd64
-          push: ${{ github.event_name != 'pull_request' }}
+          push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           build-args: |
@@ -112,8 +77,6 @@ jobs:
           cache-to: type=gha,mode=max
 
   build-migrator:
-    needs: check-changes
-    if: github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/') || needs.check-changes.outputs.migrations == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -124,7 +87,6 @@ jobs:
       - uses: docker/setup-buildx-action@v3
 
       - name: Log in to GitHub Container Registry
-        if: github.event_name != 'pull_request'
         uses: docker/login-action@v3
         with:
           registry: ${{ env.REGISTRY }}
@@ -138,12 +100,10 @@ jobs:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-migrator
           tags: |
             type=ref,event=branch
-            type=ref,event=pr
-            type=raw,value=latest,enable={{is_default_branch}}
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
             type=semver,pattern={{major}}
-            type=sha,prefix=sha-,enable={{is_default_branch}}
+            type=sha,prefix=sha-,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
           flavor: |
             latest=false
 
@@ -153,15 +113,13 @@ jobs:
           context: .
           file: ./deploy/ci/supabase/Dockerfile.migrator
           platforms: linux/amd64
-          push: ${{ github.event_name != 'pull_request' }}
+          push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
   build-bom-scanner:
-    needs: check-changes
-    if: github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/') || needs.check-changes.outputs.bom_scanner == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -172,7 +130,6 @@ jobs:
       - uses: docker/setup-buildx-action@v3
 
       - name: Log in to GitHub Container Registry
-        if: github.event_name != 'pull_request'
         uses: docker/login-action@v3
         with:
           registry: ${{ env.REGISTRY }}
@@ -186,12 +143,10 @@ jobs:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-bom-scanner
           tags: |
             type=ref,event=branch
-            type=ref,event=pr
-            type=raw,value=latest,enable={{is_default_branch}}
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
             type=semver,pattern={{major}}
-            type=sha,prefix=sha-,enable={{is_default_branch}}
+            type=sha,prefix=sha-,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
           flavor: |
             latest=false
 
@@ -201,15 +156,13 @@ jobs:
           context: ./apps/bom-scanner-worker
           file: ./apps/bom-scanner-worker/Dockerfile
           platforms: linux/amd64
-          push: ${{ github.event_name != 'pull_request' }}
+          push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
   nginx-lint:
-    needs: check-changes
-    if: needs.check-changes.outputs.nginx == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

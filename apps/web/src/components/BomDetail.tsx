@@ -1351,38 +1351,7 @@ export const BomDetail: React.FC = () => {
 
       {!isNew ? (
         <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-5 md:p-6 space-y-4">
-          <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between sm:gap-4">
-            <h3 className="text-lg font-medium text-slate-800 shrink-0">已入库数据</h3>
-            {loadedBomRows.length > 0 ? (
-              <div className="flex flex-col gap-2 text-sm text-slate-700 sm:items-end">
-                <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:justify-end sm:gap-x-5 sm:gap-y-2">
-                  <label className="inline-flex items-center gap-2 cursor-pointer select-none">
-                    <input
-                      type="checkbox"
-                      checked={filterStoredLocalNotVerifiedOk}
-                      onChange={(e) => setFilterStoredLocalNotVerifiedOk(e.target.checked)}
-                      className="h-3.5 w-3.5 rounded border-slate-400 text-indigo-600 focus:ring-indigo-500"
-                    />
-                    <span title="隐藏本地状态为「校验通过」的行">只看本地非校验通过</span>
-                  </label>
-                  <label className="inline-flex items-center gap-2 cursor-pointer select-none">
-                    <input
-                      type="checkbox"
-                      checked={filterStoredExtNotComplete}
-                      onChange={(e) => setFilterStoredExtNotComplete(e.target.checked)}
-                      className="h-3.5 w-3.5 rounded border-slate-400 text-indigo-600 focus:ring-indigo-500"
-                    />
-                    <span title="隐藏 ext 为「已转存（或跳过）」的行">只看 ext 非已完成</span>
-                  </label>
-                </div>
-                {(filterStoredLocalNotVerifiedOk || filterStoredExtNotComplete) ? (
-                  <span className="text-xs text-slate-500">
-                    列表显示 {filteredStoredBomRows.length} / {loadedBomRows.length} 行
-                  </span>
-                ) : null}
-              </div>
-            ) : null}
-          </div>
+          <h3 className="text-lg font-medium text-slate-800">已入库数据</h3>
 
           {loadedBomRows.length > 0 ? (
             <>
@@ -1701,6 +1670,34 @@ export const BomDetail: React.FC = () => {
                       </p>
                     ) : null}
                   </div>
+                ) : null}
+              </div>
+
+              <div className="flex flex-col gap-1.5 items-start text-sm text-slate-700 -mx-0.5">
+                <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center sm:gap-x-5 sm:gap-y-2">
+                  <label className="inline-flex items-center gap-2 cursor-pointer select-none">
+                    <input
+                      type="checkbox"
+                      checked={filterStoredLocalNotVerifiedOk}
+                      onChange={(e) => setFilterStoredLocalNotVerifiedOk(e.target.checked)}
+                      className="h-3.5 w-3.5 rounded border-slate-400 text-indigo-600 focus:ring-indigo-500"
+                    />
+                    <span title="隐藏本地状态为「校验通过」的行">只看本地非校验通过</span>
+                  </label>
+                  <label className="inline-flex items-center gap-2 cursor-pointer select-none">
+                    <input
+                      type="checkbox"
+                      checked={filterStoredExtNotComplete}
+                      onChange={(e) => setFilterStoredExtNotComplete(e.target.checked)}
+                      className="h-3.5 w-3.5 rounded border-slate-400 text-indigo-600 focus:ring-indigo-500"
+                    />
+                    <span title="隐藏 ext 为「已转存（或跳过）」的行">只看 ext 非已完成</span>
+                  </label>
+                </div>
+                {(filterStoredLocalNotVerifiedOk || filterStoredExtNotComplete) ? (
+                  <span className="text-xs text-slate-500">
+                    列表显示 {filteredStoredBomRows.length} / {loadedBomRows.length} 行
+                  </span>
                 ) : null}
               </div>
 

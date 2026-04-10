@@ -144,6 +144,10 @@ export const BomDetail: React.FC = () => {
   const [extCopyRowIds, setExtCopyRowIds] = useState<Set<string>>(() => new Set());
   const [copyCmdToast, setCopyCmdToast] = useState<string | null>(null);
   const [extCopyCmdToast, setExtCopyCmdToast] = useState<string | null>(null);
+  /** 已入库表格：仅显示本地侧非「校验通过」的行 */
+  const [filterStoredLocalNotVerifiedOk, setFilterStoredLocalNotVerifiedOk] = useState(false);
+  /** 已入库表格：仅显示 ext 非「已转存（或跳过）」的行 */
+  const [filterStoredExtNotComplete, setFilterStoredExtNotComplete] = useState(false);
 
   // 编辑模式下：用于控制「覆盖 BOM 清单」按钮可用性（仅 BOM 原始内容是否相对上次入库有改动）
   // 覆盖保存成功后，把 lastSavedPastedText 更新为当前 pastedText；之后 pastedText 未改动则按钮置灰。
@@ -455,6 +459,14 @@ export const BomDetail: React.FC = () => {
     () => extCopyableRowIds.length > 0 && extCopyableRowIds.every((id) => extCopyRowIds.has(id)),
     [extCopyableRowIds, extCopyRowIds],
   );
+
+  const filteredStoredBomRows = useMemo(() => {
+    return loadedBomRows.filter((lr) => {
+      if (filterStoredLocalNotVerifiedOk && lr.status.local === 'verified_ok') return false;
+      if (filterStoredExtNotComplete && lr.status.ext === 'synced_or_skipped') return false;
+      return true;
+    });
+  }, [loadedBomRows, filterStoredLocalNotVerifiedOk, filterStoredExtNotComplete]);
 
   const hasActiveDownloadJob = useMemo(
     () => downloadJobs.some((j) => j.status === 'queued' || j.status === 'running'),
@@ -1339,8 +1351,39 @@ export const BomDetail: React.FC = () => {
 
       {!isNew ? (
         <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-5 md:p-6 space-y-4">
-          <h3 className="text-lg font-medium text-slate-800">已入库数据</h3>
-          
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between sm:gap-4">
+            <h3 className="text-lg font-medium text-slate-800 shrink-0">已入库数据</h3>
+            {loadedBomRows.length > 0 ? (
+              <div className="flex flex-col gap-2 text-sm text-slate-700 sm:items-end">
+                <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:justify-end sm:gap-x-5 sm:gap-y-2">
+                  <label className="inline-flex items-center gap-2 cursor-pointer select-none">
+                    <input
+                      type="checkbox"
+                      checked={filterStoredLocalNotVerifiedOk}
+                      onChange={(e) => setFilterStoredLocalNotVerifiedOk(e.target.checked)}
+                      className="h-3.5 w-3.5 rounded border-slate-400 text-indigo-600 focus:ring-indigo-500"
+                    />
+                    <span title="隐藏本地状态为「校验通过」的行">只看本地非校验通过</span>
+                  </label>
+                  <label className="inline-flex items-center gap-2 cursor-pointer select-none">
+                    <input
+                      type="checkbox"
+                      checked={filterStoredExtNotComplete}
+                      onChange={(e) => setFilterStoredExtNotComplete(e.target.checked)}
+                      className="h-3.5 w-3.5 rounded border-slate-400 text-indigo-600 focus:ring-indigo-500"
+                    />
+                    <span title="隐藏 ext 为「已转存（或跳过）」的行">只看 ext 非已完成</span>
+                  </label>
+                </div>
+                {(filterStoredLocalNotVerifiedOk || filterStoredExtNotComplete) ? (
+                  <span className="text-xs text-slate-500">
+                    列表显示 {filteredStoredBomRows.length} / {loadedBomRows.length} 行
+                  </span>
+                ) : null}
+              </div>
+            ) : null}
+          </div>
+
           {loadedBomRows.length > 0 ? (
             <>
               <div className="rounded-lg border border-indigo-100 bg-indigo-50/90 p-3 md:p-4 space-y-3">
@@ -1661,6 +1704,11 @@ export const BomDetail: React.FC = () => {
                 ) : null}
               </div>
 
+              {filteredStoredBomRows.length === 0 ? (
+                <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+                  当前筛选条件下没有匹配行，请取消勾选筛选或调整条件后查看。
+                </div>
+              ) : (
               <div className="overflow-x-auto border border-gray-200 rounded-lg -mx-0.5">
                 <table className="min-w-full text-xs table-fixed">
                   <thead className="bg-slate-50">
@@ -1754,7 +1802,7 @@ export const BomDetail: React.FC = () => {
                     </tr>
                   </thead>
                   <tbody>
-                    {loadedBomRows.map((lr, i) => {
+                    {filteredStoredBomRows.map((lr, i) => {
                       const r = lr.bom_row;
                       const md5 = extractExpectedMd5FromRow(r, tableKeyMap);
                       const localInfo = md5 != null ? localInfoByMd5.get(md5) : undefined;
@@ -1984,6 +2032,7 @@ export const BomDetail: React.FC = () => {
                   </tbody>
                 </table>
               </div>
+              )}
               <p className="mt-3 text-xs text-slate-500">
                 状态在每次<strong>扫描任务成功结束</strong>后按期望 MD5 与{' '}
                 <code className="bg-slate-100 px-1 rounded">local_file</code> 索引刷新；点此页「刷新」可拉取最新。

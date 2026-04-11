@@ -63,6 +63,8 @@ type BomScannerRaw = Partial<{
   jsonKeyMap: BomJsonKeyMap;
   /** 外部 Artifactory 仓库 key（阶段 5 同步目标） */
   extArtifactoryRepo: string;
+  /** 飞书云盘：上传目标父文件夹的 folder_token（与外部 AF 同目录语义，见系统设置说明） */
+  feishuDriveRootFolderToken?: string;
   workerTuning: Partial<BomWorkerTuning> | Record<string, unknown>;
   runtime: Partial<{
     workerLocalRoot: string;
@@ -79,6 +81,8 @@ export type BomScannerConfig = {
   jsonKeyMap: BomJsonKeyMap;
   /** ext 目标仓库 key，空则无法在网页排队同步任务 */
   extArtifactoryRepo: string;
+  /** 飞书云盘上传父目录 folder_token；空表示尚未配置 */
+  feishuDriveRootFolderToken: string;
   /** 拉取/上传/扫描等间隔，由 worker 每轮读取 */
   workerTuning: BomWorkerTuning;
   /** worker 回报的当前生效本地根目录（仅展示） */
@@ -108,6 +112,7 @@ const defaultConfig: BomScannerConfig = {
   scanIntervalSeconds: 30,
   jsonKeyMap: defaultJsonKeyMap,
   extArtifactoryRepo: '',
+  feishuDriveRootFolderToken: '',
   workerTuning: { ...defaultWorkerTuning },
 };
 
@@ -136,6 +141,8 @@ function mergeConfig(raw: BomScannerRaw | null | undefined): BomScannerConfig {
   return {
     scanIntervalSeconds: resolveScanIntervalSeconds(raw),
     extArtifactoryRepo: typeof raw?.extArtifactoryRepo === 'string' ? raw.extArtifactoryRepo.trim() : '',
+    feishuDriveRootFolderToken:
+      typeof raw?.feishuDriveRootFolderToken === 'string' ? raw.feishuDriveRootFolderToken.trim() : '',
     workerTuning: mergeWorkerTuning(raw?.workerTuning),
     workerLocalRoot: typeof raw?.runtime?.workerLocalRoot === 'string' ? raw.runtime.workerLocalRoot.trim() : undefined,
     workerReportedAt: typeof raw?.runtime?.workerReportedAt === 'string' ? raw.runtime.workerReportedAt : undefined,
@@ -191,6 +198,7 @@ export async function saveBomScannerSettings(config: BomScannerConfig): Promise<
         scanIntervalSeconds: merged.scanIntervalSeconds,
         jsonKeyMap: merged.jsonKeyMap,
         extArtifactoryRepo: merged.extArtifactoryRepo,
+        feishuDriveRootFolderToken: merged.feishuDriveRootFolderToken,
         workerTuning: merged.workerTuning,
       },
     },

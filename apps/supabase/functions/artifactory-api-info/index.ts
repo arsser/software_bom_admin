@@ -39,8 +39,8 @@ export interface ApiInfoResult {
 
 type GetApiInfoBody = {
   urls?: string[]
-  apiKey?: string
-  config?: unknown
+  /** 与表单一致的凭据预览：非空字段覆盖本次测试用配置（不写库）；不传则仅用数据库 artifactory_config */
+  previewConfig?: unknown
 }
 
 type DbArtifactoryConfig = {
@@ -95,6 +95,27 @@ async function readDbArtifactoryConfig(): Promise<DbArtifactoryConfig> {
 
 function hasAnyApiKey(cfg: DbArtifactoryConfig): boolean {
   return Boolean(cfg.artifactoryApiKey || cfg.artifactoryExtApiKey)
+}
+
+/** 以数据库为底，用请求体中的非空字段覆盖，供「先测再存」 */
+function mergeArtifactoryPreview(db: DbArtifactoryConfig, preview: unknown): DbArtifactoryConfig {
+  if (!preview || typeof preview !== 'object' || Array.isArray(preview)) return { ...db }
+  const p = preview as Record<string, unknown>
+  const out: DbArtifactoryConfig = { ...db }
+  for (const key of ['artifactoryBaseUrl', 'artifactoryExtBaseUrl'] as const) {
+    const v = p[key]
+    if (typeof v === 'string' && v.trim()) {
+      const n = normalizeBaseUrl(v)
+      if (n) out[key] = n
+    }
+  }
+  for (const key of ['artifactoryApiKey', 'artifactoryExtApiKey'] as const) {
+    const v = p[key]
+    if (typeof v === 'string' && v.trim()) {
+      out[key] = v.trim()
+    }
+  }
+  return out
 }
 
 function pickHeadersByUrl(cleanUrl: string, cfg: DbArtifactoryConfig): HeadersInit {
@@ -175,12 +196,13 @@ async function getSingleApiInfo(url: string, headers: HeadersInit): Promise<ApiI
 }
 
 async function getApiInfo(dto: GetApiInfoBody): Promise<ApiInfoResult[]> {
-  const { urls } = dto
+  const { urls, previewConfig } = dto
   if (!urls || !Array.isArray(urls)) return []
 
   const dbCfg = await readDbArtifactoryConfig()
-  if (!hasAnyApiKey(dbCfg)) {
-    throw new Error('数据库 artifactory_config 未配置内部/外部 API Key')
+  const cfg = mergeArtifactoryPreview(dbCfg, previewConfig)
+  if (!hasAnyApiKey(cfg)) {
+    throw new Error('缺少 API Key：请在表单填写完整后测试，或先在数据库保存 artifactory_config')
   }
 
   const results = await Promise.all(
@@ -191,7 +213,7 @@ async function getApiInfo(dto: GetApiInfoBody): Promise<ApiInfoResult[]> {
         const u = new URL(cleanUrl)
         u.pathname = u.pathname.replace(/\/+/g, '/')
         cleanUrl = u.toString()
-        const headers = pickHeadersByUrl(cleanUrl, dbCfg)
+        const headers = pickHeadersByUrl(cleanUrl, cfg)
         return await getSingleApiInfo(cleanUrl, headers)
       } catch {
         return await getSingleApiInfo(cleanUrl, {})
@@ -221,12 +243,11 @@ serve(async (req) => {
       })
     }
 
-    // 硬约束：客户端不得通过 body 覆盖凭据，统一从 DB 读取。
-    if (typeof body.apiKey === 'string' || typeof body.config !== 'undefined') {
-      return new Response(JSON.stringify({ error: 'body.apiKey/config 已禁用；凭据仅从数据库读取' }), {
-        status: 400,
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-      })
+    if (typeof (body as { apiKey?: unknown }).apiKey === 'string') {
+      return new Response(
+        JSON.stringify({ error: '已废弃 body.apiKey；请使用 previewConfig 传入与表单一致的凭据预览' }),
+        { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
+      )
     }
 
     if (!body.urls?.length) {

@@ -11,6 +11,9 @@ export type BomRowLocalStatus =
 /** DB: bom_rows.status JSONB 中 status->>'ext' 的取值 */
 export type BomRowExtStatus = 'not_started' | 'synced_or_skipped' | 'error';
 
+/** 飞书云盘扫描写入 status.feishu（无键时视为未扫描） */
+export type BomRowFeishuStatus = 'not_scanned' | 'absent' | 'present' | 'error';
+
 /** 与 public.bom_rows.status（JSONB）一致 */
 export type BomRowStatusJson = {
   local: BomRowLocalStatus;
@@ -19,6 +22,14 @@ export type BomRowStatusJson = {
   local_fetch_error?: string | null;
   /** 外部 Artifactory 查重/同步等说明（与 status.ext 配套） */
   ext_fetch_error?: string | null;
+  /** 飞书侧是否存在预期路径文件（Edge 扫描写入，不经 MD5） */
+  feishu?: BomRowFeishuStatus;
+  feishu_file_token?: string | null;
+  feishu_revision?: string | null;
+  feishu_file_name?: string | null;
+  feishu_size_bytes?: number | null;
+  feishu_scan_error?: string | null;
+  feishu_scanned_at?: string | null;
 };
 
 export const DEFAULT_BOM_ROW_STATUS: BomRowStatusJson = {
@@ -52,6 +63,12 @@ const LOCAL_SET = new Set<string>([
 
 const EXT_SET = new Set<string>(['not_started', 'synced_or_skipped', 'error']);
 
+const FEISHU_SET = new Set<string>(['not_scanned', 'absent', 'present', 'error']);
+
+export function isBomRowFeishuStatus(v: string): v is BomRowFeishuStatus {
+  return FEISHU_SET.has(v);
+}
+
 export function isBomRowLocalStatus(v: string): v is BomRowLocalStatus {
   return LOCAL_SET.has(v);
 }
@@ -73,6 +90,21 @@ export function parseBomRowStatus(raw: unknown): BomRowStatusJson {
         const ef = o.ext_fetch_error;
         if (typeof lf === 'string' && lf.trim()) out.local_fetch_error = lf.trim().slice(0, 1000);
         if (typeof ef === 'string' && ef.trim()) out.ext_fetch_error = ef.trim().slice(0, 1000);
+        const fh = o.feishu;
+        if (typeof fh === 'string' && isBomRowFeishuStatus(fh)) out.feishu = fh;
+        const fts = o.feishu_file_token;
+        if (typeof fts === 'string' && fts.trim()) out.feishu_file_token = fts.trim();
+        const fr = o.feishu_revision;
+        if (typeof fr === 'string' && fr.trim()) out.feishu_revision = fr.trim();
+        const fn = o.feishu_file_name;
+        if (typeof fn === 'string' && fn.trim()) out.feishu_file_name = fn.trim();
+        if (typeof o.feishu_size_bytes === 'number' && Number.isFinite(o.feishu_size_bytes)) {
+          out.feishu_size_bytes = o.feishu_size_bytes;
+        }
+        const fse = o.feishu_scan_error;
+        if (typeof fse === 'string' && fse.trim()) out.feishu_scan_error = fse.trim().slice(0, 1000);
+        const fsa = o.feishu_scanned_at;
+        if (typeof fsa === 'string' && fsa.trim()) out.feishu_scanned_at = fsa.trim();
         return out;
       }
     }
@@ -95,9 +127,20 @@ export const BOM_ROW_EXT_STATUS_LABEL: Record<BomRowExtStatus, string> = {
   error: '异常',
 };
 
+export const BOM_ROW_FEISHU_STATUS_LABEL: Record<BomRowFeishuStatus, string> = {
+  not_scanned: '未扫描',
+  absent: '飞书无文件',
+  present: '飞书已存在',
+  error: '飞书扫描异常',
+};
+
 /** 兼容旧 UI：整行摘要（tooltip） */
 export function formatBomRowStatusTooltip(s: BomRowStatusJson): string {
-  return `本地：${BOM_ROW_LOCAL_STATUS_LABEL[s.local]}（${s.local}）；ext：${BOM_ROW_EXT_STATUS_LABEL[s.ext]}（${s.ext}）`;
+  const feishuPart =
+    s.feishu != null
+      ? `；飞书：${BOM_ROW_FEISHU_STATUS_LABEL[s.feishu]}（${s.feishu}）`
+      : '；飞书：未扫描';
+  return `本地：${BOM_ROW_LOCAL_STATUS_LABEL[s.local]}（${s.local}）；ext：${BOM_ROW_EXT_STATUS_LABEL[s.ext]}（${s.ext}）${feishuPart}`;
 }
 
 /** @deprecated 旧单一枚举，仅用于文档/迁移对照 */

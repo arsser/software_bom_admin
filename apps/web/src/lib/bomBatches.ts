@@ -46,10 +46,12 @@ export async function fetchBomBatches(): Promise<BomBatch[]> {
   }));
 }
 
-export async function fetchBomBatchById(batchId: string): Promise<Pick<BomBatch, 'id' | 'name' | 'productId' | 'headerOrder'> | null> {
+export async function fetchBomBatchById(
+  batchId: string,
+): Promise<Pick<BomBatch, 'id' | 'name' | 'productId' | 'productName' | 'headerOrder'> | null> {
   const { data, error } = await supabase
     .from('bom_batches')
-    .select('id,name,product_id,header_order')
+    .select('id,name,product_id,header_order,products(name)')
     .eq('id', batchId)
     .maybeSingle();
   if (error && error.code !== 'PGRST116') throw error;
@@ -58,6 +60,7 @@ export async function fetchBomBatchById(batchId: string): Promise<Pick<BomBatch,
     id: data.id as string,
     name: (data as any).name as string,
     productId: (data as any).product_id as string,
+    productName: (data as any).products?.name ?? '未知产品',
     headerOrder: Array.isArray((data as any).header_order) ? (((data as any).header_order) as string[]) : [],
   };
 }

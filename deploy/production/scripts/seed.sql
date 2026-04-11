@@ -108,12 +108,17 @@ VALUES
         "remark": ["备注", "note", "remark"]
       },
       "extArtifactoryRepo": "",
+      "feishuDriveRootFolderToken": "",
       "workerTuning": {
         "heartbeatMs": 5000,
         "httpTimeoutMs": 3600000,
         "httpRetries": 5
       }
     }'::jsonb
+  ),
+  (
+    'feishu_config',
+    '{"appId": "", "appSecret": ""}'::jsonb
   ),
   (
     'artifactory_config',

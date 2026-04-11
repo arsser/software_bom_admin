@@ -53,6 +53,27 @@ cd /path/to/software_bom_admin/apps/supabase
 pnpm exec supabase functions serve artifactory-api-info --no-verify-jwt
 ```
 
+本地也可一次拉起多个函数目录（按需增删名称）：
+
+```bash
+pnpm exec supabase functions serve artifactory-api-info bom-feishu-scan feishu-auth-test --no-verify-jwt
+```
+
+**把本仓库里的函数更新到已 link 的 Supabase 项目（云端 / 托管）**：在项目根或 `apps/supabase` 下执行（需已 `supabase login` 且对本仓库执行过 `supabase link`）：
+
+```bash
+cd apps/supabase
+# 单个函数
+pnpm exec supabase functions deploy feishu-auth-test
+pnpm exec supabase functions deploy bom-feishu-scan
+# 或部署全部（以 CLI 实际支持为准，常见为不传名则部署 functions 下全部）
+pnpm exec supabase functions deploy
+```
+
+部署后 Kong 才会路由到对应函数；未部署的函数名在网页里 `invoke` 会得到 **HTTP 404 Function not found**。
+
+**自建 Docker Supabase**（与本仓库 `deploy/production/scripts/sync-edge-functions.sh` 一致）：将 `apps/supabase/functions/` 同步到宿主机 `SUPABASE_DIR/volumes/functions/` 后，在该目录执行 `docker compose up -d functions`（或脚本内已包含的重启步骤）。
+
 ### 1.5 在网页设置中配置 Artifactory
 
 打开“系统设置”页面，填写并保存：
@@ -63,8 +84,8 @@ pnpm exec supabase functions serve artifactory-api-info --no-verify-jwt
 说明：
 
 - `bom-scanner-worker` 下载时从数据库读取 `artifactory_config`。
-- `artifactory-api-info` edge function 查询时也从数据库读取 `artifactory_config`。
-- 硬约束：edge 不接受请求体中的 `apiKey/config` 覆盖（会返回 400）。
+- `artifactory-api-info`：默认合并数据库 `artifactory_config` 与请求体 `previewConfig`（表单预览）后发起 Storage 校验，**不写库**。
+- `feishu-auth-test`：`action` 为 `auth`（默认）时换 tenant token；`action: list_drive` 且带 `folderToken` 时列出云盘该目录**第一页**（凭据规则同上）。**修改后须 deploy / 同步**，否则会 404。
 
 ## 2. 生产部署
 

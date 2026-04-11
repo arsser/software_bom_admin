@@ -35,11 +35,11 @@ export interface ApiInfoResult {
 
 export async function getArtifactoryApiInfo(payload: {
   urls: string[];
-  apiKey?: string;
-  config?: Partial<ArtifactoryConfig>;
+  /** 与表单一致；非空字段在 Edge 内覆盖本次 Storage 请求用配置，不写库 */
+  previewConfig?: Partial<ArtifactoryConfig>;
 }): Promise<ApiInfoResult[]> {
   const { data, error } = await supabase.functions.invoke('artifactory-api-info', {
-    body: payload,
+    body: { urls: payload.urls, previewConfig: payload.previewConfig },
   });
 
   if (error) {

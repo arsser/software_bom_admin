@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { ArrowDown, ArrowUp, Package, Pencil, Plus, RefreshCcw, Trash2 } from 'lucide-react';
+import { ArrowDown, ArrowUp, Package, Pencil, Plus, RefreshCcw, Share2, Trash2 } from 'lucide-react';
 import { deleteBomBatch, fetchBomBatches, type BomBatch } from '../lib/bomBatches';
 import { createProduct, deleteProduct, fetchProducts, moveProduct, type Product, updateProduct } from '../lib/products';
 
@@ -271,7 +271,7 @@ export const BomMaster: React.FC = () => {
                             <td className="px-3 py-2 text-slate-700">{b.rowCount}</td>
                             <td className="px-3 py-2 text-slate-600">{new Date(b.createdAt).toLocaleString()}</td>
                             <td className="px-3 py-2">
-                              <div className="flex items-center justify-end gap-3">
+                              <div className="flex items-center justify-end gap-3 flex-wrap">
                               <button
                                 type="button"
                                 onClick={() => handleDeleteBatch(b)}
@@ -288,6 +288,15 @@ export const BomMaster: React.FC = () => {
                                 className="text-indigo-700 hover:text-indigo-800 text-sm font-medium"
                               >
                                 查看/编辑
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => navigate(`/bom/${b.id}/distribute`)}
+                                className="inline-flex items-center gap-1 text-slate-600 hover:text-slate-900 text-sm font-medium"
+                                title="分发：只读清单、本地/ext/飞书状态与拉取等"
+                              >
+                                <Share2 size={14} />
+                                分发
                               </button>
                               </div>
                             </td>

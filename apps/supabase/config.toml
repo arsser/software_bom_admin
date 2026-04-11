@@ -345,6 +345,12 @@ allow_dynamic_registration = false
 [functions.artifactory-api-info]
 verify_jwt = true
 
+[functions.bom-feishu-scan]
+verify_jwt = true
+
+[functions.feishu-auth-test]
+verify_jwt = true
+
 [edge_runtime]
 enabled = true
 # Supported request policies: `oneshot`, `per_worker`.

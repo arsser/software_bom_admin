@@ -96,7 +96,7 @@ function normalizeBomKeyForMatch(s) {
 }
 
 /** @param {Record<string, unknown>} row @param {string[]} keys */
-function firstNonEmptyByKeysRelaxed(row, keys) {
+export function firstNonEmptyByKeysRelaxed(row, keys) {
   const exact = firstNonEmptyByKeys(row, keys);
   if (exact) return exact;
   if (!row || typeof row !== 'object') return null;
@@ -136,7 +136,7 @@ const DEFAULT_KEY_MAP = {
  * @param {Record<string, unknown>} scannerValue
  * @returns {typeof DEFAULT_KEY_MAP}
  */
-function mergeKeyMap(scannerValue) {
+export function mergeKeyMap(scannerValue) {
   const jm = scannerValue?.jsonKeyMap && typeof scannerValue.jsonKeyMap === 'object' ? scannerValue.jsonKeyMap : {};
   /** @param {string} k @param {string[]} def */
   const arr = (k, def) => {
@@ -165,7 +165,7 @@ function normalizePathSegmentValue(seg) {
 }
 
 /** @param {string} seg */
-function safePathSegment(seg) {
+export function safePathSegment(seg) {
   const t = normalizePathSegmentValue(seg)
     .replace(/[/\\?*:|"<>]/g, '_')
     .replace(/\s+/g, ' ')
@@ -174,7 +174,7 @@ function safePathSegment(seg) {
 }
 
 /** @param {string} name */
-function safeFlatFilename(name) {
+export function safeFlatFilename(name) {
   const base = name && String(name).trim() ? String(name).trim() : 'artifact.bin';
   const cleaned = base.replace(/[/\\?*:|"<>]/g, '_').replace(/\s+/g, ' ');
   return cleaned.slice(0, 220) || 'artifact.bin';
@@ -365,7 +365,7 @@ async function isExtSyncJobCancelRequested(supabase, jobId) {
  * @param {import('@supabase/supabase-js').SupabaseClient} supabase
  * @param {string} md5Lower
  */
-async function findLocalPathForMd5(supabase, md5Lower) {
+export async function findLocalPathForMd5(supabase, md5Lower) {
   const { data, error } = await supabase.from('local_file').select('path').eq('md5', md5Lower).limit(1).maybeSingle();
   if (error) throw error;
   if (data?.path) return data.path;
@@ -527,11 +527,12 @@ export async function executeExtSyncJob(supabase, rootAbs, job, tuning) {
       const diskAbs = path.join(rootAbs, relPathDisk.split('/').join(path.sep));
       const fileName = safeFlatFilename(path.basename(diskAbs));
 
+      const modRaw = firstNonEmptyByKeysRelaxed(bomRow, keyMap.moduleName);
       const groupRaw = firstNonEmptyByKeysRelaxed(bomRow, keyMap.groupSegment);
-      const groupDir = groupRaw ? safePathSegment(groupRaw) : null;
+      const midDir = modRaw ? safePathSegment(modRaw) : groupRaw ? safePathSegment(groupRaw) : null;
       const batchDir = safePathSegment(batchName);
-      // 两级目录：{repo}/{batchName}/{group?}/{fileName}
-      const targetRel = groupDir ? [batchDir, groupDir, fileName].join('/') : [batchDir, fileName].join('/');
+      // 与飞书对账一致：{repo}/{batchName}/{组件或分组?}/{fileName}
+      const targetRel = midDir ? [batchDir, midDir, fileName].join('/') : [batchDir, fileName].join('/');
 
       const targetDl = buildArtifactoryDownloadUrl(rootUrl, extRepo, targetRel);
       log('ext-sync row target', {

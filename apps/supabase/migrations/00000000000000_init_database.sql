@@ -1,54 +1,29 @@
---
--- PostgreSQL database dump
---
 
 
--- Dumped from database version 17.6
--- Dumped by pg_dump version 18.1
 
 SET statement_timeout = 0;
 SET lock_timeout = 0;
 SET idle_in_transaction_session_timeout = 0;
 SET client_encoding = 'UTF8';
 SET standard_conforming_strings = on;
-SELECT pg_catalog.set_config('search_path', 'public,extensions', false);
+SELECT pg_catalog.set_config('search_path', '', false);
 SET check_function_bodies = false;
 SET xmloption = content;
 SET client_min_messages = warning;
 SET row_security = off;
 
-CREATE EXTENSION IF NOT EXISTS pgcrypto;
 
--- 兼容 seed.sql 中对 gen_salt/crypt 的直接调用（不依赖 search_path 包含 extensions）
-CREATE OR REPLACE FUNCTION public.gen_salt(text)
-RETURNS text
-LANGUAGE sql
-IMMUTABLE
-AS $$
-  SELECT extensions.gen_salt($1);
-$$;
-
-CREATE OR REPLACE FUNCTION public.crypt(text, text)
-RETURNS text
-LANGUAGE sql
-IMMUTABLE
-AS $$
-  SELECT extensions.crypt($1, $2);
-$$;
+CREATE SCHEMA IF NOT EXISTS "public";
 
 
---
--- Name: SCHEMA public; Type: COMMENT; Schema: -; Owner: -
---
-
-COMMENT ON SCHEMA public IS 'standard public schema';
+ALTER SCHEMA "public" OWNER TO "pg_database_owner";
 
 
---
--- Name: bom_download_job_status; Type: TYPE; Schema: public; Owner: -
---
+COMMENT ON SCHEMA "public" IS 'standard public schema';
 
-CREATE TYPE public.bom_download_job_status AS ENUM (
+
+
+CREATE TYPE "public"."bom_download_job_status" AS ENUM (
     'queued',
     'running',
     'succeeded',
@@ -57,11 +32,25 @@ CREATE TYPE public.bom_download_job_status AS ENUM (
 );
 
 
---
--- Name: bom_row_status; Type: TYPE; Schema: public; Owner: -
---
+ALTER TYPE "public"."bom_download_job_status" OWNER TO "postgres";
 
-CREATE TYPE public.bom_row_status AS ENUM (
+
+CREATE TYPE "public"."bom_feishu_scan_job_status" AS ENUM (
+    'queued',
+    'running',
+    'succeeded',
+    'failed'
+);
+
+
+ALTER TYPE "public"."bom_feishu_scan_job_status" OWNER TO "postgres";
+
+
+COMMENT ON TYPE "public"."bom_feishu_scan_job_status" IS '飞书目录扫描任务：queued/running/succeeded/failed';
+
+
+
+CREATE TYPE "public"."bom_row_status" AS ENUM (
     'pending',
     'await_manual_download',
     'local_found',
@@ -72,18 +61,14 @@ CREATE TYPE public.bom_row_status AS ENUM (
 );
 
 
---
--- Name: TYPE bom_row_status; Type: COMMENT; Schema: public; Owner: -
---
-
-COMMENT ON TYPE public.bom_row_status IS 'BOM 行业务状态：pending=待处理, await_manual_download=待人工下载, local_found=本地已发现, verified_ok=校验通过, verified_fail=校验失败, synced_or_skipped=已转存或跳过, error=异常';
+ALTER TYPE "public"."bom_row_status" OWNER TO "postgres";
 
 
---
--- Name: bom_scan_job_status; Type: TYPE; Schema: public; Owner: -
---
+COMMENT ON TYPE "public"."bom_row_status" IS 'BOM 行业务状态：pending=待处理, await_manual_download=待人工下载, local_found=本地已发现, verified_ok=校验通过, verified_fail=校验失败, synced_or_skipped=已转存或跳过, error=异常';
 
-CREATE TYPE public.bom_scan_job_status AS ENUM (
+
+
+CREATE TYPE "public"."bom_scan_job_status" AS ENUM (
     'queued',
     'running',
     'succeeded',
@@ -91,12 +76,11 @@ CREATE TYPE public.bom_scan_job_status AS ENUM (
 );
 
 
---
--- Name: bom_batch_product_must_belong_to_user(); Type: FUNCTION; Schema: public; Owner: -
---
+ALTER TYPE "public"."bom_scan_job_status" OWNER TO "postgres";
 
-CREATE FUNCTION public.bom_batch_product_must_belong_to_user() RETURNS trigger
-    LANGUAGE plpgsql
+
+CREATE OR REPLACE FUNCTION "public"."bom_batch_product_must_belong_to_user"() RETURNS "trigger"
+    LANGUAGE "plpgsql"
     AS $$
 DECLARE
   ok BOOLEAN;
@@ -114,13 +98,12 @@ END;
 $$;
 
 
---
--- Name: bom_cancel_download_job(uuid); Type: FUNCTION; Schema: public; Owner: -
---
+ALTER FUNCTION "public"."bom_batch_product_must_belong_to_user"() OWNER TO "postgres";
 
-CREATE FUNCTION public.bom_cancel_download_job(p_job_id uuid) RETURNS boolean
-    LANGUAGE plpgsql SECURITY DEFINER
-    SET search_path TO 'public'
+
+CREATE OR REPLACE FUNCTION "public"."bom_cancel_download_job"("p_job_id" "uuid") RETURNS boolean
+    LANGUAGE "plpgsql" SECURITY DEFINER
+    SET "search_path" TO 'public'
     AS $$
 DECLARE
   v_user UUID := auth.uid();
@@ -222,20 +205,16 @@ END;
 $$;
 
 
---
--- Name: FUNCTION bom_cancel_download_job(p_job_id uuid); Type: COMMENT; Schema: public; Owner: -
---
-
-COMMENT ON FUNCTION public.bom_cancel_download_job(p_job_id uuid) IS '取消排队；running 首次打标 cancel_requested，二次强制 cancelled；failed 关闭为 cancelled；succeeded/cancelled 幂等';
+ALTER FUNCTION "public"."bom_cancel_download_job"("p_job_id" "uuid") OWNER TO "postgres";
 
 
---
--- Name: bom_cancel_ext_sync_job(uuid); Type: FUNCTION; Schema: public; Owner: -
---
+COMMENT ON FUNCTION "public"."bom_cancel_download_job"("p_job_id" "uuid") IS '取消排队；running 首次打标 cancel_requested，二次强制 cancelled；failed 关闭为 cancelled；succeeded/cancelled 幂等';
 
-CREATE FUNCTION public.bom_cancel_ext_sync_job(p_job_id uuid) RETURNS boolean
-    LANGUAGE plpgsql SECURITY DEFINER
-    SET search_path TO 'public'
+
+
+CREATE OR REPLACE FUNCTION "public"."bom_cancel_ext_sync_job"("p_job_id" "uuid") RETURNS boolean
+    LANGUAGE "plpgsql" SECURITY DEFINER
+    SET "search_path" TO 'public'
     AS $$
 DECLARE
   v_user UUID := auth.uid();
@@ -331,20 +310,121 @@ END;
 $$;
 
 
---
--- Name: FUNCTION bom_cancel_ext_sync_job(p_job_id uuid); Type: COMMENT; Schema: public; Owner: -
---
-
-COMMENT ON FUNCTION public.bom_cancel_ext_sync_job(p_job_id uuid) IS '取消排队；running 首次打标 cancel_requested，二次强制 cancelled；failed 关闭为 cancelled；succeeded/cancelled 幂等';
+ALTER FUNCTION "public"."bom_cancel_ext_sync_job"("p_job_id" "uuid") OWNER TO "postgres";
 
 
---
--- Name: bom_claim_download_job(); Type: FUNCTION; Schema: public; Owner: -
---
+COMMENT ON FUNCTION "public"."bom_cancel_ext_sync_job"("p_job_id" "uuid") IS '取消排队；running 首次打标 cancel_requested，二次强制 cancelled；failed 关闭为 cancelled；succeeded/cancelled 幂等';
 
-CREATE FUNCTION public.bom_claim_download_job() RETURNS TABLE(id uuid, batch_id uuid, row_ids uuid[], progress_total integer)
-    LANGUAGE plpgsql SECURITY DEFINER
-    SET search_path TO 'public'
+
+
+CREATE OR REPLACE FUNCTION "public"."bom_cancel_feishu_upload_job"("p_job_id" "uuid") RETURNS boolean
+    LANGUAGE "plpgsql" SECURITY DEFINER
+    SET "search_path" TO 'public'
+    AS $$
+DECLARE
+  v_user UUID := auth.uid();
+BEGIN
+  IF v_user IS NULL THEN
+    RAISE EXCEPTION 'not authenticated';
+  END IF;
+
+  -- queued → cancelled
+  UPDATE bom_feishu_upload_jobs j
+  SET status = 'cancelled'::bom_download_job_status,
+      finished_at = NOW(),
+      last_message = '用户取消排队',
+      updated_at = NOW(),
+      cancel_requested = false,
+      running_row_id = NULL
+  WHERE j.id = p_job_id
+    AND j.status = 'queued'::bom_download_job_status
+    AND EXISTS (
+      SELECT 1 FROM bom_batches b
+      WHERE b.id = j.batch_id AND b.user_id = v_user
+    );
+
+  IF FOUND THEN
+    RETURN TRUE;
+  END IF;
+
+  -- running + cancel_requested already true → 强制 cancelled
+  UPDATE bom_feishu_upload_jobs j
+  SET status = 'cancelled'::bom_download_job_status,
+      finished_at = NOW(),
+      last_message = COALESCE(j.last_message, '') || '（用户强制取消）',
+      updated_at = NOW(),
+      cancel_requested = false,
+      running_row_id = NULL
+  WHERE j.id = p_job_id
+    AND j.status = 'running'::bom_download_job_status
+    AND j.cancel_requested = true
+    AND EXISTS (
+      SELECT 1 FROM bom_batches b
+      WHERE b.id = j.batch_id AND b.user_id = v_user
+    );
+
+  IF FOUND THEN
+    RETURN TRUE;
+  END IF;
+
+  -- running + cancel_requested=false → 首次请求取消
+  UPDATE bom_feishu_upload_jobs j
+  SET cancel_requested = true,
+      updated_at = NOW()
+  WHERE j.id = p_job_id
+    AND j.status = 'running'::bom_download_job_status
+    AND j.cancel_requested = false
+    AND EXISTS (
+      SELECT 1 FROM bom_batches b
+      WHERE b.id = j.batch_id AND b.user_id = v_user
+    );
+
+  IF FOUND THEN
+    RETURN TRUE;
+  END IF;
+
+  -- failed → cancelled
+  UPDATE bom_feishu_upload_jobs j
+  SET status = 'cancelled'::bom_download_job_status,
+      updated_at = NOW(),
+      cancel_requested = false,
+      running_row_id = NULL
+  WHERE j.id = p_job_id
+    AND j.status = 'failed'::bom_download_job_status
+    AND EXISTS (
+      SELECT 1 FROM bom_batches b
+      WHERE b.id = j.batch_id AND b.user_id = v_user
+    );
+
+  IF FOUND THEN
+    RETURN TRUE;
+  END IF;
+
+  -- succeeded / cancelled → 幂等 true
+  RETURN EXISTS (
+    SELECT 1
+    FROM bom_feishu_upload_jobs j
+    WHERE j.id = p_job_id
+      AND j.status IN ('succeeded'::bom_download_job_status, 'cancelled'::bom_download_job_status)
+      AND EXISTS (
+        SELECT 1 FROM bom_batches b
+        WHERE b.id = j.batch_id AND b.user_id = v_user
+      )
+  );
+END;
+$$;
+
+
+ALTER FUNCTION "public"."bom_cancel_feishu_upload_job"("p_job_id" "uuid") OWNER TO "postgres";
+
+
+COMMENT ON FUNCTION "public"."bom_cancel_feishu_upload_job"("p_job_id" "uuid") IS '取消排队；running 首次打标 cancel_requested，二次强制 cancelled；failed 关闭为 cancelled；succeeded/cancelled 幂等';
+
+
+
+CREATE OR REPLACE FUNCTION "public"."bom_claim_download_job"() RETURNS TABLE("id" "uuid", "batch_id" "uuid", "row_ids" "uuid"[], "progress_total" integer, "pull_url_source" "text")
+    LANGUAGE "plpgsql" SECURITY DEFINER
+    SET "search_path" TO 'public'
     AS $$
 DECLARE
   picked UUID;
@@ -369,27 +449,23 @@ BEGIN
   WHERE j.id = picked;
 
   RETURN QUERY
-  SELECT j.id, j.batch_id, j.row_ids, j.progress_total
+  SELECT j.id, j.batch_id, j.row_ids, j.progress_total, j.pull_url_source
   FROM bom_download_jobs j
   WHERE j.id = picked;
 END;
 $$;
 
 
---
--- Name: FUNCTION bom_claim_download_job(); Type: COMMENT; Schema: public; Owner: -
---
-
-COMMENT ON FUNCTION public.bom_claim_download_job() IS 'worker 抢占一条排队中的拉取任务（service_role）；写入 started_at/heartbeat_at';
+ALTER FUNCTION "public"."bom_claim_download_job"() OWNER TO "postgres";
 
 
---
--- Name: bom_claim_ext_sync_job(); Type: FUNCTION; Schema: public; Owner: -
---
+COMMENT ON FUNCTION "public"."bom_claim_download_job"() IS 'worker 抢占一条排队中的拉取任务；返回 pull_url_source 供选择 RPC';
 
-CREATE FUNCTION public.bom_claim_ext_sync_job() RETURNS TABLE(id uuid, batch_id uuid, row_ids uuid[], progress_total integer)
-    LANGUAGE plpgsql SECURITY DEFINER
-    SET search_path TO 'public'
+
+
+CREATE OR REPLACE FUNCTION "public"."bom_claim_ext_sync_job"() RETURNS TABLE("id" "uuid", "batch_id" "uuid", "row_ids" "uuid"[], "progress_total" integer)
+    LANGUAGE "plpgsql" SECURITY DEFINER
+    SET "search_path" TO 'public'
     AS $$
 DECLARE
   picked UUID;
@@ -421,13 +497,53 @@ END;
 $$;
 
 
---
--- Name: bom_dashboard_stats(); Type: FUNCTION; Schema: public; Owner: -
---
+ALTER FUNCTION "public"."bom_claim_ext_sync_job"() OWNER TO "postgres";
 
-CREATE FUNCTION public.bom_dashboard_stats() RETURNS jsonb
-    LANGUAGE sql STABLE
-    SET search_path TO 'public'
+
+CREATE OR REPLACE FUNCTION "public"."bom_claim_feishu_upload_job"() RETURNS TABLE("id" "uuid", "batch_id" "uuid", "row_ids" "uuid"[], "progress_total" integer)
+    LANGUAGE "plpgsql" SECURITY DEFINER
+    SET "search_path" TO 'public'
+    AS $$
+DECLARE
+  picked UUID;
+BEGIN
+  SELECT j2.id
+  INTO picked
+  FROM public.bom_feishu_upload_jobs j2
+  WHERE j2.status = 'queued'::public.bom_download_job_status
+  ORDER BY j2.created_at ASC
+  LIMIT 1
+  FOR UPDATE SKIP LOCKED;
+
+  IF picked IS NULL THEN
+    RETURN;
+  END IF;
+
+  UPDATE public.bom_feishu_upload_jobs j
+  SET status = 'running'::public.bom_download_job_status,
+      updated_at = NOW(),
+      started_at = COALESCE(j.started_at, NOW()),
+      heartbeat_at = NOW()
+  WHERE j.id = picked;
+
+  RETURN QUERY
+  SELECT j.id, j.batch_id, j.row_ids, j.progress_total
+  FROM public.bom_feishu_upload_jobs j
+  WHERE j.id = picked;
+END;
+$$;
+
+
+ALTER FUNCTION "public"."bom_claim_feishu_upload_job"() OWNER TO "postgres";
+
+
+COMMENT ON FUNCTION "public"."bom_claim_feishu_upload_job"() IS 'worker 抢占一条排队中的飞书上传任务（service_role）';
+
+
+
+CREATE OR REPLACE FUNCTION "public"."bom_dashboard_stats"() RETURNS "jsonb"
+    LANGUAGE "sql" STABLE
+    SET "search_path" TO 'public'
     AS $$
   SELECT jsonb_build_object(
     'bom_batch_count', (SELECT count(*)::int FROM bom_batches),
@@ -449,19 +565,15 @@ CREATE FUNCTION public.bom_dashboard_stats() RETURNS jsonb
 $$;
 
 
---
--- Name: FUNCTION bom_dashboard_stats(); Type: COMMENT; Schema: public; Owner: -
---
-
-COMMENT ON FUNCTION public.bom_dashboard_stats() IS 'BOM 仪表盘：批次/行/本地索引/ext 完成行等汇总';
+ALTER FUNCTION "public"."bom_dashboard_stats"() OWNER TO "postgres";
 
 
---
--- Name: bom_extract_download_url(jsonb); Type: FUNCTION; Schema: public; Owner: -
---
+COMMENT ON FUNCTION "public"."bom_dashboard_stats"() IS 'BOM 仪表盘：批次/行/本地索引/ext 完成行等汇总';
 
-CREATE FUNCTION public.bom_extract_download_url(p_row jsonb) RETURNS text
-    LANGUAGE plpgsql STABLE
+
+
+CREATE OR REPLACE FUNCTION "public"."bom_extract_download_url"("p_row" "jsonb") RETURNS "text"
+    LANGUAGE "plpgsql" STABLE
     AS $$
 DECLARE
   cfg JSONB;
@@ -491,19 +603,15 @@ END;
 $$;
 
 
---
--- Name: FUNCTION bom_extract_download_url(p_row jsonb); Type: COMMENT; Schema: public; Owner: -
---
-
-COMMENT ON FUNCTION public.bom_extract_download_url(p_row jsonb) IS '按 bom_scanner.jsonKeyMap.downloadUrl 从 BOM 行提取下载路径/URL';
+ALTER FUNCTION "public"."bom_extract_download_url"("p_row" "jsonb") OWNER TO "postgres";
 
 
---
--- Name: bom_extract_expected_md5(jsonb); Type: FUNCTION; Schema: public; Owner: -
---
+COMMENT ON FUNCTION "public"."bom_extract_download_url"("p_row" "jsonb") IS '按 bom_scanner.jsonKeyMap.downloadUrl 从 BOM 行提取下载路径/URL';
 
-CREATE FUNCTION public.bom_extract_expected_md5(p_row jsonb) RETURNS text
-    LANGUAGE plpgsql STABLE
+
+
+CREATE OR REPLACE FUNCTION "public"."bom_extract_expected_md5"("p_row" "jsonb") RETURNS "text"
+    LANGUAGE "plpgsql" STABLE
     AS $$
 DECLARE
   cfg JSONB;
@@ -533,19 +641,15 @@ END;
 $$;
 
 
---
--- Name: FUNCTION bom_extract_expected_md5(p_row jsonb); Type: COMMENT; Schema: public; Owner: -
---
-
-COMMENT ON FUNCTION public.bom_extract_expected_md5(p_row jsonb) IS '按 bom_scanner.jsonKeyMap.expectedMd5 从 BOM 行提取期望 MD5';
+ALTER FUNCTION "public"."bom_extract_expected_md5"("p_row" "jsonb") OWNER TO "postgres";
 
 
---
--- Name: bom_extract_ext_url(jsonb); Type: FUNCTION; Schema: public; Owner: -
---
+COMMENT ON FUNCTION "public"."bom_extract_expected_md5"("p_row" "jsonb") IS '按 bom_scanner.jsonKeyMap.expectedMd5 从 BOM 行提取期望 MD5';
 
-CREATE FUNCTION public.bom_extract_ext_url(p_row jsonb) RETURNS text
-    LANGUAGE plpgsql STABLE
+
+
+CREATE OR REPLACE FUNCTION "public"."bom_extract_ext_url"("p_row" "jsonb") RETURNS "text"
+    LANGUAGE "plpgsql" STABLE
     AS $$
 DECLARE
   cfg JSONB;
@@ -575,20 +679,16 @@ END;
 $$;
 
 
---
--- Name: FUNCTION bom_extract_ext_url(p_row jsonb); Type: COMMENT; Schema: public; Owner: -
---
-
-COMMENT ON FUNCTION public.bom_extract_ext_url(p_row jsonb) IS '按 bom_scanner.jsonKeyMap.extUrl 从 BOM 行提取 ext 转存 URI';
+ALTER FUNCTION "public"."bom_extract_ext_url"("p_row" "jsonb") OWNER TO "postgres";
 
 
---
--- Name: bom_fail_stale_download_jobs(integer); Type: FUNCTION; Schema: public; Owner: -
---
+COMMENT ON FUNCTION "public"."bom_extract_ext_url"("p_row" "jsonb") IS '按 bom_scanner.jsonKeyMap.extUrl 从 BOM 行提取 ext 转存 URI';
 
-CREATE FUNCTION public.bom_fail_stale_download_jobs(p_stale_seconds integer DEFAULT 900) RETURNS integer
-    LANGUAGE plpgsql SECURITY DEFINER
-    SET search_path TO 'public'
+
+
+CREATE OR REPLACE FUNCTION "public"."bom_fail_stale_download_jobs"("p_stale_seconds" integer DEFAULT 900) RETURNS integer
+    LANGUAGE "plpgsql" SECURITY DEFINER
+    SET "search_path" TO 'public'
     AS $$
 DECLARE
   n INTEGER := 0;
@@ -615,20 +715,16 @@ END;
 $$;
 
 
---
--- Name: FUNCTION bom_fail_stale_download_jobs(p_stale_seconds integer); Type: COMMENT; Schema: public; Owner: -
---
-
-COMMENT ON FUNCTION public.bom_fail_stale_download_jobs(p_stale_seconds integer) IS '将 running 且心跳过期的下载任务标记为 failed（service_role）';
+ALTER FUNCTION "public"."bom_fail_stale_download_jobs"("p_stale_seconds" integer) OWNER TO "postgres";
 
 
---
--- Name: bom_fail_stale_ext_sync_jobs(integer); Type: FUNCTION; Schema: public; Owner: -
---
+COMMENT ON FUNCTION "public"."bom_fail_stale_download_jobs"("p_stale_seconds" integer) IS '将 running 且心跳过期的下载任务标记为 failed（service_role）';
 
-CREATE FUNCTION public.bom_fail_stale_ext_sync_jobs(p_stale_seconds integer DEFAULT 900) RETURNS integer
-    LANGUAGE plpgsql SECURITY DEFINER
-    SET search_path TO 'public'
+
+
+CREATE OR REPLACE FUNCTION "public"."bom_fail_stale_ext_sync_jobs"("p_stale_seconds" integer DEFAULT 900) RETURNS integer
+    LANGUAGE "plpgsql" SECURITY DEFINER
+    SET "search_path" TO 'public'
     AS $$
 DECLARE
   n INTEGER := 0;
@@ -654,13 +750,43 @@ END;
 $$;
 
 
---
--- Name: bom_fail_stale_scan_jobs(integer); Type: FUNCTION; Schema: public; Owner: -
---
+ALTER FUNCTION "public"."bom_fail_stale_ext_sync_jobs"("p_stale_seconds" integer) OWNER TO "postgres";
 
-CREATE FUNCTION public.bom_fail_stale_scan_jobs(p_stale_seconds integer DEFAULT 7200) RETURNS integer
-    LANGUAGE plpgsql SECURITY DEFINER
-    SET search_path TO 'public'
+
+CREATE OR REPLACE FUNCTION "public"."bom_fail_stale_feishu_upload_jobs"("p_stale_seconds" integer DEFAULT 900) RETURNS integer
+    LANGUAGE "plpgsql" SECURITY DEFINER
+    SET "search_path" TO 'public'
+    AS $$
+DECLARE
+  n INTEGER := 0;
+  v_cutoff TIMESTAMPTZ;
+BEGIN
+  IF p_stale_seconds IS NULL OR p_stale_seconds < 60 THEN
+    p_stale_seconds := 900;
+  END IF;
+  v_cutoff := NOW() - (p_stale_seconds::text || ' seconds')::interval;
+
+  UPDATE public.bom_feishu_upload_jobs j
+  SET status = 'failed'::public.bom_download_job_status,
+      finished_at = NOW(),
+      last_message = 'worker 心跳超时（可能进程崩溃或网络中断）',
+      updated_at = NOW(),
+      running_row_id = NULL
+  WHERE j.status = 'running'::public.bom_download_job_status
+    AND COALESCE(j.heartbeat_at, j.updated_at, j.started_at) < v_cutoff;
+
+  GET DIAGNOSTICS n = ROW_COUNT;
+  RETURN n;
+END;
+$$;
+
+
+ALTER FUNCTION "public"."bom_fail_stale_feishu_upload_jobs"("p_stale_seconds" integer) OWNER TO "postgres";
+
+
+CREATE OR REPLACE FUNCTION "public"."bom_fail_stale_scan_jobs"("p_stale_seconds" integer DEFAULT 7200) RETURNS integer
+    LANGUAGE "plpgsql" SECURITY DEFINER
+    SET "search_path" TO 'public'
     AS $$
 DECLARE
   n INTEGER := 0;
@@ -686,19 +812,15 @@ END;
 $$;
 
 
---
--- Name: FUNCTION bom_fail_stale_scan_jobs(p_stale_seconds integer); Type: COMMENT; Schema: public; Owner: -
---
-
-COMMENT ON FUNCTION public.bom_fail_stale_scan_jobs(p_stale_seconds integer) IS '将 running 且 started_at 过久未结束的扫描任务标记为 failed（service_role），解除调度阻塞';
+ALTER FUNCTION "public"."bom_fail_stale_scan_jobs"("p_stale_seconds" integer) OWNER TO "postgres";
 
 
---
--- Name: bom_file_basename(text); Type: FUNCTION; Schema: public; Owner: -
---
+COMMENT ON FUNCTION "public"."bom_fail_stale_scan_jobs"("p_stale_seconds" integer) IS '将 running 且 started_at 过久未结束的扫描任务标记为 failed（service_role），解除调度阻塞';
 
-CREATE FUNCTION public.bom_file_basename(p_path text) RETURNS text
-    LANGUAGE plpgsql IMMUTABLE
+
+
+CREATE OR REPLACE FUNCTION "public"."bom_file_basename"("p_path" "text") RETURNS "text"
+    LANGUAGE "plpgsql" IMMUTABLE
     AS $$
 BEGIN
   IF p_path IS NULL OR BTRIM(p_path) = '' THEN
@@ -709,20 +831,16 @@ END;
 $$;
 
 
---
--- Name: FUNCTION bom_file_basename(p_path text); Type: COMMENT; Schema: public; Owner: -
---
-
-COMMENT ON FUNCTION public.bom_file_basename(p_path text) IS '取路径最后一段（小写），用于与下载 URL 的文件名片段比对';
+ALTER FUNCTION "public"."bom_file_basename"("p_path" "text") OWNER TO "postgres";
 
 
---
--- Name: bom_finalize_scan(uuid, boolean, integer, integer, integer, text, boolean); Type: FUNCTION; Schema: public; Owner: -
---
+COMMENT ON FUNCTION "public"."bom_file_basename"("p_path" "text") IS '取路径最后一段（小写），用于与下载 URL 的文件名片段比对';
 
-CREATE FUNCTION public.bom_finalize_scan(p_job_id uuid, p_success boolean DEFAULT true, p_files_seen integer DEFAULT 0, p_files_md5_updated integer DEFAULT 0, p_files_removed integer DEFAULT 0, p_message text DEFAULT NULL::text, p_prune_missing boolean DEFAULT true) RETURNS TABLE(removed_count integer, status_updates integer)
-    LANGUAGE plpgsql SECURITY DEFINER
-    SET search_path TO 'public'
+
+
+CREATE OR REPLACE FUNCTION "public"."bom_finalize_scan"("p_job_id" "uuid", "p_success" boolean DEFAULT true, "p_files_seen" integer DEFAULT 0, "p_files_md5_updated" integer DEFAULT 0, "p_files_removed" integer DEFAULT 0, "p_message" "text" DEFAULT NULL::"text", "p_prune_missing" boolean DEFAULT true) RETURNS TABLE("removed_count" integer, "status_updates" integer)
+    LANGUAGE "plpgsql" SECURITY DEFINER
+    SET "search_path" TO 'public'
     AS $$
 DECLARE
   removed_n INTEGER := 0;
@@ -753,19 +871,15 @@ END;
 $$;
 
 
---
--- Name: FUNCTION bom_finalize_scan(p_job_id uuid, p_success boolean, p_files_seen integer, p_files_md5_updated integer, p_files_removed integer, p_message text, p_prune_missing boolean); Type: COMMENT; Schema: public; Owner: -
---
-
-COMMENT ON FUNCTION public.bom_finalize_scan(p_job_id uuid, p_success boolean, p_files_seen integer, p_files_md5_updated integer, p_files_removed integer, p_message text, p_prune_missing boolean) IS '结束扫描：prune 仅针对曾挂过 scan_job 的索引行；last_seen_scan_job_id 为 NULL 的（网页下载直写）保留至磁盘 walk 覆盖';
+ALTER FUNCTION "public"."bom_finalize_scan"("p_job_id" "uuid", "p_success" boolean, "p_files_seen" integer, "p_files_md5_updated" integer, "p_files_removed" integer, "p_message" "text", "p_prune_missing" boolean) OWNER TO "postgres";
 
 
---
--- Name: bom_mark_scan_started(uuid, text); Type: FUNCTION; Schema: public; Owner: -
---
+COMMENT ON FUNCTION "public"."bom_finalize_scan"("p_job_id" "uuid", "p_success" boolean, "p_files_seen" integer, "p_files_md5_updated" integer, "p_files_removed" integer, "p_message" "text", "p_prune_missing" boolean) IS '结束扫描：prune 仅针对曾挂过 scan_job 的索引行；last_seen_scan_job_id 为 NULL 的（网页下载直写）保留至磁盘 walk 覆盖';
 
-CREATE FUNCTION public.bom_mark_scan_started(p_job_id uuid, p_message text DEFAULT NULL::text) RETURNS boolean
-    LANGUAGE plpgsql SECURITY DEFINER
+
+
+CREATE OR REPLACE FUNCTION "public"."bom_mark_scan_started"("p_job_id" "uuid", "p_message" "text" DEFAULT NULL::"text") RETURNS boolean
+    LANGUAGE "plpgsql" SECURITY DEFINER
     AS $$
 BEGIN
   UPDATE bom_scan_jobs
@@ -779,13 +893,12 @@ END;
 $$;
 
 
---
--- Name: bom_refresh_local_found_statuses(); Type: FUNCTION; Schema: public; Owner: -
---
+ALTER FUNCTION "public"."bom_mark_scan_started"("p_job_id" "uuid", "p_message" "text") OWNER TO "postgres";
 
-CREATE FUNCTION public.bom_refresh_local_found_statuses() RETURNS integer
-    LANGUAGE plpgsql SECURITY DEFINER
-    SET search_path TO 'public'
+
+CREATE OR REPLACE FUNCTION "public"."bom_refresh_local_found_statuses"() RETURNS integer
+    LANGUAGE "plpgsql" SECURITY DEFINER
+    SET "search_path" TO 'public'
     AS $_$
 DECLARE
   n INTEGER := 0;
@@ -876,20 +989,16 @@ END;
 $_$;
 
 
---
--- Name: FUNCTION bom_refresh_local_found_statuses(); Type: COMMENT; Schema: public; Owner: -
---
-
-COMMENT ON FUNCTION public.bom_refresh_local_found_statuses() IS '扫描结束后仅更新 status.local；不修改 ext=synced_or_skipped；local_fetch_error 在本地终态时清除';
+ALTER FUNCTION "public"."bom_refresh_local_found_statuses"() OWNER TO "postgres";
 
 
---
--- Name: bom_refresh_local_found_statuses_for_batch(uuid); Type: FUNCTION; Schema: public; Owner: -
---
+COMMENT ON FUNCTION "public"."bom_refresh_local_found_statuses"() IS '扫描结束后仅更新 status.local；不修改 ext=synced_or_skipped；local_fetch_error 在本地终态时清除';
 
-CREATE FUNCTION public.bom_refresh_local_found_statuses_for_batch(p_batch_id uuid) RETURNS integer
-    LANGUAGE plpgsql SECURITY DEFINER
-    SET search_path TO 'public'
+
+
+CREATE OR REPLACE FUNCTION "public"."bom_refresh_local_found_statuses_for_batch"("p_batch_id" "uuid") RETURNS integer
+    LANGUAGE "plpgsql" SECURITY DEFINER
+    SET "search_path" TO 'public'
     AS $_$
 DECLARE
   n INTEGER := 0;
@@ -991,20 +1100,118 @@ END;
 $_$;
 
 
---
--- Name: FUNCTION bom_refresh_local_found_statuses_for_batch(p_batch_id uuid); Type: COMMENT; Schema: public; Owner: -
---
-
-COMMENT ON FUNCTION public.bom_refresh_local_found_statuses_for_batch(p_batch_id uuid) IS '按 local_file 重算该批次 status.local（跳过 ext=synced_or_skipped）；local_fetch_error 在本地终态时清除';
+ALTER FUNCTION "public"."bom_refresh_local_found_statuses_for_batch"("p_batch_id" "uuid") OWNER TO "postgres";
 
 
---
--- Name: bom_request_download(uuid, uuid[]); Type: FUNCTION; Schema: public; Owner: -
---
+COMMENT ON FUNCTION "public"."bom_refresh_local_found_statuses_for_batch"("p_batch_id" "uuid") IS '按 local_file 重算该批次 status.local（跳过 ext=synced_or_skipped）；local_fetch_error 在本地终态时清除';
 
-CREATE FUNCTION public.bom_request_download(p_batch_id uuid, p_row_ids uuid[] DEFAULT NULL::uuid[]) RETURNS uuid
-    LANGUAGE plpgsql SECURITY DEFINER
-    SET search_path TO 'public'
+
+
+CREATE OR REPLACE FUNCTION "public"."bom_request_distribute_ext_pull"("p_batch_id" "uuid", "p_row_ids" "uuid"[] DEFAULT NULL::"uuid"[]) RETURNS "uuid"
+    LANGUAGE "plpgsql" SECURITY DEFINER
+    SET "search_path" TO 'public'
+    AS $_$
+DECLARE
+  v_user UUID := auth.uid();
+  v_job UUID;
+  v_ids UUID[];
+BEGIN
+  IF v_user IS NULL THEN
+    RAISE EXCEPTION 'not authenticated';
+  END IF;
+
+  IF NOT EXISTS (SELECT 1 FROM bom_batches b WHERE b.id = p_batch_id AND b.user_id = v_user) THEN
+    RAISE EXCEPTION 'forbidden';
+  END IF;
+
+  IF p_row_ids IS NOT NULL AND cardinality(p_row_ids) > 0 THEN
+    SELECT COALESCE(array_agg(s.id ORDER BY s.ord), ARRAY[]::uuid[])
+    INTO v_ids
+    FROM (
+      SELECT br.id, k.ord
+      FROM unnest(p_row_ids) WITH ORDINALITY AS k(rid, ord)
+      JOIN bom_rows br ON br.id = k.rid AND br.batch_id = p_batch_id
+      WHERE bom_url_looks_like_it_artifactory(bom_extract_ext_url(br.bom_row))
+        AND NULLIF(BTRIM(bom_extract_ext_url(br.bom_row)), '') ~ '^https?://'
+        AND (
+          bom_extract_expected_md5(br.bom_row) IS NULL
+          OR NOT EXISTS (
+            SELECT 1 FROM local_file lf
+            WHERE lf.md5 IS NOT NULL AND lf.md5 ~ '^[a-f0-9]{32}$'
+              AND LOWER(lf.md5) = bom_extract_expected_md5(br.bom_row)
+          )
+        )
+        AND (
+          (br.status->>'local') IN ('pending', 'error')
+          OR (
+            (br.status->>'local') IN ('verified_ok', 'verified_fail', 'local_found')
+            AND bom_extract_expected_md5(br.bom_row) ~ '^[a-f0-9]{32}$'
+          )
+        )
+    ) s;
+  ELSE
+    SELECT COALESCE(array_agg(br.id ORDER BY br.created_at), ARRAY[]::uuid[])
+    INTO v_ids
+    FROM bom_rows br
+    WHERE br.batch_id = p_batch_id
+      AND bom_url_looks_like_it_artifactory(bom_extract_ext_url(br.bom_row))
+      AND NULLIF(BTRIM(bom_extract_ext_url(br.bom_row)), '') ~ '^https?://'
+      AND (
+        bom_extract_expected_md5(br.bom_row) IS NULL
+        OR NOT EXISTS (
+          SELECT 1 FROM local_file lf
+          WHERE lf.md5 IS NOT NULL AND lf.md5 ~ '^[a-f0-9]{32}$'
+            AND LOWER(lf.md5) = bom_extract_expected_md5(br.bom_row)
+        )
+      )
+      AND (
+        (br.status->>'local') IN ('pending', 'error')
+        OR (
+          (br.status->>'local') IN ('verified_ok', 'verified_fail', 'local_found')
+          AND bom_extract_expected_md5(br.bom_row) ~ '^[a-f0-9]{32}$'
+        )
+      );
+  END IF;
+
+  IF v_ids IS NULL OR cardinality(v_ids) = 0 THEN
+    RAISE EXCEPTION 'no eligible rows';
+  END IF;
+
+  INSERT INTO bom_download_jobs (
+    batch_id,
+    user_id,
+    row_ids,
+    status,
+    progress_total,
+    trigger_source,
+    pull_url_source
+  )
+  VALUES (
+    p_batch_id,
+    v_user,
+    v_ids,
+    'queued',
+    cardinality(v_ids),
+    'distribute_web',
+    'ext_only'
+  )
+  RETURNING id INTO v_job;
+
+  RETURN v_job;
+END;
+$_$;
+
+
+ALTER FUNCTION "public"."bom_request_distribute_ext_pull"("p_batch_id" "uuid", "p_row_ids" "uuid"[]) OWNER TO "postgres";
+
+
+COMMENT ON FUNCTION "public"."bom_request_distribute_ext_pull"("p_batch_id" "uuid", "p_row_ids" "uuid"[]) IS 'BOM 分发页：仅从 ext 转存地址拉取至本地（worker 使用 bom_row_distribute_ext_pull_targets）';
+
+
+
+CREATE OR REPLACE FUNCTION "public"."bom_request_download"("p_batch_id" "uuid", "p_row_ids" "uuid"[] DEFAULT NULL::"uuid"[]) RETURNS "uuid"
+    LANGUAGE "plpgsql" SECURITY DEFINER
+    SET "search_path" TO 'public'
     AS $_$
 DECLARE
   v_user UUID := auth.uid();
@@ -1081,20 +1288,16 @@ END;
 $_$;
 
 
---
--- Name: FUNCTION bom_request_download(p_batch_id uuid, p_row_ids uuid[]); Type: COMMENT; Schema: public; Owner: -
---
-
-COMMENT ON FUNCTION public.bom_request_download(p_batch_id uuid, p_row_ids uuid[]) IS '网页触发 it 拉取：p_row_ids 为空则当前批次全部 eligible 行';
+ALTER FUNCTION "public"."bom_request_download"("p_batch_id" "uuid", "p_row_ids" "uuid"[]) OWNER TO "postgres";
 
 
---
--- Name: bom_request_ext_sync(uuid, uuid[]); Type: FUNCTION; Schema: public; Owner: -
---
+COMMENT ON FUNCTION "public"."bom_request_download"("p_batch_id" "uuid", "p_row_ids" "uuid"[]) IS '网页触发 it 拉取：p_row_ids 为空则当前批次全部 eligible 行（仅 downloadUrl）';
 
-CREATE FUNCTION public.bom_request_ext_sync(p_batch_id uuid, p_row_ids uuid[] DEFAULT NULL::uuid[]) RETURNS uuid
-    LANGUAGE plpgsql SECURITY DEFINER
-    SET search_path TO 'public'
+
+
+CREATE OR REPLACE FUNCTION "public"."bom_request_ext_sync"("p_batch_id" "uuid", "p_row_ids" "uuid"[] DEFAULT NULL::"uuid"[]) RETURNS "uuid"
+    LANGUAGE "plpgsql" SECURITY DEFINER
+    SET "search_path" TO 'public'
     AS $$
 DECLARE
   v_user UUID := auth.uid();
@@ -1147,19 +1350,71 @@ END;
 $$;
 
 
---
--- Name: FUNCTION bom_request_ext_sync(p_batch_id uuid, p_row_ids uuid[]); Type: COMMENT; Schema: public; Owner: -
---
-
-COMMENT ON FUNCTION public.bom_request_ext_sync(p_batch_id uuid, p_row_ids uuid[]) IS '网页触发 ext 同步：p_row_ids 为空则当前批次全部「校验通过且尚无 ext_url」行';
+ALTER FUNCTION "public"."bom_request_ext_sync"("p_batch_id" "uuid", "p_row_ids" "uuid"[]) OWNER TO "postgres";
 
 
---
--- Name: bom_request_scan(text); Type: FUNCTION; Schema: public; Owner: -
---
+COMMENT ON FUNCTION "public"."bom_request_ext_sync"("p_batch_id" "uuid", "p_row_ids" "uuid"[]) IS '网页触发 ext 同步：p_row_ids 为空则当前批次全部「校验通过且尚无 ext_url」行';
 
-CREATE FUNCTION public.bom_request_scan(p_trigger_source text DEFAULT 'manual'::text) RETURNS uuid
-    LANGUAGE plpgsql SECURITY DEFINER
+
+
+CREATE OR REPLACE FUNCTION "public"."bom_request_feishu_upload"("p_batch_id" "uuid", "p_row_ids" "uuid"[] DEFAULT NULL::"uuid"[]) RETURNS "uuid"
+    LANGUAGE "plpgsql" SECURITY DEFINER
+    SET "search_path" TO 'public'
+    AS $$
+DECLARE
+  v_user UUID := auth.uid();
+  v_job UUID;
+  v_ids UUID[];
+BEGIN
+  IF v_user IS NULL THEN
+    RAISE EXCEPTION 'not authenticated';
+  END IF;
+
+  IF NOT EXISTS (SELECT 1 FROM bom_batches b WHERE b.id = p_batch_id AND b.user_id = v_user) THEN
+    RAISE EXCEPTION 'forbidden';
+  END IF;
+
+  IF p_row_ids IS NOT NULL AND cardinality(p_row_ids) > 0 THEN
+    SELECT COALESCE(array_agg(s.id ORDER BY s.ord), ARRAY[]::uuid[])
+    INTO v_ids
+    FROM (
+      SELECT br.id, k.ord
+      FROM unnest(p_row_ids) WITH ORDINALITY AS k(rid, ord)
+      JOIN bom_rows br ON br.id = k.rid AND br.batch_id = p_batch_id
+      WHERE (br.status->>'local') = 'verified_ok'
+        AND COALESCE(br.status->>'feishu', 'not_scanned') IN ('absent', 'error')
+    ) s;
+  ELSE
+    SELECT COALESCE(array_agg(br.id ORDER BY br.created_at), ARRAY[]::uuid[])
+    INTO v_ids
+    FROM bom_rows br
+    WHERE br.batch_id = p_batch_id
+      AND (br.status->>'local') = 'verified_ok'
+      AND COALESCE(br.status->>'feishu', 'not_scanned') IN ('absent', 'error');
+  END IF;
+
+  IF v_ids IS NULL OR cardinality(v_ids) = 0 THEN
+    RAISE EXCEPTION 'no eligible rows';
+  END IF;
+
+  INSERT INTO public.bom_feishu_upload_jobs (batch_id, user_id, row_ids, status, progress_total, trigger_source)
+  VALUES (p_batch_id, v_user, v_ids, 'queued', cardinality(v_ids), 'web')
+  RETURNING id INTO v_job;
+
+  RETURN v_job;
+END;
+$$;
+
+
+ALTER FUNCTION "public"."bom_request_feishu_upload"("p_batch_id" "uuid", "p_row_ids" "uuid"[]) OWNER TO "postgres";
+
+
+COMMENT ON FUNCTION "public"."bom_request_feishu_upload"("p_batch_id" "uuid", "p_row_ids" "uuid"[]) IS '网页触发飞书上传：p_row_ids 为空则当前批次全部「本地校验通过且飞书 absent|error」行';
+
+
+
+CREATE OR REPLACE FUNCTION "public"."bom_request_scan"("p_trigger_source" "text" DEFAULT 'manual'::"text") RETURNS "uuid"
+    LANGUAGE "plpgsql" SECURITY DEFINER
     AS $$
 DECLARE
   v_id UUID;
@@ -1173,13 +1428,29 @@ END;
 $$;
 
 
---
--- Name: bom_row_download_targets(uuid[]); Type: FUNCTION; Schema: public; Owner: -
---
+ALTER FUNCTION "public"."bom_request_scan"("p_trigger_source" "text") OWNER TO "postgres";
 
-CREATE FUNCTION public.bom_row_download_targets(p_ids uuid[]) RETURNS TABLE(id uuid, download_url text)
-    LANGUAGE sql STABLE SECURITY DEFINER
-    SET search_path TO 'public'
+
+CREATE OR REPLACE FUNCTION "public"."bom_row_distribute_ext_pull_targets"("p_ids" "uuid"[]) RETURNS TABLE("id" "uuid", "download_url" "text")
+    LANGUAGE "sql" STABLE SECURITY DEFINER
+    SET "search_path" TO 'public'
+    AS $$
+  SELECT br.id, NULLIF(BTRIM(bom_extract_ext_url(br.bom_row)), '') AS download_url
+  FROM bom_rows br
+  WHERE br.id = ANY(p_ids);
+$$;
+
+
+ALTER FUNCTION "public"."bom_row_distribute_ext_pull_targets"("p_ids" "uuid"[]) OWNER TO "postgres";
+
+
+COMMENT ON FUNCTION "public"."bom_row_distribute_ext_pull_targets"("p_ids" "uuid"[]) IS '分发拉取：返回行的 ext 转存 URL（列名仍为 download_url 供 worker 复用）';
+
+
+
+CREATE OR REPLACE FUNCTION "public"."bom_row_download_targets"("p_ids" "uuid"[]) RETURNS TABLE("id" "uuid", "download_url" "text")
+    LANGUAGE "sql" STABLE SECURITY DEFINER
+    SET "search_path" TO 'public'
     AS $$
   SELECT br.id, bom_extract_download_url(br.bom_row) AS download_url
   FROM bom_rows br
@@ -1187,13 +1458,50 @@ CREATE FUNCTION public.bom_row_download_targets(p_ids uuid[]) RETURNS TABLE(id u
 $$;
 
 
---
--- Name: bom_row_still_eligible_for_ext_sync(uuid); Type: FUNCTION; Schema: public; Owner: -
---
+ALTER FUNCTION "public"."bom_row_download_targets"("p_ids" "uuid"[]) OWNER TO "postgres";
 
-CREATE FUNCTION public.bom_row_still_eligible_for_ext_sync(p_row_id uuid) RETURNS boolean
-    LANGUAGE sql STABLE SECURITY DEFINER
-    SET search_path TO 'public'
+
+CREATE OR REPLACE FUNCTION "public"."bom_row_still_eligible_for_distribute_ext_pull"("p_row_id" "uuid") RETURNS boolean
+    LANGUAGE "sql" STABLE SECURITY DEFINER
+    SET "search_path" TO 'public'
+    AS $_$
+  SELECT EXISTS (
+    SELECT 1
+    FROM bom_rows br
+    WHERE br.id = p_row_id
+      AND bom_url_looks_like_it_artifactory(bom_extract_ext_url(br.bom_row))
+      AND NULLIF(BTRIM(bom_extract_ext_url(br.bom_row)), '') ~ '^https?://'
+      AND (
+        bom_extract_expected_md5(br.bom_row) IS NULL
+        OR NOT EXISTS (
+          SELECT 1
+          FROM local_file lf
+          WHERE lf.md5 IS NOT NULL
+            AND lf.md5 ~ '^[a-f0-9]{32}$'
+            AND LOWER(lf.md5) = bom_extract_expected_md5(br.bom_row)
+        )
+      )
+      AND (
+        (br.status->>'local') IN ('pending', 'error')
+        OR (
+          (br.status->>'local') IN ('verified_ok', 'verified_fail', 'local_found')
+          AND bom_extract_expected_md5(br.bom_row) ~ '^[a-f0-9]{32}$'
+        )
+      )
+  );
+$_$;
+
+
+ALTER FUNCTION "public"."bom_row_still_eligible_for_distribute_ext_pull"("p_row_id" "uuid") OWNER TO "postgres";
+
+
+COMMENT ON FUNCTION "public"."bom_row_still_eligible_for_distribute_ext_pull"("p_row_id" "uuid") IS '分发 ext 拉取：与 it 拉取相同本地/md5 条件，但 URL 仅认 ext 列';
+
+
+
+CREATE OR REPLACE FUNCTION "public"."bom_row_still_eligible_for_ext_sync"("p_row_id" "uuid") RETURNS boolean
+    LANGUAGE "sql" STABLE SECURITY DEFINER
+    SET "search_path" TO 'public'
     AS $$
   SELECT EXISTS (
     SELECT 1
@@ -1208,13 +1516,33 @@ CREATE FUNCTION public.bom_row_still_eligible_for_ext_sync(p_row_id uuid) RETURN
 $$;
 
 
---
--- Name: bom_row_still_eligible_for_it_download(uuid); Type: FUNCTION; Schema: public; Owner: -
---
+ALTER FUNCTION "public"."bom_row_still_eligible_for_ext_sync"("p_row_id" "uuid") OWNER TO "postgres";
 
-CREATE FUNCTION public.bom_row_still_eligible_for_it_download(p_row_id uuid) RETURNS boolean
-    LANGUAGE sql STABLE SECURITY DEFINER
-    SET search_path TO 'public'
+
+CREATE OR REPLACE FUNCTION "public"."bom_row_still_eligible_for_feishu_upload"("p_row_id" "uuid") RETURNS boolean
+    LANGUAGE "sql" STABLE SECURITY DEFINER
+    SET "search_path" TO 'public'
+    AS $$
+  SELECT EXISTS (
+    SELECT 1
+    FROM bom_rows br
+    WHERE br.id = p_row_id
+      AND (br.status->>'local') = 'verified_ok'
+      AND COALESCE(br.status->>'feishu', 'not_scanned') IN ('absent', 'error')
+  );
+$$;
+
+
+ALTER FUNCTION "public"."bom_row_still_eligible_for_feishu_upload"("p_row_id" "uuid") OWNER TO "postgres";
+
+
+COMMENT ON FUNCTION "public"."bom_row_still_eligible_for_feishu_upload"("p_row_id" "uuid") IS '飞书上传任务进行中：行仍为本地上传通过且飞书未对齐时可继续上传';
+
+
+
+CREATE OR REPLACE FUNCTION "public"."bom_row_still_eligible_for_it_download"("p_row_id" "uuid") RETURNS boolean
+    LANGUAGE "sql" STABLE SECURITY DEFINER
+    SET "search_path" TO 'public'
     AS $_$
   SELECT EXISTS (
     SELECT 1
@@ -1243,20 +1571,16 @@ CREATE FUNCTION public.bom_row_still_eligible_for_it_download(p_row_id uuid) RET
 $_$;
 
 
---
--- Name: FUNCTION bom_row_still_eligible_for_it_download(p_row_id uuid); Type: COMMENT; Schema: public; Owner: -
---
-
-COMMENT ON FUNCTION public.bom_row_still_eligible_for_it_download(p_row_id uuid) IS 'it 拉取：pending/error；或 verified_ok|verified_fail|local_found 且期望 MD5 在 local_file 中不存在时可再拉';
+ALTER FUNCTION "public"."bom_row_still_eligible_for_it_download"("p_row_id" "uuid") OWNER TO "postgres";
 
 
---
--- Name: bom_rows_for_it_download(integer); Type: FUNCTION; Schema: public; Owner: -
---
+COMMENT ON FUNCTION "public"."bom_row_still_eligible_for_it_download"("p_row_id" "uuid") IS 'it 拉取：pending/error；或 verified_ok|verified_fail|local_found 且期望 MD5 在 local_file 中不存在时可再拉';
 
-CREATE FUNCTION public.bom_rows_for_it_download(p_limit integer DEFAULT 25) RETURNS TABLE(id uuid, download_url text)
-    LANGUAGE sql STABLE SECURITY DEFINER
-    SET search_path TO 'public'
+
+
+CREATE OR REPLACE FUNCTION "public"."bom_rows_for_it_download"("p_limit" integer DEFAULT 25) RETURNS TABLE("id" "uuid", "download_url" "text")
+    LANGUAGE "sql" STABLE SECURITY DEFINER
+    SET "search_path" TO 'public'
     AS $_$
   SELECT br.id,
          bom_extract_download_url(br.bom_row) AS download_url
@@ -1279,20 +1603,16 @@ CREATE FUNCTION public.bom_rows_for_it_download(p_limit integer DEFAULT 25) RETU
 $_$;
 
 
---
--- Name: FUNCTION bom_rows_for_it_download(p_limit integer); Type: COMMENT; Schema: public; Owner: -
---
-
-COMMENT ON FUNCTION public.bom_rows_for_it_download(p_limit integer) IS '阶段 4：返回待由 worker 从内部 Artifactory 拉取的 BOM 行（service_role）';
+ALTER FUNCTION "public"."bom_rows_for_it_download"("p_limit" integer) OWNER TO "postgres";
 
 
---
--- Name: bom_sync_bom_row_local_size_from_index(); Type: FUNCTION; Schema: public; Owner: -
---
+COMMENT ON FUNCTION "public"."bom_rows_for_it_download"("p_limit" integer) IS '阶段 4：返回待由 worker 从 it-Artifactory 拉取的 BOM 行（service_role）';
 
-CREATE FUNCTION public.bom_sync_bom_row_local_size_from_index() RETURNS integer
-    LANGUAGE plpgsql SECURITY DEFINER
-    SET search_path TO 'public'
+
+
+CREATE OR REPLACE FUNCTION "public"."bom_sync_bom_row_local_size_from_index"() RETURNS integer
+    LANGUAGE "plpgsql" SECURITY DEFINER
+    SET "search_path" TO 'public'
     AS $_$
 DECLARE
   jm jsonb;
@@ -1353,19 +1673,15 @@ END;
 $_$;
 
 
---
--- Name: FUNCTION bom_sync_bom_row_local_size_from_index(); Type: COMMENT; Schema: public; Owner: -
---
-
-COMMENT ON FUNCTION public.bom_sync_bom_row_local_size_from_index() IS '按期望 MD5 关联 local_file.size_bytes，写回 bom_row 中 jsonKeyMap.fileSizeBytes 所列列名';
+ALTER FUNCTION "public"."bom_sync_bom_row_local_size_from_index"() OWNER TO "postgres";
 
 
---
--- Name: bom_upsert_local_file(uuid, text, bigint, timestamp with time zone, text); Type: FUNCTION; Schema: public; Owner: -
---
+COMMENT ON FUNCTION "public"."bom_sync_bom_row_local_size_from_index"() IS '按期望 MD5 关联 local_file.size_bytes，写回 bom_row 中 jsonKeyMap.fileSizeBytes 所列列名';
 
-CREATE FUNCTION public.bom_upsert_local_file(p_job_id uuid, p_path text, p_size_bytes bigint, p_mtime timestamp with time zone, p_md5 text) RETURNS boolean
-    LANGUAGE plpgsql SECURITY DEFINER
+
+
+CREATE OR REPLACE FUNCTION "public"."bom_upsert_local_file"("p_job_id" "uuid", "p_path" "text", "p_size_bytes" bigint, "p_mtime" timestamp with time zone, "p_md5" "text") RETURNS boolean
+    LANGUAGE "plpgsql" SECURITY DEFINER
     AS $_$
 BEGIN
   IF p_path IS NULL OR BTRIM(p_path) = '' THEN
@@ -1399,13 +1715,12 @@ END;
 $_$;
 
 
---
--- Name: bom_upsert_local_file_web(text, bigint, timestamp with time zone, text); Type: FUNCTION; Schema: public; Owner: -
---
+ALTER FUNCTION "public"."bom_upsert_local_file"("p_job_id" "uuid", "p_path" "text", "p_size_bytes" bigint, "p_mtime" timestamp with time zone, "p_md5" "text") OWNER TO "postgres";
 
-CREATE FUNCTION public.bom_upsert_local_file_web(p_path text, p_size_bytes bigint, p_mtime timestamp with time zone, p_md5 text) RETURNS boolean
-    LANGUAGE plpgsql SECURITY DEFINER
-    SET search_path TO 'public'
+
+CREATE OR REPLACE FUNCTION "public"."bom_upsert_local_file_web"("p_path" "text", "p_size_bytes" bigint, "p_mtime" timestamp with time zone, "p_md5" "text") RETURNS boolean
+    LANGUAGE "plpgsql" SECURITY DEFINER
+    SET "search_path" TO 'public'
     AS $_$
 BEGIN
   IF p_path IS NULL OR BTRIM(p_path) = '' THEN
@@ -1438,12 +1753,11 @@ END;
 $_$;
 
 
---
--- Name: bom_url_looks_like_it_artifactory(text); Type: FUNCTION; Schema: public; Owner: -
---
+ALTER FUNCTION "public"."bom_upsert_local_file_web"("p_path" "text", "p_size_bytes" bigint, "p_mtime" timestamp with time zone, "p_md5" "text") OWNER TO "postgres";
 
-CREATE FUNCTION public.bom_url_looks_like_it_artifactory(p text) RETURNS boolean
-    LANGUAGE plpgsql IMMUTABLE
+
+CREATE OR REPLACE FUNCTION "public"."bom_url_looks_like_it_artifactory"("p" "text") RETURNS boolean
+    LANGUAGE "plpgsql" IMMUTABLE
     AS $$
 BEGIN
   IF p IS NULL OR BTRIM(p) = '' THEN
@@ -1454,19 +1768,15 @@ END;
 $$;
 
 
---
--- Name: FUNCTION bom_url_looks_like_it_artifactory(p text); Type: COMMENT; Schema: public; Owner: -
---
-
-COMMENT ON FUNCTION public.bom_url_looks_like_it_artifactory(p text) IS '粗判是否为内部 Artifactory 类链接（阶段 4 自动下载）；其它来源走待人工下载';
+ALTER FUNCTION "public"."bom_url_looks_like_it_artifactory"("p" "text") OWNER TO "postgres";
 
 
---
--- Name: bom_url_path_basename(text); Type: FUNCTION; Schema: public; Owner: -
---
+COMMENT ON FUNCTION "public"."bom_url_looks_like_it_artifactory"("p" "text") IS '粗判是否为 it-Artifactory 类链接（阶段 4 自动下载）；其它来源走待人工下载';
 
-CREATE FUNCTION public.bom_url_path_basename(p text) RETURNS text
-    LANGUAGE plpgsql IMMUTABLE
+
+
+CREATE OR REPLACE FUNCTION "public"."bom_url_path_basename"("p" "text") RETURNS "text"
+    LANGUAGE "plpgsql" IMMUTABLE
     AS $_$
 DECLARE
   t TEXT;
@@ -1483,19 +1793,37 @@ END;
 $_$;
 
 
---
--- Name: FUNCTION bom_url_path_basename(p text); Type: COMMENT; Schema: public; Owner: -
---
-
-COMMENT ON FUNCTION public.bom_url_path_basename(p text) IS '从下载路径/URL 提取文件名（小写），去掉协议、主机与查询串';
+ALTER FUNCTION "public"."bom_url_path_basename"("p" "text") OWNER TO "postgres";
 
 
---
--- Name: update_updated_at_column(); Type: FUNCTION; Schema: public; Owner: -
---
+COMMENT ON FUNCTION "public"."bom_url_path_basename"("p" "text") IS '从下载路径/URL 提取文件名（小写），去掉协议、主机与查询串';
 
-CREATE FUNCTION public.update_updated_at_column() RETURNS trigger
-    LANGUAGE plpgsql
+
+
+CREATE EXTENSION IF NOT EXISTS "pgcrypto" WITH SCHEMA "extensions";
+
+CREATE OR REPLACE FUNCTION "public"."crypt"("text", "text") RETURNS "text"
+    LANGUAGE "sql" IMMUTABLE
+    AS $_$
+  SELECT extensions.crypt($1, $2);
+$_$;
+
+
+ALTER FUNCTION "public"."crypt"("text", "text") OWNER TO "postgres";
+
+
+CREATE OR REPLACE FUNCTION "public"."gen_salt"("text") RETURNS "text"
+    LANGUAGE "sql" IMMUTABLE
+    AS $_$
+  SELECT extensions.gen_salt($1);
+$_$;
+
+
+ALTER FUNCTION "public"."gen_salt"("text") OWNER TO "postgres";
+
+
+CREATE OR REPLACE FUNCTION "public"."update_updated_at_column"() RETURNS "trigger"
+    LANGUAGE "plpgsql"
     AS $$
 BEGIN
   NEW.updated_at = NOW();
@@ -1504,1303 +1832,1125 @@ END;
 $$;
 
 
---
--- Name: FUNCTION update_updated_at_column(); Type: COMMENT; Schema: public; Owner: -
---
+ALTER FUNCTION "public"."update_updated_at_column"() OWNER TO "postgres";
 
-COMMENT ON FUNCTION public.update_updated_at_column() IS '自动更新 updated_at 字段';
+
+COMMENT ON FUNCTION "public"."update_updated_at_column"() IS '自动更新 updated_at 字段';
 
 
 SET default_tablespace = '';
 
-SET default_table_access_method = heap;
+SET default_table_access_method = "heap";
 
---
--- Name: bom_batches; Type: TABLE; Schema: public; Owner: -
---
 
-CREATE TABLE public.bom_batches (
-    id uuid DEFAULT gen_random_uuid() NOT NULL,
-    user_id uuid NOT NULL,
-    name text NOT NULL,
-    created_at timestamp with time zone DEFAULT now() NOT NULL,
-    updated_at timestamp with time zone DEFAULT now() NOT NULL,
-    product_id uuid NOT NULL,
-    header_order jsonb DEFAULT '[]'::jsonb NOT NULL
+CREATE TABLE IF NOT EXISTS "public"."bom_batches" (
+    "id" "uuid" DEFAULT "gen_random_uuid"() NOT NULL,
+    "user_id" "uuid" NOT NULL,
+    "name" "text" NOT NULL,
+    "created_at" timestamp with time zone DEFAULT "now"() NOT NULL,
+    "updated_at" timestamp with time zone DEFAULT "now"() NOT NULL,
+    "product_id" "uuid" NOT NULL,
+    "header_order" "jsonb" DEFAULT '[]'::"jsonb" NOT NULL
 );
 
 
---
--- Name: TABLE bom_batches; Type: COMMENT; Schema: public; Owner: -
---
-
-COMMENT ON TABLE public.bom_batches IS 'BOM 批次/名称';
+ALTER TABLE "public"."bom_batches" OWNER TO "postgres";
 
 
---
--- Name: COLUMN bom_batches.name; Type: COMMENT; Schema: public; Owner: -
---
-
-COMMENT ON COLUMN public.bom_batches.name IS '批次显示名或清单名';
+COMMENT ON TABLE "public"."bom_batches" IS 'BOM 批次/名称';
 
 
---
--- Name: COLUMN bom_batches.header_order; Type: COMMENT; Schema: public; Owner: -
---
 
-COMMENT ON COLUMN public.bom_batches.header_order IS '导入时的表头顺序（字符串数组），用于明细页按导入顺序展示列';
+COMMENT ON COLUMN "public"."bom_batches"."name" IS '批次显示名或清单名';
 
 
---
--- Name: bom_download_jobs; Type: TABLE; Schema: public; Owner: -
---
 
-CREATE TABLE public.bom_download_jobs (
-    id uuid DEFAULT gen_random_uuid() NOT NULL,
-    batch_id uuid NOT NULL,
-    user_id uuid NOT NULL,
-    row_ids uuid[] NOT NULL,
-    status public.bom_download_job_status DEFAULT 'queued'::public.bom_download_job_status NOT NULL,
-    progress_current integer DEFAULT 0 NOT NULL,
-    progress_total integer DEFAULT 0 NOT NULL,
-    last_message text,
-    trigger_source text DEFAULT 'web'::text NOT NULL,
-    created_at timestamp with time zone DEFAULT now() NOT NULL,
-    updated_at timestamp with time zone DEFAULT now() NOT NULL,
-    finished_at timestamp with time zone,
-    started_at timestamp with time zone,
-    heartbeat_at timestamp with time zone,
-    running_row_id uuid,
-    running_file_name text,
-    running_bytes_downloaded bigint DEFAULT 0 NOT NULL,
-    running_bytes_total bigint,
-    bytes_downloaded_total bigint DEFAULT 0 NOT NULL,
-    bytes_total bigint,
-    cancel_requested boolean DEFAULT false NOT NULL
+COMMENT ON COLUMN "public"."bom_batches"."header_order" IS '导入时的表头顺序（字符串数组），用于明细页按导入顺序展示列';
+
+
+
+CREATE TABLE IF NOT EXISTS "public"."bom_download_jobs" (
+    "id" "uuid" DEFAULT "gen_random_uuid"() NOT NULL,
+    "batch_id" "uuid" NOT NULL,
+    "user_id" "uuid" NOT NULL,
+    "row_ids" "uuid"[] NOT NULL,
+    "status" "public"."bom_download_job_status" DEFAULT 'queued'::"public"."bom_download_job_status" NOT NULL,
+    "progress_current" integer DEFAULT 0 NOT NULL,
+    "progress_total" integer DEFAULT 0 NOT NULL,
+    "last_message" "text",
+    "trigger_source" "text" DEFAULT 'web'::"text" NOT NULL,
+    "created_at" timestamp with time zone DEFAULT "now"() NOT NULL,
+    "updated_at" timestamp with time zone DEFAULT "now"() NOT NULL,
+    "finished_at" timestamp with time zone,
+    "started_at" timestamp with time zone,
+    "heartbeat_at" timestamp with time zone,
+    "running_row_id" "uuid",
+    "running_file_name" "text",
+    "running_bytes_downloaded" bigint DEFAULT 0 NOT NULL,
+    "running_bytes_total" bigint,
+    "bytes_downloaded_total" bigint DEFAULT 0 NOT NULL,
+    "bytes_total" bigint,
+    "cancel_requested" boolean DEFAULT false NOT NULL,
+    "pull_url_source" "text" DEFAULT 'download'::"text" NOT NULL
 );
 
 
---
--- Name: TABLE bom_download_jobs; Type: COMMENT; Schema: public; Owner: -
---
-
-COMMENT ON TABLE public.bom_download_jobs IS '网页或后台触发的内部 Artifactory 批量拉取任务（worker 消费）';
+ALTER TABLE "public"."bom_download_jobs" OWNER TO "postgres";
 
 
---
--- Name: COLUMN bom_download_jobs.started_at; Type: COMMENT; Schema: public; Owner: -
---
-
-COMMENT ON COLUMN public.bom_download_jobs.started_at IS 'worker 首次抢占为 running 的时间';
+COMMENT ON TABLE "public"."bom_download_jobs" IS '网页或后台触发的 it-Artifactory 批量拉取任务（worker 消费）';
 
 
---
--- Name: COLUMN bom_download_jobs.heartbeat_at; Type: COMMENT; Schema: public; Owner: -
---
 
-COMMENT ON COLUMN public.bom_download_jobs.heartbeat_at IS 'worker 心跳，用于僵尸任务回收';
+COMMENT ON COLUMN "public"."bom_download_jobs"."started_at" IS 'worker 首次抢占为 running 的时间';
 
 
---
--- Name: COLUMN bom_download_jobs.running_row_id; Type: COMMENT; Schema: public; Owner: -
---
 
-COMMENT ON COLUMN public.bom_download_jobs.running_row_id IS '当前正在下载的 BOM 行';
+COMMENT ON COLUMN "public"."bom_download_jobs"."heartbeat_at" IS 'worker 心跳，用于僵尸任务回收';
 
 
---
--- Name: COLUMN bom_download_jobs.running_file_name; Type: COMMENT; Schema: public; Owner: -
---
 
-COMMENT ON COLUMN public.bom_download_jobs.running_file_name IS '当前下载目标文件名（展示）';
+COMMENT ON COLUMN "public"."bom_download_jobs"."running_row_id" IS '当前正在下载的 BOM 行';
 
 
---
--- Name: COLUMN bom_download_jobs.running_bytes_downloaded; Type: COMMENT; Schema: public; Owner: -
---
 
-COMMENT ON COLUMN public.bom_download_jobs.running_bytes_downloaded IS '当前文件已下载字节';
+COMMENT ON COLUMN "public"."bom_download_jobs"."running_file_name" IS '当前下载目标文件名（展示）';
 
 
---
--- Name: COLUMN bom_download_jobs.running_bytes_total; Type: COMMENT; Schema: public; Owner: -
---
 
-COMMENT ON COLUMN public.bom_download_jobs.running_bytes_total IS '当前文件总字节（Content-Length 等，可为空）';
+COMMENT ON COLUMN "public"."bom_download_jobs"."running_bytes_downloaded" IS '当前文件已下载字节';
 
 
---
--- Name: COLUMN bom_download_jobs.bytes_downloaded_total; Type: COMMENT; Schema: public; Owner: -
---
 
-COMMENT ON COLUMN public.bom_download_jobs.bytes_downloaded_total IS '本任务已完成的文件字节累计';
+COMMENT ON COLUMN "public"."bom_download_jobs"."running_bytes_total" IS '当前文件总字节（Content-Length 等，可为空）';
 
 
---
--- Name: COLUMN bom_download_jobs.bytes_total; Type: COMMENT; Schema: public; Owner: -
---
 
-COMMENT ON COLUMN public.bom_download_jobs.bytes_total IS '本任务预估总字节（能汇总时写入，可为空）';
+COMMENT ON COLUMN "public"."bom_download_jobs"."bytes_downloaded_total" IS '本任务已完成的文件字节累计';
 
 
---
--- Name: COLUMN bom_download_jobs.cancel_requested; Type: COMMENT; Schema: public; Owner: -
---
 
-COMMENT ON COLUMN public.bom_download_jobs.cancel_requested IS '用户请求取消 running 任务时置 true，worker 检测后置 cancelled 并清零';
+COMMENT ON COLUMN "public"."bom_download_jobs"."bytes_total" IS '本任务预估总字节（能汇总时写入，可为空）';
 
 
---
--- Name: bom_ext_sync_jobs; Type: TABLE; Schema: public; Owner: -
---
 
-CREATE TABLE public.bom_ext_sync_jobs (
-    id uuid DEFAULT gen_random_uuid() NOT NULL,
-    batch_id uuid NOT NULL,
-    user_id uuid NOT NULL,
-    row_ids uuid[] NOT NULL,
-    status public.bom_download_job_status DEFAULT 'queued'::public.bom_download_job_status NOT NULL,
-    progress_current integer DEFAULT 0 NOT NULL,
-    progress_total integer DEFAULT 0 NOT NULL,
-    last_message text,
-    trigger_source text DEFAULT 'web'::text NOT NULL,
-    created_at timestamp with time zone DEFAULT now() NOT NULL,
-    updated_at timestamp with time zone DEFAULT now() NOT NULL,
-    finished_at timestamp with time zone,
-    started_at timestamp with time zone,
-    heartbeat_at timestamp with time zone,
-    running_row_id uuid,
-    cancel_requested boolean DEFAULT false NOT NULL
+COMMENT ON COLUMN "public"."bom_download_jobs"."cancel_requested" IS '用户请求取消 running 任务时置 true，worker 检测后置 cancelled 并清零';
+
+
+
+COMMENT ON COLUMN "public"."bom_download_jobs"."pull_url_source" IS 'worker 解析下载 URL：download=仅 bom_row_download_targets（downloadUrl）；ext_only=仅 ext 转存（分发页）';
+
+
+
+CREATE TABLE IF NOT EXISTS "public"."bom_ext_sync_jobs" (
+    "id" "uuid" DEFAULT "gen_random_uuid"() NOT NULL,
+    "batch_id" "uuid" NOT NULL,
+    "user_id" "uuid" NOT NULL,
+    "row_ids" "uuid"[] NOT NULL,
+    "status" "public"."bom_download_job_status" DEFAULT 'queued'::"public"."bom_download_job_status" NOT NULL,
+    "progress_current" integer DEFAULT 0 NOT NULL,
+    "progress_total" integer DEFAULT 0 NOT NULL,
+    "last_message" "text",
+    "trigger_source" "text" DEFAULT 'web'::"text" NOT NULL,
+    "created_at" timestamp with time zone DEFAULT "now"() NOT NULL,
+    "updated_at" timestamp with time zone DEFAULT "now"() NOT NULL,
+    "finished_at" timestamp with time zone,
+    "started_at" timestamp with time zone,
+    "heartbeat_at" timestamp with time zone,
+    "running_row_id" "uuid",
+    "cancel_requested" boolean DEFAULT false NOT NULL
 );
 
 
---
--- Name: TABLE bom_ext_sync_jobs; Type: COMMENT; Schema: public; Owner: -
---
-
-COMMENT ON TABLE public.bom_ext_sync_jobs IS '网页触发的外部 Artifactory 同步任务（worker 消费）：校验通过后 checksum 查重、Copy 或上传';
+ALTER TABLE "public"."bom_ext_sync_jobs" OWNER TO "postgres";
 
 
---
--- Name: COLUMN bom_ext_sync_jobs.cancel_requested; Type: COMMENT; Schema: public; Owner: -
---
-
-COMMENT ON COLUMN public.bom_ext_sync_jobs.cancel_requested IS '用户请求取消 running 任务时置 true，worker 检测后置 cancelled 并清零';
+COMMENT ON TABLE "public"."bom_ext_sync_jobs" IS '网页触发的 ext-Artifactory 同步任务（worker 消费）：校验通过后 checksum 查重、Copy 或上传';
 
 
---
--- Name: bom_rows; Type: TABLE; Schema: public; Owner: -
---
 
-CREATE TABLE public.bom_rows (
-    id uuid DEFAULT gen_random_uuid() NOT NULL,
-    batch_id uuid NOT NULL,
-    bom_row jsonb DEFAULT '{}'::jsonb NOT NULL,
-    created_at timestamp with time zone DEFAULT now() NOT NULL,
-    updated_at timestamp with time zone DEFAULT now() NOT NULL,
-    sort_order integer DEFAULT 0 NOT NULL,
-    status jsonb DEFAULT '{"ext": "not_started", "local": "pending"}'::jsonb NOT NULL,
-    CONSTRAINT bom_rows_status_keys CHECK (((status ? 'local'::text) AND (status ? 'ext'::text) AND ((status ->> 'local'::text) = ANY (ARRAY['pending'::text, 'await_manual_download'::text, 'local_found'::text, 'verified_ok'::text, 'verified_fail'::text, 'error'::text])) AND ((status ->> 'ext'::text) = ANY (ARRAY['not_started'::text, 'synced_or_skipped'::text, 'error'::text]))))
+COMMENT ON COLUMN "public"."bom_ext_sync_jobs"."cancel_requested" IS '用户请求取消 running 任务时置 true，worker 检测后置 cancelled 并清零';
+
+
+
+CREATE TABLE IF NOT EXISTS "public"."bom_feishu_scan_jobs" (
+    "id" "uuid" DEFAULT "gen_random_uuid"() NOT NULL,
+    "batch_id" "uuid" NOT NULL,
+    "status" "public"."bom_feishu_scan_job_status" DEFAULT 'queued'::"public"."bom_feishu_scan_job_status" NOT NULL,
+    "trigger_source" "text" DEFAULT 'manual'::"text" NOT NULL,
+    "message" "text",
+    "rows_total" integer DEFAULT 0 NOT NULL,
+    "rows_present" integer DEFAULT 0 NOT NULL,
+    "rows_absent" integer DEFAULT 0 NOT NULL,
+    "rows_error" integer DEFAULT 0 NOT NULL,
+    "requested_at" timestamp with time zone DEFAULT "now"() NOT NULL,
+    "started_at" timestamp with time zone,
+    "finished_at" timestamp with time zone,
+    "created_at" timestamp with time zone DEFAULT "now"() NOT NULL,
+    "updated_at" timestamp with time zone DEFAULT "now"() NOT NULL
 );
 
 
---
--- Name: TABLE bom_rows; Type: COMMENT; Schema: public; Owner: -
---
-
-COMMENT ON TABLE public.bom_rows IS 'BOM 行：bom_row 为唯一事实来源';
+ALTER TABLE "public"."bom_feishu_scan_jobs" OWNER TO "postgres";
 
 
---
--- Name: COLUMN bom_rows.bom_row; Type: COMMENT; Schema: public; Owner: -
---
-
-COMMENT ON COLUMN public.bom_rows.bom_row IS '整行原始结构（列名可变，解析层按配置 key 映射）';
+COMMENT ON TABLE "public"."bom_feishu_scan_jobs" IS '飞书云盘目录扫描任务（Edge Function 同步执行，按版本 batch 维度）';
 
 
---
--- Name: COLUMN bom_rows.sort_order; Type: COMMENT; Schema: public; Owner: -
---
 
-COMMENT ON COLUMN public.bom_rows.sort_order IS '批次内行序（0 起），与入库时数组下标一致';
+COMMENT ON COLUMN "public"."bom_feishu_scan_jobs"."rows_total" IS '该批次参与扫描的 BOM 行数';
 
 
---
--- Name: COLUMN bom_rows.status; Type: COMMENT; Schema: public; Owner: -
---
 
-COMMENT ON COLUMN public.bom_rows.status IS 'JSONB：local、ext 为枚举状态；可选 local_fetch_error / ext_fetch_error 为 it 与 ext 链路说明文本';
+COMMENT ON COLUMN "public"."bom_feishu_scan_jobs"."rows_present" IS '在飞书路径下找到对应文件的行数';
 
 
---
--- Name: bom_scan_jobs; Type: TABLE; Schema: public; Owner: -
---
 
-CREATE TABLE public.bom_scan_jobs (
-    id uuid DEFAULT gen_random_uuid() NOT NULL,
-    status public.bom_scan_job_status DEFAULT 'queued'::public.bom_scan_job_status NOT NULL,
-    trigger_source text DEFAULT 'manual'::text NOT NULL,
-    message text,
-    files_seen integer DEFAULT 0 NOT NULL,
-    files_md5_updated integer DEFAULT 0 NOT NULL,
-    files_removed integer DEFAULT 0 NOT NULL,
-    requested_at timestamp with time zone DEFAULT now() NOT NULL,
-    started_at timestamp with time zone,
-    finished_at timestamp with time zone,
-    created_at timestamp with time zone DEFAULT now() NOT NULL,
-    updated_at timestamp with time zone DEFAULT now() NOT NULL
+COMMENT ON COLUMN "public"."bom_feishu_scan_jobs"."rows_absent" IS '未找到对应文件的行数';
+
+
+
+COMMENT ON COLUMN "public"."bom_feishu_scan_jobs"."rows_error" IS '解析路径或调用飞书 API 出错行数';
+
+
+
+CREATE TABLE IF NOT EXISTS "public"."bom_feishu_upload_jobs" (
+    "id" "uuid" DEFAULT "gen_random_uuid"() NOT NULL,
+    "batch_id" "uuid" NOT NULL,
+    "user_id" "uuid" NOT NULL,
+    "row_ids" "uuid"[] NOT NULL,
+    "status" "public"."bom_download_job_status" DEFAULT 'queued'::"public"."bom_download_job_status" NOT NULL,
+    "progress_current" integer DEFAULT 0 NOT NULL,
+    "progress_total" integer DEFAULT 0 NOT NULL,
+    "last_message" "text",
+    "trigger_source" "text" DEFAULT 'web'::"text" NOT NULL,
+    "created_at" timestamp with time zone DEFAULT "now"() NOT NULL,
+    "updated_at" timestamp with time zone DEFAULT "now"() NOT NULL,
+    "finished_at" timestamp with time zone,
+    "started_at" timestamp with time zone,
+    "heartbeat_at" timestamp with time zone,
+    "running_row_id" "uuid",
+    "cancel_requested" boolean DEFAULT false NOT NULL
 );
 
 
---
--- Name: TABLE bom_scan_jobs; Type: COMMENT; Schema: public; Owner: -
---
-
-COMMENT ON TABLE public.bom_scan_jobs IS '本地目录扫描任务（可手动触发或定时触发）';
+ALTER TABLE "public"."bom_feishu_upload_jobs" OWNER TO "postgres";
 
 
---
--- Name: COLUMN bom_scan_jobs.trigger_source; Type: COMMENT; Schema: public; Owner: -
---
-
-COMMENT ON COLUMN public.bom_scan_jobs.trigger_source IS '触发来源，如 manual/scheduler/worker';
+COMMENT ON TABLE "public"."bom_feishu_upload_jobs" IS '网页触发的飞书云盘上传（worker）：本地已校验通过且飞书为 absent/error 时入队；按版本目录自动建子文件夹';
 
 
---
--- Name: local_file; Type: TABLE; Schema: public; Owner: -
---
 
-CREATE TABLE public.local_file (
-    path text NOT NULL,
-    size_bytes bigint DEFAULT 0 NOT NULL,
-    mtime timestamp with time zone,
-    md5 text,
-    created_at timestamp with time zone DEFAULT now() NOT NULL,
-    updated_at timestamp with time zone DEFAULT now() NOT NULL,
-    last_seen_scan_job_id uuid,
-    last_seen_at timestamp with time zone
+CREATE TABLE IF NOT EXISTS "public"."bom_rows" (
+    "id" "uuid" DEFAULT "gen_random_uuid"() NOT NULL,
+    "batch_id" "uuid" NOT NULL,
+    "bom_row" "jsonb" DEFAULT '{}'::"jsonb" NOT NULL,
+    "created_at" timestamp with time zone DEFAULT "now"() NOT NULL,
+    "updated_at" timestamp with time zone DEFAULT "now"() NOT NULL,
+    "sort_order" integer DEFAULT 0 NOT NULL,
+    "status" "jsonb" DEFAULT '{"ext": "not_started", "local": "pending"}'::"jsonb" NOT NULL,
+    CONSTRAINT "bom_rows_status_keys" CHECK ((("status" ? 'local'::"text") AND ("status" ? 'ext'::"text") AND (("status" ->> 'local'::"text") = ANY (ARRAY['pending'::"text", 'await_manual_download'::"text", 'local_found'::"text", 'verified_ok'::"text", 'verified_fail'::"text", 'error'::"text"])) AND (("status" ->> 'ext'::"text") = ANY (ARRAY['not_started'::"text", 'synced_or_skipped'::"text", 'error'::"text"]))))
 );
 
 
---
--- Name: TABLE local_file; Type: COMMENT; Schema: public; Owner: -
---
-
-COMMENT ON TABLE public.local_file IS '本地暂存目录扫描索引';
+ALTER TABLE "public"."bom_rows" OWNER TO "postgres";
 
 
---
--- Name: COLUMN local_file.path; Type: COMMENT; Schema: public; Owner: -
---
-
-COMMENT ON COLUMN public.local_file.path IS '相对根目录或绝对路径（整站固定一种）';
+COMMENT ON TABLE "public"."bom_rows" IS 'BOM 行：bom_row 为唯一事实来源';
 
 
---
--- Name: COLUMN local_file.md5; Type: COMMENT; Schema: public; Owner: -
---
 
-COMMENT ON COLUMN public.local_file.md5 IS '内容 MD5，未算出前可为空';
+COMMENT ON COLUMN "public"."bom_rows"."bom_row" IS '整行原始结构（列名可变，解析层按配置 key 映射）';
 
 
---
--- Name: products; Type: TABLE; Schema: public; Owner: -
---
 
-CREATE TABLE public.products (
-    id uuid DEFAULT gen_random_uuid() NOT NULL,
-    user_id uuid NOT NULL,
-    name text NOT NULL,
-    created_at timestamp with time zone DEFAULT now() NOT NULL,
-    updated_at timestamp with time zone DEFAULT now() NOT NULL
+COMMENT ON COLUMN "public"."bom_rows"."sort_order" IS '批次内行序（0 起），与入库时数组下标一致';
+
+
+
+COMMENT ON COLUMN "public"."bom_rows"."status" IS 'JSONB：local、ext 为必填枚举；可选 local_fetch_error、ext_fetch_error。飞书扫描可选写入 feishu（not_scanned|absent|present|error）、feishu_file_token、feishu_revision、feishu_file_name、feishu_size_bytes、feishu_scan_error、feishu_scanned_at。';
+
+
+
+CREATE TABLE IF NOT EXISTS "public"."bom_scan_jobs" (
+    "id" "uuid" DEFAULT "gen_random_uuid"() NOT NULL,
+    "status" "public"."bom_scan_job_status" DEFAULT 'queued'::"public"."bom_scan_job_status" NOT NULL,
+    "trigger_source" "text" DEFAULT 'manual'::"text" NOT NULL,
+    "message" "text",
+    "files_seen" integer DEFAULT 0 NOT NULL,
+    "files_md5_updated" integer DEFAULT 0 NOT NULL,
+    "files_removed" integer DEFAULT 0 NOT NULL,
+    "requested_at" timestamp with time zone DEFAULT "now"() NOT NULL,
+    "started_at" timestamp with time zone,
+    "finished_at" timestamp with time zone,
+    "created_at" timestamp with time zone DEFAULT "now"() NOT NULL,
+    "updated_at" timestamp with time zone DEFAULT "now"() NOT NULL
 );
 
 
---
--- Name: TABLE products; Type: COMMENT; Schema: public; Owner: -
---
-
-COMMENT ON TABLE public.products IS '产品（用户维度）';
+ALTER TABLE "public"."bom_scan_jobs" OWNER TO "postgres";
 
 
---
--- Name: COLUMN products.name; Type: COMMENT; Schema: public; Owner: -
---
-
-COMMENT ON COLUMN public.products.name IS '产品名称';
+COMMENT ON TABLE "public"."bom_scan_jobs" IS '本地目录扫描任务（可手动触发或定时触发）';
 
 
---
--- Name: system_settings; Type: TABLE; Schema: public; Owner: -
---
 
-CREATE TABLE public.system_settings (
-    id uuid DEFAULT gen_random_uuid() NOT NULL,
-    key text NOT NULL,
-    value jsonb NOT NULL,
-    created_at timestamp with time zone DEFAULT now(),
-    updated_at timestamp with time zone DEFAULT now()
+COMMENT ON COLUMN "public"."bom_scan_jobs"."trigger_source" IS '触发来源，如 manual/scheduler/worker';
+
+
+
+CREATE TABLE IF NOT EXISTS "public"."local_file" (
+    "path" "text" NOT NULL,
+    "size_bytes" bigint DEFAULT 0 NOT NULL,
+    "mtime" timestamp with time zone,
+    "md5" "text",
+    "created_at" timestamp with time zone DEFAULT "now"() NOT NULL,
+    "updated_at" timestamp with time zone DEFAULT "now"() NOT NULL,
+    "last_seen_scan_job_id" "uuid",
+    "last_seen_at" timestamp with time zone
 );
 
 
---
--- Name: TABLE system_settings; Type: COMMENT; Schema: public; Owner: -
---
+ALTER TABLE "public"."local_file" OWNER TO "postgres";
 
-COMMENT ON TABLE public.system_settings IS '系统设置表（全局配置，无用户维度）';
 
+COMMENT ON TABLE "public"."local_file" IS '本地暂存目录扫描索引';
 
---
--- Name: bom_batches bom_batches_pkey; Type: CONSTRAINT; Schema: public; Owner: -
---
 
-ALTER TABLE ONLY public.bom_batches
-    ADD CONSTRAINT bom_batches_pkey PRIMARY KEY (id);
 
+COMMENT ON COLUMN "public"."local_file"."path" IS '相对根目录或绝对路径（整站固定一种）';
 
---
--- Name: bom_download_jobs bom_download_jobs_pkey; Type: CONSTRAINT; Schema: public; Owner: -
---
 
-ALTER TABLE ONLY public.bom_download_jobs
-    ADD CONSTRAINT bom_download_jobs_pkey PRIMARY KEY (id);
 
+COMMENT ON COLUMN "public"."local_file"."md5" IS '内容 MD5，未算出前可为空';
 
---
--- Name: bom_ext_sync_jobs bom_ext_sync_jobs_pkey; Type: CONSTRAINT; Schema: public; Owner: -
---
 
-ALTER TABLE ONLY public.bom_ext_sync_jobs
-    ADD CONSTRAINT bom_ext_sync_jobs_pkey PRIMARY KEY (id);
 
+CREATE TABLE IF NOT EXISTS "public"."products" (
+    "id" "uuid" DEFAULT "gen_random_uuid"() NOT NULL,
+    "user_id" "uuid" NOT NULL,
+    "name" "text" NOT NULL,
+    "created_at" timestamp with time zone DEFAULT "now"() NOT NULL,
+    "updated_at" timestamp with time zone DEFAULT "now"() NOT NULL,
+    "sort_order" integer DEFAULT 0 NOT NULL
+);
 
---
--- Name: bom_rows bom_rows_pkey; Type: CONSTRAINT; Schema: public; Owner: -
---
 
-ALTER TABLE ONLY public.bom_rows
-    ADD CONSTRAINT bom_rows_pkey PRIMARY KEY (id);
+ALTER TABLE "public"."products" OWNER TO "postgres";
 
 
---
--- Name: bom_scan_jobs bom_scan_jobs_pkey; Type: CONSTRAINT; Schema: public; Owner: -
---
+COMMENT ON TABLE "public"."products" IS '产品（用户维度）';
 
-ALTER TABLE ONLY public.bom_scan_jobs
-    ADD CONSTRAINT bom_scan_jobs_pkey PRIMARY KEY (id);
 
 
---
--- Name: local_file local_file_pkey; Type: CONSTRAINT; Schema: public; Owner: -
---
+COMMENT ON COLUMN "public"."products"."name" IS '产品名称';
 
-ALTER TABLE ONLY public.local_file
-    ADD CONSTRAINT local_file_pkey PRIMARY KEY (path);
 
 
---
--- Name: products products_pkey; Type: CONSTRAINT; Schema: public; Owner: -
---
+CREATE TABLE IF NOT EXISTS "public"."system_settings" (
+    "id" "uuid" DEFAULT "gen_random_uuid"() NOT NULL,
+    "key" "text" NOT NULL,
+    "value" "jsonb" NOT NULL,
+    "created_at" timestamp with time zone DEFAULT "now"(),
+    "updated_at" timestamp with time zone DEFAULT "now"()
+);
 
-ALTER TABLE ONLY public.products
-    ADD CONSTRAINT products_pkey PRIMARY KEY (id);
 
+ALTER TABLE "public"."system_settings" OWNER TO "postgres";
 
---
--- Name: products products_user_id_name_key; Type: CONSTRAINT; Schema: public; Owner: -
---
 
-ALTER TABLE ONLY public.products
-    ADD CONSTRAINT products_user_id_name_key UNIQUE (user_id, name);
+COMMENT ON TABLE "public"."system_settings" IS '系统设置表（全局配置，无用户维度）';
 
 
---
--- Name: system_settings system_settings_key_key; Type: CONSTRAINT; Schema: public; Owner: -
---
 
-ALTER TABLE ONLY public.system_settings
-    ADD CONSTRAINT system_settings_key_key UNIQUE (key);
+ALTER TABLE ONLY "public"."bom_batches"
+    ADD CONSTRAINT "bom_batches_pkey" PRIMARY KEY ("id");
 
 
---
--- Name: system_settings system_settings_pkey; Type: CONSTRAINT; Schema: public; Owner: -
---
 
-ALTER TABLE ONLY public.system_settings
-    ADD CONSTRAINT system_settings_pkey PRIMARY KEY (id);
+ALTER TABLE ONLY "public"."bom_download_jobs"
+    ADD CONSTRAINT "bom_download_jobs_pkey" PRIMARY KEY ("id");
 
 
---
--- Name: idx_bom_batches_created; Type: INDEX; Schema: public; Owner: -
---
 
-CREATE INDEX idx_bom_batches_created ON public.bom_batches USING btree (created_at DESC);
+ALTER TABLE ONLY "public"."bom_ext_sync_jobs"
+    ADD CONSTRAINT "bom_ext_sync_jobs_pkey" PRIMARY KEY ("id");
 
 
---
--- Name: idx_bom_batches_product; Type: INDEX; Schema: public; Owner: -
---
 
-CREATE INDEX idx_bom_batches_product ON public.bom_batches USING btree (product_id);
+ALTER TABLE ONLY "public"."bom_feishu_scan_jobs"
+    ADD CONSTRAINT "bom_feishu_scan_jobs_pkey" PRIMARY KEY ("id");
 
 
---
--- Name: idx_bom_batches_user; Type: INDEX; Schema: public; Owner: -
---
 
-CREATE INDEX idx_bom_batches_user ON public.bom_batches USING btree (user_id);
+ALTER TABLE ONLY "public"."bom_feishu_upload_jobs"
+    ADD CONSTRAINT "bom_feishu_upload_jobs_pkey" PRIMARY KEY ("id");
 
 
---
--- Name: idx_bom_download_jobs_batch; Type: INDEX; Schema: public; Owner: -
---
 
-CREATE INDEX idx_bom_download_jobs_batch ON public.bom_download_jobs USING btree (batch_id, created_at DESC);
+ALTER TABLE ONLY "public"."bom_rows"
+    ADD CONSTRAINT "bom_rows_pkey" PRIMARY KEY ("id");
 
 
---
--- Name: idx_bom_download_jobs_status; Type: INDEX; Schema: public; Owner: -
---
 
-CREATE INDEX idx_bom_download_jobs_status ON public.bom_download_jobs USING btree (status);
+ALTER TABLE ONLY "public"."bom_scan_jobs"
+    ADD CONSTRAINT "bom_scan_jobs_pkey" PRIMARY KEY ("id");
 
 
---
--- Name: idx_bom_ext_sync_jobs_batch; Type: INDEX; Schema: public; Owner: -
---
 
-CREATE INDEX idx_bom_ext_sync_jobs_batch ON public.bom_ext_sync_jobs USING btree (batch_id, created_at DESC);
+ALTER TABLE ONLY "public"."local_file"
+    ADD CONSTRAINT "local_file_pkey" PRIMARY KEY ("path");
 
 
---
--- Name: idx_bom_ext_sync_jobs_status; Type: INDEX; Schema: public; Owner: -
---
 
-CREATE INDEX idx_bom_ext_sync_jobs_status ON public.bom_ext_sync_jobs USING btree (status);
+ALTER TABLE ONLY "public"."products"
+    ADD CONSTRAINT "products_pkey" PRIMARY KEY ("id");
 
 
---
--- Name: idx_bom_rows_batch; Type: INDEX; Schema: public; Owner: -
---
 
-CREATE INDEX idx_bom_rows_batch ON public.bom_rows USING btree (batch_id);
+ALTER TABLE ONLY "public"."products"
+    ADD CONSTRAINT "products_user_id_name_key" UNIQUE ("user_id", "name");
 
 
---
--- Name: idx_bom_rows_batch_sort; Type: INDEX; Schema: public; Owner: -
---
 
-CREATE INDEX idx_bom_rows_batch_sort ON public.bom_rows USING btree (batch_id, sort_order);
+ALTER TABLE ONLY "public"."system_settings"
+    ADD CONSTRAINT "system_settings_key_key" UNIQUE ("key");
 
 
---
--- Name: idx_bom_rows_status_ext; Type: INDEX; Schema: public; Owner: -
---
 
-CREATE INDEX idx_bom_rows_status_ext ON public.bom_rows USING btree (((status ->> 'ext'::text)));
+ALTER TABLE ONLY "public"."system_settings"
+    ADD CONSTRAINT "system_settings_pkey" PRIMARY KEY ("id");
 
 
---
--- Name: idx_bom_rows_status_local; Type: INDEX; Schema: public; Owner: -
---
 
-CREATE INDEX idx_bom_rows_status_local ON public.bom_rows USING btree (((status ->> 'local'::text)));
+CREATE INDEX "idx_bom_batches_created" ON "public"."bom_batches" USING "btree" ("created_at" DESC);
 
 
---
--- Name: idx_bom_scan_jobs_requested_at; Type: INDEX; Schema: public; Owner: -
---
 
-CREATE INDEX idx_bom_scan_jobs_requested_at ON public.bom_scan_jobs USING btree (requested_at DESC);
+CREATE INDEX "idx_bom_batches_product" ON "public"."bom_batches" USING "btree" ("product_id");
 
 
---
--- Name: idx_bom_scan_jobs_status; Type: INDEX; Schema: public; Owner: -
---
 
-CREATE INDEX idx_bom_scan_jobs_status ON public.bom_scan_jobs USING btree (status);
+CREATE INDEX "idx_bom_batches_user" ON "public"."bom_batches" USING "btree" ("user_id");
 
 
---
--- Name: idx_local_file_last_seen_scan_job; Type: INDEX; Schema: public; Owner: -
---
 
-CREATE INDEX idx_local_file_last_seen_scan_job ON public.local_file USING btree (last_seen_scan_job_id);
+CREATE INDEX "idx_bom_download_jobs_batch" ON "public"."bom_download_jobs" USING "btree" ("batch_id", "created_at" DESC);
 
 
---
--- Name: idx_local_file_md5; Type: INDEX; Schema: public; Owner: -
---
 
-CREATE INDEX idx_local_file_md5 ON public.local_file USING btree (md5) WHERE (md5 IS NOT NULL);
+CREATE INDEX "idx_bom_download_jobs_status" ON "public"."bom_download_jobs" USING "btree" ("status");
 
 
---
--- Name: idx_products_user; Type: INDEX; Schema: public; Owner: -
---
 
-CREATE INDEX idx_products_user ON public.products USING btree (user_id);
+CREATE INDEX "idx_bom_ext_sync_jobs_batch" ON "public"."bom_ext_sync_jobs" USING "btree" ("batch_id", "created_at" DESC);
 
 
---
--- Name: idx_system_settings_key; Type: INDEX; Schema: public; Owner: -
---
 
-CREATE INDEX idx_system_settings_key ON public.system_settings USING btree (key);
+CREATE INDEX "idx_bom_ext_sync_jobs_status" ON "public"."bom_ext_sync_jobs" USING "btree" ("status");
 
 
---
--- Name: bom_batches trg_bom_batches_product_owner; Type: TRIGGER; Schema: public; Owner: -
---
 
-CREATE TRIGGER trg_bom_batches_product_owner BEFORE INSERT OR UPDATE OF product_id, user_id ON public.bom_batches FOR EACH ROW EXECUTE FUNCTION public.bom_batch_product_must_belong_to_user();
+CREATE INDEX "idx_bom_feishu_scan_jobs_batch" ON "public"."bom_feishu_scan_jobs" USING "btree" ("batch_id");
 
 
---
--- Name: bom_batches update_bom_batches_updated_at; Type: TRIGGER; Schema: public; Owner: -
---
 
-CREATE TRIGGER update_bom_batches_updated_at BEFORE UPDATE ON public.bom_batches FOR EACH ROW EXECUTE FUNCTION public.update_updated_at_column();
+CREATE INDEX "idx_bom_feishu_scan_jobs_requested" ON "public"."bom_feishu_scan_jobs" USING "btree" ("requested_at" DESC);
 
 
---
--- Name: bom_download_jobs update_bom_download_jobs_updated_at; Type: TRIGGER; Schema: public; Owner: -
---
 
-CREATE TRIGGER update_bom_download_jobs_updated_at BEFORE UPDATE ON public.bom_download_jobs FOR EACH ROW EXECUTE FUNCTION public.update_updated_at_column();
+CREATE INDEX "idx_bom_feishu_scan_jobs_status" ON "public"."bom_feishu_scan_jobs" USING "btree" ("status");
 
 
---
--- Name: bom_ext_sync_jobs update_bom_ext_sync_jobs_updated_at; Type: TRIGGER; Schema: public; Owner: -
---
 
-CREATE TRIGGER update_bom_ext_sync_jobs_updated_at BEFORE UPDATE ON public.bom_ext_sync_jobs FOR EACH ROW EXECUTE FUNCTION public.update_updated_at_column();
+CREATE INDEX "idx_bom_feishu_upload_jobs_batch" ON "public"."bom_feishu_upload_jobs" USING "btree" ("batch_id", "created_at" DESC);
 
 
---
--- Name: bom_rows update_bom_rows_updated_at; Type: TRIGGER; Schema: public; Owner: -
---
 
-CREATE TRIGGER update_bom_rows_updated_at BEFORE UPDATE ON public.bom_rows FOR EACH ROW EXECUTE FUNCTION public.update_updated_at_column();
+CREATE INDEX "idx_bom_feishu_upload_jobs_status" ON "public"."bom_feishu_upload_jobs" USING "btree" ("status");
 
 
---
--- Name: bom_scan_jobs update_bom_scan_jobs_updated_at; Type: TRIGGER; Schema: public; Owner: -
---
 
-CREATE TRIGGER update_bom_scan_jobs_updated_at BEFORE UPDATE ON public.bom_scan_jobs FOR EACH ROW EXECUTE FUNCTION public.update_updated_at_column();
+CREATE INDEX "idx_bom_rows_batch" ON "public"."bom_rows" USING "btree" ("batch_id");
 
 
---
--- Name: local_file update_local_file_updated_at; Type: TRIGGER; Schema: public; Owner: -
---
 
-CREATE TRIGGER update_local_file_updated_at BEFORE UPDATE ON public.local_file FOR EACH ROW EXECUTE FUNCTION public.update_updated_at_column();
+CREATE INDEX "idx_bom_rows_batch_sort" ON "public"."bom_rows" USING "btree" ("batch_id", "sort_order");
 
 
---
--- Name: products update_products_updated_at; Type: TRIGGER; Schema: public; Owner: -
---
 
-CREATE TRIGGER update_products_updated_at BEFORE UPDATE ON public.products FOR EACH ROW EXECUTE FUNCTION public.update_updated_at_column();
+CREATE INDEX "idx_bom_rows_status_ext" ON "public"."bom_rows" USING "btree" ((("status" ->> 'ext'::"text")));
 
 
---
--- Name: system_settings update_system_settings_updated_at; Type: TRIGGER; Schema: public; Owner: -
---
 
-CREATE TRIGGER update_system_settings_updated_at BEFORE UPDATE ON public.system_settings FOR EACH ROW EXECUTE FUNCTION public.update_updated_at_column();
+CREATE INDEX "idx_bom_rows_status_local" ON "public"."bom_rows" USING "btree" ((("status" ->> 'local'::"text")));
 
 
---
--- Name: bom_batches bom_batches_product_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
---
 
-ALTER TABLE ONLY public.bom_batches
-    ADD CONSTRAINT bom_batches_product_id_fkey FOREIGN KEY (product_id) REFERENCES public.products(id) ON DELETE RESTRICT;
+CREATE INDEX "idx_bom_scan_jobs_requested_at" ON "public"."bom_scan_jobs" USING "btree" ("requested_at" DESC);
 
 
---
--- Name: bom_batches bom_batches_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
---
 
-ALTER TABLE ONLY public.bom_batches
-    ADD CONSTRAINT bom_batches_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+CREATE INDEX "idx_bom_scan_jobs_status" ON "public"."bom_scan_jobs" USING "btree" ("status");
 
 
---
--- Name: bom_download_jobs bom_download_jobs_batch_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
---
 
-ALTER TABLE ONLY public.bom_download_jobs
-    ADD CONSTRAINT bom_download_jobs_batch_id_fkey FOREIGN KEY (batch_id) REFERENCES public.bom_batches(id) ON DELETE CASCADE;
+CREATE INDEX "idx_local_file_last_seen_scan_job" ON "public"."local_file" USING "btree" ("last_seen_scan_job_id");
 
 
---
--- Name: bom_download_jobs bom_download_jobs_running_row_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
---
 
-ALTER TABLE ONLY public.bom_download_jobs
-    ADD CONSTRAINT bom_download_jobs_running_row_id_fkey FOREIGN KEY (running_row_id) REFERENCES public.bom_rows(id) ON DELETE SET NULL;
+CREATE INDEX "idx_local_file_md5" ON "public"."local_file" USING "btree" ("md5") WHERE ("md5" IS NOT NULL);
 
 
---
--- Name: bom_download_jobs bom_download_jobs_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
---
 
-ALTER TABLE ONLY public.bom_download_jobs
-    ADD CONSTRAINT bom_download_jobs_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+CREATE INDEX "idx_products_user" ON "public"."products" USING "btree" ("user_id");
 
 
---
--- Name: bom_ext_sync_jobs bom_ext_sync_jobs_batch_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
---
 
-ALTER TABLE ONLY public.bom_ext_sync_jobs
-    ADD CONSTRAINT bom_ext_sync_jobs_batch_id_fkey FOREIGN KEY (batch_id) REFERENCES public.bom_batches(id) ON DELETE CASCADE;
+CREATE INDEX "idx_products_user_sort" ON "public"."products" USING "btree" ("user_id", "sort_order", "created_at");
 
 
---
--- Name: bom_ext_sync_jobs bom_ext_sync_jobs_running_row_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
---
 
-ALTER TABLE ONLY public.bom_ext_sync_jobs
-    ADD CONSTRAINT bom_ext_sync_jobs_running_row_id_fkey FOREIGN KEY (running_row_id) REFERENCES public.bom_rows(id) ON DELETE SET NULL;
+CREATE INDEX "idx_system_settings_key" ON "public"."system_settings" USING "btree" ("key");
 
 
---
--- Name: bom_ext_sync_jobs bom_ext_sync_jobs_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
---
 
-ALTER TABLE ONLY public.bom_ext_sync_jobs
-    ADD CONSTRAINT bom_ext_sync_jobs_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+CREATE OR REPLACE TRIGGER "trg_bom_batches_product_owner" BEFORE INSERT OR UPDATE OF "product_id", "user_id" ON "public"."bom_batches" FOR EACH ROW EXECUTE FUNCTION "public"."bom_batch_product_must_belong_to_user"();
 
 
---
--- Name: bom_rows bom_rows_batch_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
---
 
-ALTER TABLE ONLY public.bom_rows
-    ADD CONSTRAINT bom_rows_batch_id_fkey FOREIGN KEY (batch_id) REFERENCES public.bom_batches(id) ON DELETE CASCADE;
+CREATE OR REPLACE TRIGGER "update_bom_batches_updated_at" BEFORE UPDATE ON "public"."bom_batches" FOR EACH ROW EXECUTE FUNCTION "public"."update_updated_at_column"();
 
 
---
--- Name: local_file local_file_last_seen_scan_job_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
---
 
-ALTER TABLE ONLY public.local_file
-    ADD CONSTRAINT local_file_last_seen_scan_job_id_fkey FOREIGN KEY (last_seen_scan_job_id) REFERENCES public.bom_scan_jobs(id) ON DELETE SET NULL;
+CREATE OR REPLACE TRIGGER "update_bom_download_jobs_updated_at" BEFORE UPDATE ON "public"."bom_download_jobs" FOR EACH ROW EXECUTE FUNCTION "public"."update_updated_at_column"();
 
 
---
--- Name: products products_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
---
 
-ALTER TABLE ONLY public.products
-    ADD CONSTRAINT products_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+CREATE OR REPLACE TRIGGER "update_bom_ext_sync_jobs_updated_at" BEFORE UPDATE ON "public"."bom_ext_sync_jobs" FOR EACH ROW EXECUTE FUNCTION "public"."update_updated_at_column"();
 
 
---
--- Name: local_file Authenticated can delete local_file; Type: POLICY; Schema: public; Owner: -
---
 
-CREATE POLICY "Authenticated can delete local_file" ON public.local_file FOR DELETE USING ((auth.role() = ANY (ARRAY['authenticated'::text, 'service_role'::text])));
+CREATE OR REPLACE TRIGGER "update_bom_feishu_scan_jobs_updated_at" BEFORE UPDATE ON "public"."bom_feishu_scan_jobs" FOR EACH ROW EXECUTE FUNCTION "public"."update_updated_at_column"();
 
 
---
--- Name: system_settings Authenticated can delete settings; Type: POLICY; Schema: public; Owner: -
---
 
-CREATE POLICY "Authenticated can delete settings" ON public.system_settings FOR DELETE USING ((auth.role() = ANY (ARRAY['authenticated'::text, 'service_role'::text])));
+CREATE OR REPLACE TRIGGER "update_bom_feishu_upload_jobs_updated_at" BEFORE UPDATE ON "public"."bom_feishu_upload_jobs" FOR EACH ROW EXECUTE FUNCTION "public"."update_updated_at_column"();
 
 
---
--- Name: bom_scan_jobs Authenticated can insert bom_scan_jobs; Type: POLICY; Schema: public; Owner: -
---
 
-CREATE POLICY "Authenticated can insert bom_scan_jobs" ON public.bom_scan_jobs FOR INSERT WITH CHECK ((auth.role() = ANY (ARRAY['authenticated'::text, 'service_role'::text])));
+CREATE OR REPLACE TRIGGER "update_bom_rows_updated_at" BEFORE UPDATE ON "public"."bom_rows" FOR EACH ROW EXECUTE FUNCTION "public"."update_updated_at_column"();
 
 
---
--- Name: local_file Authenticated can insert local_file; Type: POLICY; Schema: public; Owner: -
---
 
-CREATE POLICY "Authenticated can insert local_file" ON public.local_file FOR INSERT WITH CHECK ((auth.role() = ANY (ARRAY['authenticated'::text, 'service_role'::text])));
+CREATE OR REPLACE TRIGGER "update_bom_scan_jobs_updated_at" BEFORE UPDATE ON "public"."bom_scan_jobs" FOR EACH ROW EXECUTE FUNCTION "public"."update_updated_at_column"();
 
 
---
--- Name: bom_scan_jobs Authenticated can read bom_scan_jobs; Type: POLICY; Schema: public; Owner: -
---
 
-CREATE POLICY "Authenticated can read bom_scan_jobs" ON public.bom_scan_jobs FOR SELECT USING ((auth.role() = ANY (ARRAY['authenticated'::text, 'service_role'::text])));
+CREATE OR REPLACE TRIGGER "update_local_file_updated_at" BEFORE UPDATE ON "public"."local_file" FOR EACH ROW EXECUTE FUNCTION "public"."update_updated_at_column"();
 
 
---
--- Name: local_file Authenticated can read local_file; Type: POLICY; Schema: public; Owner: -
---
 
-CREATE POLICY "Authenticated can read local_file" ON public.local_file FOR SELECT USING ((auth.role() = ANY (ARRAY['authenticated'::text, 'service_role'::text])));
+CREATE OR REPLACE TRIGGER "update_products_updated_at" BEFORE UPDATE ON "public"."products" FOR EACH ROW EXECUTE FUNCTION "public"."update_updated_at_column"();
 
 
---
--- Name: system_settings Authenticated can read settings; Type: POLICY; Schema: public; Owner: -
---
 
-CREATE POLICY "Authenticated can read settings" ON public.system_settings FOR SELECT USING ((auth.role() = ANY (ARRAY['authenticated'::text, 'service_role'::text])));
+CREATE OR REPLACE TRIGGER "update_system_settings_updated_at" BEFORE UPDATE ON "public"."system_settings" FOR EACH ROW EXECUTE FUNCTION "public"."update_updated_at_column"();
 
 
---
--- Name: local_file Authenticated can update local_file; Type: POLICY; Schema: public; Owner: -
---
 
-CREATE POLICY "Authenticated can update local_file" ON public.local_file FOR UPDATE USING ((auth.role() = ANY (ARRAY['authenticated'::text, 'service_role'::text])));
+ALTER TABLE ONLY "public"."bom_batches"
+    ADD CONSTRAINT "bom_batches_product_id_fkey" FOREIGN KEY ("product_id") REFERENCES "public"."products"("id") ON DELETE RESTRICT;
 
 
---
--- Name: system_settings Authenticated can update settings; Type: POLICY; Schema: public; Owner: -
---
 
-CREATE POLICY "Authenticated can update settings" ON public.system_settings FOR UPDATE USING ((auth.role() = ANY (ARRAY['authenticated'::text, 'service_role'::text])));
+ALTER TABLE ONLY "public"."bom_batches"
+    ADD CONSTRAINT "bom_batches_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "auth"."users"("id") ON DELETE CASCADE;
 
 
---
--- Name: system_settings Authenticated can write settings; Type: POLICY; Schema: public; Owner: -
---
 
-CREATE POLICY "Authenticated can write settings" ON public.system_settings FOR INSERT WITH CHECK ((auth.role() = ANY (ARRAY['authenticated'::text, 'service_role'::text])));
+ALTER TABLE ONLY "public"."bom_download_jobs"
+    ADD CONSTRAINT "bom_download_jobs_batch_id_fkey" FOREIGN KEY ("batch_id") REFERENCES "public"."bom_batches"("id") ON DELETE CASCADE;
 
 
---
--- Name: bom_batches Service role full bom batches; Type: POLICY; Schema: public; Owner: -
---
 
-CREATE POLICY "Service role full bom batches" ON public.bom_batches TO service_role USING (true) WITH CHECK (true);
+ALTER TABLE ONLY "public"."bom_download_jobs"
+    ADD CONSTRAINT "bom_download_jobs_running_row_id_fkey" FOREIGN KEY ("running_row_id") REFERENCES "public"."bom_rows"("id") ON DELETE SET NULL;
 
 
---
--- Name: bom_rows Service role full bom rows; Type: POLICY; Schema: public; Owner: -
---
 
-CREATE POLICY "Service role full bom rows" ON public.bom_rows TO service_role USING (true) WITH CHECK (true);
+ALTER TABLE ONLY "public"."bom_download_jobs"
+    ADD CONSTRAINT "bom_download_jobs_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "auth"."users"("id") ON DELETE CASCADE;
 
 
---
--- Name: bom_download_jobs Service role full bom_download_jobs; Type: POLICY; Schema: public; Owner: -
---
 
-CREATE POLICY "Service role full bom_download_jobs" ON public.bom_download_jobs TO service_role USING (true) WITH CHECK (true);
+ALTER TABLE ONLY "public"."bom_ext_sync_jobs"
+    ADD CONSTRAINT "bom_ext_sync_jobs_batch_id_fkey" FOREIGN KEY ("batch_id") REFERENCES "public"."bom_batches"("id") ON DELETE CASCADE;
 
 
---
--- Name: bom_ext_sync_jobs Service role full bom_ext_sync_jobs; Type: POLICY; Schema: public; Owner: -
---
 
-CREATE POLICY "Service role full bom_ext_sync_jobs" ON public.bom_ext_sync_jobs TO service_role USING (true) WITH CHECK (true);
+ALTER TABLE ONLY "public"."bom_ext_sync_jobs"
+    ADD CONSTRAINT "bom_ext_sync_jobs_running_row_id_fkey" FOREIGN KEY ("running_row_id") REFERENCES "public"."bom_rows"("id") ON DELETE SET NULL;
 
 
---
--- Name: bom_scan_jobs Service role full bom_scan_jobs; Type: POLICY; Schema: public; Owner: -
---
 
-CREATE POLICY "Service role full bom_scan_jobs" ON public.bom_scan_jobs TO service_role USING (true) WITH CHECK (true);
+ALTER TABLE ONLY "public"."bom_ext_sync_jobs"
+    ADD CONSTRAINT "bom_ext_sync_jobs_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "auth"."users"("id") ON DELETE CASCADE;
 
 
---
--- Name: products Service role full products; Type: POLICY; Schema: public; Owner: -
---
 
-CREATE POLICY "Service role full products" ON public.products TO service_role USING (true) WITH CHECK (true);
+ALTER TABLE ONLY "public"."bom_feishu_scan_jobs"
+    ADD CONSTRAINT "bom_feishu_scan_jobs_batch_id_fkey" FOREIGN KEY ("batch_id") REFERENCES "public"."bom_batches"("id") ON DELETE CASCADE;
 
 
---
--- Name: bom_rows Users manage bom rows via own batch; Type: POLICY; Schema: public; Owner: -
---
 
-CREATE POLICY "Users manage bom rows via own batch" ON public.bom_rows USING ((EXISTS ( SELECT 1
-   FROM public.bom_batches b
-  WHERE ((b.id = bom_rows.batch_id) AND (b.user_id = auth.uid()))))) WITH CHECK ((EXISTS ( SELECT 1
-   FROM public.bom_batches b
-  WHERE ((b.id = bom_rows.batch_id) AND (b.user_id = auth.uid())))));
+ALTER TABLE ONLY "public"."bom_feishu_upload_jobs"
+    ADD CONSTRAINT "bom_feishu_upload_jobs_batch_id_fkey" FOREIGN KEY ("batch_id") REFERENCES "public"."bom_batches"("id") ON DELETE CASCADE;
 
 
---
--- Name: bom_batches Users manage own bom batches; Type: POLICY; Schema: public; Owner: -
---
 
-CREATE POLICY "Users manage own bom batches" ON public.bom_batches USING ((auth.uid() = user_id)) WITH CHECK ((auth.uid() = user_id));
+ALTER TABLE ONLY "public"."bom_feishu_upload_jobs"
+    ADD CONSTRAINT "bom_feishu_upload_jobs_running_row_id_fkey" FOREIGN KEY ("running_row_id") REFERENCES "public"."bom_rows"("id") ON DELETE SET NULL;
 
 
---
--- Name: products Users manage own products; Type: POLICY; Schema: public; Owner: -
---
 
-CREATE POLICY "Users manage own products" ON public.products USING ((auth.uid() = user_id)) WITH CHECK ((auth.uid() = user_id));
+ALTER TABLE ONLY "public"."bom_feishu_upload_jobs"
+    ADD CONSTRAINT "bom_feishu_upload_jobs_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "auth"."users"("id") ON DELETE CASCADE;
 
 
---
--- Name: bom_download_jobs Users read own batch download jobs; Type: POLICY; Schema: public; Owner: -
---
 
-CREATE POLICY "Users read own batch download jobs" ON public.bom_download_jobs FOR SELECT USING ((EXISTS ( SELECT 1
-   FROM public.bom_batches b
-  WHERE ((b.id = bom_download_jobs.batch_id) AND (b.user_id = auth.uid())))));
+ALTER TABLE ONLY "public"."bom_rows"
+    ADD CONSTRAINT "bom_rows_batch_id_fkey" FOREIGN KEY ("batch_id") REFERENCES "public"."bom_batches"("id") ON DELETE CASCADE;
 
 
---
--- Name: bom_ext_sync_jobs Users read own batch ext sync jobs; Type: POLICY; Schema: public; Owner: -
---
 
-CREATE POLICY "Users read own batch ext sync jobs" ON public.bom_ext_sync_jobs FOR SELECT USING ((EXISTS ( SELECT 1
-   FROM public.bom_batches b
-  WHERE ((b.id = bom_ext_sync_jobs.batch_id) AND (b.user_id = auth.uid())))));
+ALTER TABLE ONLY "public"."local_file"
+    ADD CONSTRAINT "local_file_last_seen_scan_job_id_fkey" FOREIGN KEY ("last_seen_scan_job_id") REFERENCES "public"."bom_scan_jobs"("id") ON DELETE SET NULL;
 
 
---
--- Name: bom_batches; Type: ROW SECURITY; Schema: public; Owner: -
---
 
-ALTER TABLE public.bom_batches ENABLE ROW LEVEL SECURITY;
+ALTER TABLE ONLY "public"."products"
+    ADD CONSTRAINT "products_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "auth"."users"("id") ON DELETE CASCADE;
 
---
--- Name: bom_download_jobs; Type: ROW SECURITY; Schema: public; Owner: -
---
 
-ALTER TABLE public.bom_download_jobs ENABLE ROW LEVEL SECURITY;
 
---
--- Name: bom_ext_sync_jobs; Type: ROW SECURITY; Schema: public; Owner: -
---
+CREATE POLICY "Authenticated can delete local_file" ON "public"."local_file" FOR DELETE USING (("auth"."role"() = ANY (ARRAY['authenticated'::"text", 'service_role'::"text"])));
 
-ALTER TABLE public.bom_ext_sync_jobs ENABLE ROW LEVEL SECURITY;
 
---
--- Name: bom_rows; Type: ROW SECURITY; Schema: public; Owner: -
---
 
-ALTER TABLE public.bom_rows ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Authenticated can delete settings" ON "public"."system_settings" FOR DELETE USING (("auth"."role"() = ANY (ARRAY['authenticated'::"text", 'service_role'::"text"])));
 
---
--- Name: bom_scan_jobs; Type: ROW SECURITY; Schema: public; Owner: -
---
 
-ALTER TABLE public.bom_scan_jobs ENABLE ROW LEVEL SECURITY;
 
---
--- Name: local_file; Type: ROW SECURITY; Schema: public; Owner: -
---
+CREATE POLICY "Authenticated can insert bom_scan_jobs" ON "public"."bom_scan_jobs" FOR INSERT WITH CHECK (("auth"."role"() = ANY (ARRAY['authenticated'::"text", 'service_role'::"text"])));
 
-ALTER TABLE public.local_file ENABLE ROW LEVEL SECURITY;
 
---
--- Name: products; Type: ROW SECURITY; Schema: public; Owner: -
---
 
-ALTER TABLE public.products ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Authenticated can insert local_file" ON "public"."local_file" FOR INSERT WITH CHECK (("auth"."role"() = ANY (ARRAY['authenticated'::"text", 'service_role'::"text"])));
 
---
--- Name: system_settings; Type: ROW SECURITY; Schema: public; Owner: -
---
 
-ALTER TABLE public.system_settings ENABLE ROW LEVEL SECURITY;
 
---
--- Name: SCHEMA public; Type: ACL; Schema: -; Owner: -
---
+CREATE POLICY "Authenticated can read bom_scan_jobs" ON "public"."bom_scan_jobs" FOR SELECT USING (("auth"."role"() = ANY (ARRAY['authenticated'::"text", 'service_role'::"text"])));
 
-GRANT USAGE ON SCHEMA public TO postgres;
-GRANT USAGE ON SCHEMA public TO anon;
-GRANT USAGE ON SCHEMA public TO authenticated;
-GRANT USAGE ON SCHEMA public TO service_role;
 
 
---
--- Name: FUNCTION bom_batch_product_must_belong_to_user(); Type: ACL; Schema: public; Owner: -
---
+CREATE POLICY "Authenticated can read local_file" ON "public"."local_file" FOR SELECT USING (("auth"."role"() = ANY (ARRAY['authenticated'::"text", 'service_role'::"text"])));
 
-GRANT ALL ON FUNCTION public.bom_batch_product_must_belong_to_user() TO anon;
-GRANT ALL ON FUNCTION public.bom_batch_product_must_belong_to_user() TO authenticated;
-GRANT ALL ON FUNCTION public.bom_batch_product_must_belong_to_user() TO service_role;
 
 
---
--- Name: FUNCTION bom_cancel_download_job(p_job_id uuid); Type: ACL; Schema: public; Owner: -
---
+CREATE POLICY "Authenticated can read settings" ON "public"."system_settings" FOR SELECT USING (("auth"."role"() = ANY (ARRAY['authenticated'::"text", 'service_role'::"text"])));
 
-REVOKE ALL ON FUNCTION public.bom_cancel_download_job(p_job_id uuid) FROM PUBLIC;
-GRANT ALL ON FUNCTION public.bom_cancel_download_job(p_job_id uuid) TO anon;
-GRANT ALL ON FUNCTION public.bom_cancel_download_job(p_job_id uuid) TO authenticated;
-GRANT ALL ON FUNCTION public.bom_cancel_download_job(p_job_id uuid) TO service_role;
 
 
---
--- Name: FUNCTION bom_cancel_ext_sync_job(p_job_id uuid); Type: ACL; Schema: public; Owner: -
---
+CREATE POLICY "Authenticated can update local_file" ON "public"."local_file" FOR UPDATE USING (("auth"."role"() = ANY (ARRAY['authenticated'::"text", 'service_role'::"text"])));
 
-REVOKE ALL ON FUNCTION public.bom_cancel_ext_sync_job(p_job_id uuid) FROM PUBLIC;
-GRANT ALL ON FUNCTION public.bom_cancel_ext_sync_job(p_job_id uuid) TO anon;
-GRANT ALL ON FUNCTION public.bom_cancel_ext_sync_job(p_job_id uuid) TO authenticated;
-GRANT ALL ON FUNCTION public.bom_cancel_ext_sync_job(p_job_id uuid) TO service_role;
 
 
---
--- Name: FUNCTION bom_claim_download_job(); Type: ACL; Schema: public; Owner: -
---
+CREATE POLICY "Authenticated can update settings" ON "public"."system_settings" FOR UPDATE USING (("auth"."role"() = ANY (ARRAY['authenticated'::"text", 'service_role'::"text"])));
 
-REVOKE ALL ON FUNCTION public.bom_claim_download_job() FROM PUBLIC;
-GRANT ALL ON FUNCTION public.bom_claim_download_job() TO anon;
-GRANT ALL ON FUNCTION public.bom_claim_download_job() TO service_role;
 
 
---
--- Name: FUNCTION bom_claim_ext_sync_job(); Type: ACL; Schema: public; Owner: -
---
+CREATE POLICY "Authenticated can write settings" ON "public"."system_settings" FOR INSERT WITH CHECK (("auth"."role"() = ANY (ARRAY['authenticated'::"text", 'service_role'::"text"])));
 
-REVOKE ALL ON FUNCTION public.bom_claim_ext_sync_job() FROM PUBLIC;
-GRANT ALL ON FUNCTION public.bom_claim_ext_sync_job() TO anon;
-GRANT ALL ON FUNCTION public.bom_claim_ext_sync_job() TO service_role;
 
 
---
--- Name: FUNCTION bom_dashboard_stats(); Type: ACL; Schema: public; Owner: -
---
+CREATE POLICY "Service role full bom batches" ON "public"."bom_batches" TO "service_role" USING (true) WITH CHECK (true);
 
-REVOKE ALL ON FUNCTION public.bom_dashboard_stats() FROM PUBLIC;
-GRANT ALL ON FUNCTION public.bom_dashboard_stats() TO anon;
-GRANT ALL ON FUNCTION public.bom_dashboard_stats() TO authenticated;
-GRANT ALL ON FUNCTION public.bom_dashboard_stats() TO service_role;
 
 
---
--- Name: FUNCTION bom_extract_download_url(p_row jsonb); Type: ACL; Schema: public; Owner: -
---
+CREATE POLICY "Service role full bom rows" ON "public"."bom_rows" TO "service_role" USING (true) WITH CHECK (true);
 
-GRANT ALL ON FUNCTION public.bom_extract_download_url(p_row jsonb) TO anon;
-GRANT ALL ON FUNCTION public.bom_extract_download_url(p_row jsonb) TO authenticated;
-GRANT ALL ON FUNCTION public.bom_extract_download_url(p_row jsonb) TO service_role;
 
 
---
--- Name: FUNCTION bom_extract_expected_md5(p_row jsonb); Type: ACL; Schema: public; Owner: -
---
+CREATE POLICY "Service role full bom_download_jobs" ON "public"."bom_download_jobs" TO "service_role" USING (true) WITH CHECK (true);
 
-GRANT ALL ON FUNCTION public.bom_extract_expected_md5(p_row jsonb) TO anon;
-GRANT ALL ON FUNCTION public.bom_extract_expected_md5(p_row jsonb) TO authenticated;
-GRANT ALL ON FUNCTION public.bom_extract_expected_md5(p_row jsonb) TO service_role;
 
 
---
--- Name: FUNCTION bom_extract_ext_url(p_row jsonb); Type: ACL; Schema: public; Owner: -
---
+CREATE POLICY "Service role full bom_ext_sync_jobs" ON "public"."bom_ext_sync_jobs" TO "service_role" USING (true) WITH CHECK (true);
 
-GRANT ALL ON FUNCTION public.bom_extract_ext_url(p_row jsonb) TO anon;
-GRANT ALL ON FUNCTION public.bom_extract_ext_url(p_row jsonb) TO authenticated;
-GRANT ALL ON FUNCTION public.bom_extract_ext_url(p_row jsonb) TO service_role;
 
 
---
--- Name: FUNCTION bom_fail_stale_download_jobs(p_stale_seconds integer); Type: ACL; Schema: public; Owner: -
---
+CREATE POLICY "Service role full bom_feishu_scan_jobs" ON "public"."bom_feishu_scan_jobs" TO "service_role" USING (true) WITH CHECK (true);
 
-REVOKE ALL ON FUNCTION public.bom_fail_stale_download_jobs(p_stale_seconds integer) FROM PUBLIC;
-GRANT ALL ON FUNCTION public.bom_fail_stale_download_jobs(p_stale_seconds integer) TO anon;
-GRANT ALL ON FUNCTION public.bom_fail_stale_download_jobs(p_stale_seconds integer) TO service_role;
 
 
---
--- Name: FUNCTION bom_fail_stale_ext_sync_jobs(p_stale_seconds integer); Type: ACL; Schema: public; Owner: -
---
+CREATE POLICY "Service role full bom_feishu_upload_jobs" ON "public"."bom_feishu_upload_jobs" TO "service_role" USING (true) WITH CHECK (true);
 
-REVOKE ALL ON FUNCTION public.bom_fail_stale_ext_sync_jobs(p_stale_seconds integer) FROM PUBLIC;
-GRANT ALL ON FUNCTION public.bom_fail_stale_ext_sync_jobs(p_stale_seconds integer) TO anon;
-GRANT ALL ON FUNCTION public.bom_fail_stale_ext_sync_jobs(p_stale_seconds integer) TO service_role;
 
 
---
--- Name: FUNCTION bom_fail_stale_scan_jobs(p_stale_seconds integer); Type: ACL; Schema: public; Owner: -
---
+CREATE POLICY "Service role full bom_scan_jobs" ON "public"."bom_scan_jobs" TO "service_role" USING (true) WITH CHECK (true);
 
-REVOKE ALL ON FUNCTION public.bom_fail_stale_scan_jobs(p_stale_seconds integer) FROM PUBLIC;
-GRANT ALL ON FUNCTION public.bom_fail_stale_scan_jobs(p_stale_seconds integer) TO anon;
-GRANT ALL ON FUNCTION public.bom_fail_stale_scan_jobs(p_stale_seconds integer) TO service_role;
 
 
---
--- Name: FUNCTION bom_file_basename(p_path text); Type: ACL; Schema: public; Owner: -
---
+CREATE POLICY "Service role full products" ON "public"."products" TO "service_role" USING (true) WITH CHECK (true);
 
-GRANT ALL ON FUNCTION public.bom_file_basename(p_path text) TO anon;
-GRANT ALL ON FUNCTION public.bom_file_basename(p_path text) TO authenticated;
-GRANT ALL ON FUNCTION public.bom_file_basename(p_path text) TO service_role;
 
 
---
--- Name: FUNCTION bom_finalize_scan(p_job_id uuid, p_success boolean, p_files_seen integer, p_files_md5_updated integer, p_files_removed integer, p_message text, p_prune_missing boolean); Type: ACL; Schema: public; Owner: -
---
+CREATE POLICY "Users insert feishu scan jobs for own batch" ON "public"."bom_feishu_scan_jobs" FOR INSERT WITH CHECK ((("auth"."role"() = 'service_role'::"text") OR (EXISTS ( SELECT 1
+   FROM "public"."bom_batches" "b"
+  WHERE (("b"."id" = "bom_feishu_scan_jobs"."batch_id") AND ("b"."user_id" = "auth"."uid"()))))));
 
-GRANT ALL ON FUNCTION public.bom_finalize_scan(p_job_id uuid, p_success boolean, p_files_seen integer, p_files_md5_updated integer, p_files_removed integer, p_message text, p_prune_missing boolean) TO anon;
-GRANT ALL ON FUNCTION public.bom_finalize_scan(p_job_id uuid, p_success boolean, p_files_seen integer, p_files_md5_updated integer, p_files_removed integer, p_message text, p_prune_missing boolean) TO authenticated;
-GRANT ALL ON FUNCTION public.bom_finalize_scan(p_job_id uuid, p_success boolean, p_files_seen integer, p_files_md5_updated integer, p_files_removed integer, p_message text, p_prune_missing boolean) TO service_role;
 
 
---
--- Name: FUNCTION bom_mark_scan_started(p_job_id uuid, p_message text); Type: ACL; Schema: public; Owner: -
---
+CREATE POLICY "Users manage bom rows via own batch" ON "public"."bom_rows" USING ((EXISTS ( SELECT 1
+   FROM "public"."bom_batches" "b"
+  WHERE (("b"."id" = "bom_rows"."batch_id") AND ("b"."user_id" = "auth"."uid"()))))) WITH CHECK ((EXISTS ( SELECT 1
+   FROM "public"."bom_batches" "b"
+  WHERE (("b"."id" = "bom_rows"."batch_id") AND ("b"."user_id" = "auth"."uid"())))));
 
-GRANT ALL ON FUNCTION public.bom_mark_scan_started(p_job_id uuid, p_message text) TO anon;
-GRANT ALL ON FUNCTION public.bom_mark_scan_started(p_job_id uuid, p_message text) TO authenticated;
-GRANT ALL ON FUNCTION public.bom_mark_scan_started(p_job_id uuid, p_message text) TO service_role;
 
 
---
--- Name: FUNCTION bom_refresh_local_found_statuses(); Type: ACL; Schema: public; Owner: -
---
+CREATE POLICY "Users manage own bom batches" ON "public"."bom_batches" USING (("auth"."uid"() = "user_id")) WITH CHECK (("auth"."uid"() = "user_id"));
 
-REVOKE ALL ON FUNCTION public.bom_refresh_local_found_statuses() FROM PUBLIC;
-GRANT ALL ON FUNCTION public.bom_refresh_local_found_statuses() TO anon;
-GRANT ALL ON FUNCTION public.bom_refresh_local_found_statuses() TO service_role;
 
 
---
--- Name: FUNCTION bom_refresh_local_found_statuses_for_batch(p_batch_id uuid); Type: ACL; Schema: public; Owner: -
---
+CREATE POLICY "Users manage own products" ON "public"."products" USING (("auth"."uid"() = "user_id")) WITH CHECK (("auth"."uid"() = "user_id"));
 
-REVOKE ALL ON FUNCTION public.bom_refresh_local_found_statuses_for_batch(p_batch_id uuid) FROM PUBLIC;
-GRANT ALL ON FUNCTION public.bom_refresh_local_found_statuses_for_batch(p_batch_id uuid) TO anon;
-GRANT ALL ON FUNCTION public.bom_refresh_local_found_statuses_for_batch(p_batch_id uuid) TO authenticated;
-GRANT ALL ON FUNCTION public.bom_refresh_local_found_statuses_for_batch(p_batch_id uuid) TO service_role;
 
 
---
--- Name: FUNCTION bom_request_download(p_batch_id uuid, p_row_ids uuid[]); Type: ACL; Schema: public; Owner: -
---
+CREATE POLICY "Users read feishu scan jobs for own batch" ON "public"."bom_feishu_scan_jobs" FOR SELECT USING ((("auth"."role"() = 'service_role'::"text") OR (EXISTS ( SELECT 1
+   FROM "public"."bom_batches" "b"
+  WHERE (("b"."id" = "bom_feishu_scan_jobs"."batch_id") AND ("b"."user_id" = "auth"."uid"()))))));
 
-REVOKE ALL ON FUNCTION public.bom_request_download(p_batch_id uuid, p_row_ids uuid[]) FROM PUBLIC;
-GRANT ALL ON FUNCTION public.bom_request_download(p_batch_id uuid, p_row_ids uuid[]) TO anon;
-GRANT ALL ON FUNCTION public.bom_request_download(p_batch_id uuid, p_row_ids uuid[]) TO authenticated;
-GRANT ALL ON FUNCTION public.bom_request_download(p_batch_id uuid, p_row_ids uuid[]) TO service_role;
 
 
---
--- Name: FUNCTION bom_request_ext_sync(p_batch_id uuid, p_row_ids uuid[]); Type: ACL; Schema: public; Owner: -
---
+CREATE POLICY "Users read own batch download jobs" ON "public"."bom_download_jobs" FOR SELECT USING ((EXISTS ( SELECT 1
+   FROM "public"."bom_batches" "b"
+  WHERE (("b"."id" = "bom_download_jobs"."batch_id") AND ("b"."user_id" = "auth"."uid"())))));
 
-REVOKE ALL ON FUNCTION public.bom_request_ext_sync(p_batch_id uuid, p_row_ids uuid[]) FROM PUBLIC;
-GRANT ALL ON FUNCTION public.bom_request_ext_sync(p_batch_id uuid, p_row_ids uuid[]) TO anon;
-GRANT ALL ON FUNCTION public.bom_request_ext_sync(p_batch_id uuid, p_row_ids uuid[]) TO authenticated;
-GRANT ALL ON FUNCTION public.bom_request_ext_sync(p_batch_id uuid, p_row_ids uuid[]) TO service_role;
 
 
---
--- Name: FUNCTION bom_request_scan(p_trigger_source text); Type: ACL; Schema: public; Owner: -
---
+CREATE POLICY "Users read own batch ext sync jobs" ON "public"."bom_ext_sync_jobs" FOR SELECT USING ((EXISTS ( SELECT 1
+   FROM "public"."bom_batches" "b"
+  WHERE (("b"."id" = "bom_ext_sync_jobs"."batch_id") AND ("b"."user_id" = "auth"."uid"())))));
 
-GRANT ALL ON FUNCTION public.bom_request_scan(p_trigger_source text) TO anon;
-GRANT ALL ON FUNCTION public.bom_request_scan(p_trigger_source text) TO authenticated;
-GRANT ALL ON FUNCTION public.bom_request_scan(p_trigger_source text) TO service_role;
 
 
---
--- Name: FUNCTION bom_row_download_targets(p_ids uuid[]); Type: ACL; Schema: public; Owner: -
---
+CREATE POLICY "Users read own batch feishu upload jobs" ON "public"."bom_feishu_upload_jobs" FOR SELECT USING ((EXISTS ( SELECT 1
+   FROM "public"."bom_batches" "b"
+  WHERE (("b"."id" = "bom_feishu_upload_jobs"."batch_id") AND ("b"."user_id" = "auth"."uid"())))));
 
-REVOKE ALL ON FUNCTION public.bom_row_download_targets(p_ids uuid[]) FROM PUBLIC;
-GRANT ALL ON FUNCTION public.bom_row_download_targets(p_ids uuid[]) TO anon;
-GRANT ALL ON FUNCTION public.bom_row_download_targets(p_ids uuid[]) TO service_role;
 
 
---
--- Name: FUNCTION bom_row_still_eligible_for_ext_sync(p_row_id uuid); Type: ACL; Schema: public; Owner: -
---
+CREATE POLICY "Users update feishu scan jobs for own batch" ON "public"."bom_feishu_scan_jobs" FOR UPDATE USING ((("auth"."role"() = 'service_role'::"text") OR (EXISTS ( SELECT 1
+   FROM "public"."bom_batches" "b"
+  WHERE (("b"."id" = "bom_feishu_scan_jobs"."batch_id") AND ("b"."user_id" = "auth"."uid"())))))) WITH CHECK ((("auth"."role"() = 'service_role'::"text") OR (EXISTS ( SELECT 1
+   FROM "public"."bom_batches" "b"
+  WHERE (("b"."id" = "bom_feishu_scan_jobs"."batch_id") AND ("b"."user_id" = "auth"."uid"()))))));
 
-REVOKE ALL ON FUNCTION public.bom_row_still_eligible_for_ext_sync(p_row_id uuid) FROM PUBLIC;
-GRANT ALL ON FUNCTION public.bom_row_still_eligible_for_ext_sync(p_row_id uuid) TO anon;
-GRANT ALL ON FUNCTION public.bom_row_still_eligible_for_ext_sync(p_row_id uuid) TO service_role;
 
 
---
--- Name: FUNCTION bom_row_still_eligible_for_it_download(p_row_id uuid); Type: ACL; Schema: public; Owner: -
---
+ALTER TABLE "public"."bom_batches" ENABLE ROW LEVEL SECURITY;
 
-REVOKE ALL ON FUNCTION public.bom_row_still_eligible_for_it_download(p_row_id uuid) FROM PUBLIC;
-GRANT ALL ON FUNCTION public.bom_row_still_eligible_for_it_download(p_row_id uuid) TO anon;
-GRANT ALL ON FUNCTION public.bom_row_still_eligible_for_it_download(p_row_id uuid) TO service_role;
 
+ALTER TABLE "public"."bom_download_jobs" ENABLE ROW LEVEL SECURITY;
 
---
--- Name: FUNCTION bom_rows_for_it_download(p_limit integer); Type: ACL; Schema: public; Owner: -
---
 
-REVOKE ALL ON FUNCTION public.bom_rows_for_it_download(p_limit integer) FROM PUBLIC;
-GRANT ALL ON FUNCTION public.bom_rows_for_it_download(p_limit integer) TO anon;
-GRANT ALL ON FUNCTION public.bom_rows_for_it_download(p_limit integer) TO service_role;
+ALTER TABLE "public"."bom_ext_sync_jobs" ENABLE ROW LEVEL SECURITY;
 
 
---
--- Name: FUNCTION bom_sync_bom_row_local_size_from_index(); Type: ACL; Schema: public; Owner: -
---
+ALTER TABLE "public"."bom_feishu_scan_jobs" ENABLE ROW LEVEL SECURITY;
 
-REVOKE ALL ON FUNCTION public.bom_sync_bom_row_local_size_from_index() FROM PUBLIC;
-GRANT ALL ON FUNCTION public.bom_sync_bom_row_local_size_from_index() TO anon;
-GRANT ALL ON FUNCTION public.bom_sync_bom_row_local_size_from_index() TO authenticated;
-GRANT ALL ON FUNCTION public.bom_sync_bom_row_local_size_from_index() TO service_role;
 
+ALTER TABLE "public"."bom_feishu_upload_jobs" ENABLE ROW LEVEL SECURITY;
 
---
--- Name: FUNCTION bom_upsert_local_file(p_job_id uuid, p_path text, p_size_bytes bigint, p_mtime timestamp with time zone, p_md5 text); Type: ACL; Schema: public; Owner: -
---
 
-GRANT ALL ON FUNCTION public.bom_upsert_local_file(p_job_id uuid, p_path text, p_size_bytes bigint, p_mtime timestamp with time zone, p_md5 text) TO anon;
-GRANT ALL ON FUNCTION public.bom_upsert_local_file(p_job_id uuid, p_path text, p_size_bytes bigint, p_mtime timestamp with time zone, p_md5 text) TO authenticated;
-GRANT ALL ON FUNCTION public.bom_upsert_local_file(p_job_id uuid, p_path text, p_size_bytes bigint, p_mtime timestamp with time zone, p_md5 text) TO service_role;
+ALTER TABLE "public"."bom_rows" ENABLE ROW LEVEL SECURITY;
 
 
---
--- Name: FUNCTION bom_upsert_local_file_web(p_path text, p_size_bytes bigint, p_mtime timestamp with time zone, p_md5 text); Type: ACL; Schema: public; Owner: -
---
+ALTER TABLE "public"."bom_scan_jobs" ENABLE ROW LEVEL SECURITY;
 
-REVOKE ALL ON FUNCTION public.bom_upsert_local_file_web(p_path text, p_size_bytes bigint, p_mtime timestamp with time zone, p_md5 text) FROM PUBLIC;
-GRANT ALL ON FUNCTION public.bom_upsert_local_file_web(p_path text, p_size_bytes bigint, p_mtime timestamp with time zone, p_md5 text) TO anon;
-GRANT ALL ON FUNCTION public.bom_upsert_local_file_web(p_path text, p_size_bytes bigint, p_mtime timestamp with time zone, p_md5 text) TO authenticated;
-GRANT ALL ON FUNCTION public.bom_upsert_local_file_web(p_path text, p_size_bytes bigint, p_mtime timestamp with time zone, p_md5 text) TO service_role;
 
+ALTER TABLE "public"."local_file" ENABLE ROW LEVEL SECURITY;
 
---
--- Name: FUNCTION bom_url_looks_like_it_artifactory(p text); Type: ACL; Schema: public; Owner: -
---
 
-GRANT ALL ON FUNCTION public.bom_url_looks_like_it_artifactory(p text) TO anon;
-GRANT ALL ON FUNCTION public.bom_url_looks_like_it_artifactory(p text) TO authenticated;
-GRANT ALL ON FUNCTION public.bom_url_looks_like_it_artifactory(p text) TO service_role;
+ALTER TABLE "public"."products" ENABLE ROW LEVEL SECURITY;
 
 
---
--- Name: FUNCTION bom_url_path_basename(p text); Type: ACL; Schema: public; Owner: -
---
+ALTER TABLE "public"."system_settings" ENABLE ROW LEVEL SECURITY;
 
-GRANT ALL ON FUNCTION public.bom_url_path_basename(p text) TO anon;
-GRANT ALL ON FUNCTION public.bom_url_path_basename(p text) TO authenticated;
-GRANT ALL ON FUNCTION public.bom_url_path_basename(p text) TO service_role;
 
+GRANT USAGE ON SCHEMA "public" TO "postgres";
+GRANT USAGE ON SCHEMA "public" TO "anon";
+GRANT USAGE ON SCHEMA "public" TO "authenticated";
+GRANT USAGE ON SCHEMA "public" TO "service_role";
 
---
--- Name: FUNCTION update_updated_at_column(); Type: ACL; Schema: public; Owner: -
---
 
-GRANT ALL ON FUNCTION public.update_updated_at_column() TO anon;
-GRANT ALL ON FUNCTION public.update_updated_at_column() TO authenticated;
-GRANT ALL ON FUNCTION public.update_updated_at_column() TO service_role;
 
+GRANT ALL ON FUNCTION "public"."bom_batch_product_must_belong_to_user"() TO "anon";
+GRANT ALL ON FUNCTION "public"."bom_batch_product_must_belong_to_user"() TO "authenticated";
+GRANT ALL ON FUNCTION "public"."bom_batch_product_must_belong_to_user"() TO "service_role";
 
---
--- Name: TABLE bom_batches; Type: ACL; Schema: public; Owner: -
---
 
-GRANT ALL ON TABLE public.bom_batches TO anon;
-GRANT ALL ON TABLE public.bom_batches TO authenticated;
-GRANT ALL ON TABLE public.bom_batches TO service_role;
 
+REVOKE ALL ON FUNCTION "public"."bom_cancel_download_job"("p_job_id" "uuid") FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."bom_cancel_download_job"("p_job_id" "uuid") TO "anon";
+GRANT ALL ON FUNCTION "public"."bom_cancel_download_job"("p_job_id" "uuid") TO "authenticated";
+GRANT ALL ON FUNCTION "public"."bom_cancel_download_job"("p_job_id" "uuid") TO "service_role";
 
---
--- Name: TABLE bom_download_jobs; Type: ACL; Schema: public; Owner: -
---
 
-GRANT ALL ON TABLE public.bom_download_jobs TO anon;
-GRANT ALL ON TABLE public.bom_download_jobs TO authenticated;
-GRANT ALL ON TABLE public.bom_download_jobs TO service_role;
 
+REVOKE ALL ON FUNCTION "public"."bom_cancel_ext_sync_job"("p_job_id" "uuid") FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."bom_cancel_ext_sync_job"("p_job_id" "uuid") TO "anon";
+GRANT ALL ON FUNCTION "public"."bom_cancel_ext_sync_job"("p_job_id" "uuid") TO "authenticated";
+GRANT ALL ON FUNCTION "public"."bom_cancel_ext_sync_job"("p_job_id" "uuid") TO "service_role";
 
---
--- Name: TABLE bom_ext_sync_jobs; Type: ACL; Schema: public; Owner: -
---
 
-GRANT ALL ON TABLE public.bom_ext_sync_jobs TO anon;
-GRANT ALL ON TABLE public.bom_ext_sync_jobs TO authenticated;
-GRANT ALL ON TABLE public.bom_ext_sync_jobs TO service_role;
 
+REVOKE ALL ON FUNCTION "public"."bom_cancel_feishu_upload_job"("p_job_id" "uuid") FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."bom_cancel_feishu_upload_job"("p_job_id" "uuid") TO "anon";
+GRANT ALL ON FUNCTION "public"."bom_cancel_feishu_upload_job"("p_job_id" "uuid") TO "authenticated";
+GRANT ALL ON FUNCTION "public"."bom_cancel_feishu_upload_job"("p_job_id" "uuid") TO "service_role";
 
---
--- Name: TABLE bom_rows; Type: ACL; Schema: public; Owner: -
---
 
-GRANT ALL ON TABLE public.bom_rows TO anon;
-GRANT ALL ON TABLE public.bom_rows TO authenticated;
-GRANT ALL ON TABLE public.bom_rows TO service_role;
 
+REVOKE ALL ON FUNCTION "public"."bom_claim_download_job"() FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."bom_claim_download_job"() TO "anon";
+GRANT ALL ON FUNCTION "public"."bom_claim_download_job"() TO "authenticated";
+GRANT ALL ON FUNCTION "public"."bom_claim_download_job"() TO "service_role";
 
---
--- Name: TABLE bom_scan_jobs; Type: ACL; Schema: public; Owner: -
---
 
-GRANT ALL ON TABLE public.bom_scan_jobs TO anon;
-GRANT ALL ON TABLE public.bom_scan_jobs TO authenticated;
-GRANT ALL ON TABLE public.bom_scan_jobs TO service_role;
 
+REVOKE ALL ON FUNCTION "public"."bom_claim_ext_sync_job"() FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."bom_claim_ext_sync_job"() TO "anon";
+GRANT ALL ON FUNCTION "public"."bom_claim_ext_sync_job"() TO "authenticated";
+GRANT ALL ON FUNCTION "public"."bom_claim_ext_sync_job"() TO "service_role";
 
---
--- Name: TABLE local_file; Type: ACL; Schema: public; Owner: -
---
 
-GRANT ALL ON TABLE public.local_file TO anon;
-GRANT ALL ON TABLE public.local_file TO authenticated;
-GRANT ALL ON TABLE public.local_file TO service_role;
 
+REVOKE ALL ON FUNCTION "public"."bom_claim_feishu_upload_job"() FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."bom_claim_feishu_upload_job"() TO "anon";
+GRANT ALL ON FUNCTION "public"."bom_claim_feishu_upload_job"() TO "authenticated";
+GRANT ALL ON FUNCTION "public"."bom_claim_feishu_upload_job"() TO "service_role";
 
---
--- Name: TABLE products; Type: ACL; Schema: public; Owner: -
---
 
-GRANT ALL ON TABLE public.products TO anon;
-GRANT ALL ON TABLE public.products TO authenticated;
-GRANT ALL ON TABLE public.products TO service_role;
 
+REVOKE ALL ON FUNCTION "public"."bom_dashboard_stats"() FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."bom_dashboard_stats"() TO "anon";
+GRANT ALL ON FUNCTION "public"."bom_dashboard_stats"() TO "authenticated";
+GRANT ALL ON FUNCTION "public"."bom_dashboard_stats"() TO "service_role";
 
---
--- Name: TABLE system_settings; Type: ACL; Schema: public; Owner: -
---
 
-GRANT ALL ON TABLE public.system_settings TO anon;
-GRANT ALL ON TABLE public.system_settings TO authenticated;
-GRANT ALL ON TABLE public.system_settings TO service_role;
 
+GRANT ALL ON FUNCTION "public"."bom_extract_download_url"("p_row" "jsonb") TO "anon";
+GRANT ALL ON FUNCTION "public"."bom_extract_download_url"("p_row" "jsonb") TO "authenticated";
+GRANT ALL ON FUNCTION "public"."bom_extract_download_url"("p_row" "jsonb") TO "service_role";
 
---
--- Name: DEFAULT PRIVILEGES FOR SEQUENCES; Type: DEFAULT ACL; Schema: public; Owner: -
---
 
 
+GRANT ALL ON FUNCTION "public"."bom_extract_expected_md5"("p_row" "jsonb") TO "anon";
+GRANT ALL ON FUNCTION "public"."bom_extract_expected_md5"("p_row" "jsonb") TO "authenticated";
+GRANT ALL ON FUNCTION "public"."bom_extract_expected_md5"("p_row" "jsonb") TO "service_role";
 
---
--- Name: DEFAULT PRIVILEGES FOR SEQUENCES; Type: DEFAULT ACL; Schema: public; Owner: -
---
 
 
+GRANT ALL ON FUNCTION "public"."bom_extract_ext_url"("p_row" "jsonb") TO "anon";
+GRANT ALL ON FUNCTION "public"."bom_extract_ext_url"("p_row" "jsonb") TO "authenticated";
+GRANT ALL ON FUNCTION "public"."bom_extract_ext_url"("p_row" "jsonb") TO "service_role";
 
---
--- Name: DEFAULT PRIVILEGES FOR FUNCTIONS; Type: DEFAULT ACL; Schema: public; Owner: -
---
 
 
+REVOKE ALL ON FUNCTION "public"."bom_fail_stale_download_jobs"("p_stale_seconds" integer) FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."bom_fail_stale_download_jobs"("p_stale_seconds" integer) TO "anon";
+GRANT ALL ON FUNCTION "public"."bom_fail_stale_download_jobs"("p_stale_seconds" integer) TO "authenticated";
+GRANT ALL ON FUNCTION "public"."bom_fail_stale_download_jobs"("p_stale_seconds" integer) TO "service_role";
 
---
--- Name: DEFAULT PRIVILEGES FOR FUNCTIONS; Type: DEFAULT ACL; Schema: public; Owner: -
---
 
 
+REVOKE ALL ON FUNCTION "public"."bom_fail_stale_ext_sync_jobs"("p_stale_seconds" integer) FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."bom_fail_stale_ext_sync_jobs"("p_stale_seconds" integer) TO "anon";
+GRANT ALL ON FUNCTION "public"."bom_fail_stale_ext_sync_jobs"("p_stale_seconds" integer) TO "authenticated";
+GRANT ALL ON FUNCTION "public"."bom_fail_stale_ext_sync_jobs"("p_stale_seconds" integer) TO "service_role";
 
---
--- Name: DEFAULT PRIVILEGES FOR TABLES; Type: DEFAULT ACL; Schema: public; Owner: -
---
 
 
+REVOKE ALL ON FUNCTION "public"."bom_fail_stale_feishu_upload_jobs"("p_stale_seconds" integer) FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."bom_fail_stale_feishu_upload_jobs"("p_stale_seconds" integer) TO "anon";
+GRANT ALL ON FUNCTION "public"."bom_fail_stale_feishu_upload_jobs"("p_stale_seconds" integer) TO "authenticated";
+GRANT ALL ON FUNCTION "public"."bom_fail_stale_feishu_upload_jobs"("p_stale_seconds" integer) TO "service_role";
 
---
--- Name: DEFAULT PRIVILEGES FOR TABLES; Type: DEFAULT ACL; Schema: public; Owner: -
---
 
 
+REVOKE ALL ON FUNCTION "public"."bom_fail_stale_scan_jobs"("p_stale_seconds" integer) FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."bom_fail_stale_scan_jobs"("p_stale_seconds" integer) TO "anon";
+GRANT ALL ON FUNCTION "public"."bom_fail_stale_scan_jobs"("p_stale_seconds" integer) TO "authenticated";
+GRANT ALL ON FUNCTION "public"."bom_fail_stale_scan_jobs"("p_stale_seconds" integer) TO "service_role";
 
---
--- PostgreSQL database dump complete
---
+
+
+GRANT ALL ON FUNCTION "public"."bom_file_basename"("p_path" "text") TO "anon";
+GRANT ALL ON FUNCTION "public"."bom_file_basename"("p_path" "text") TO "authenticated";
+GRANT ALL ON FUNCTION "public"."bom_file_basename"("p_path" "text") TO "service_role";
+
+
+
+GRANT ALL ON FUNCTION "public"."bom_finalize_scan"("p_job_id" "uuid", "p_success" boolean, "p_files_seen" integer, "p_files_md5_updated" integer, "p_files_removed" integer, "p_message" "text", "p_prune_missing" boolean) TO "anon";
+GRANT ALL ON FUNCTION "public"."bom_finalize_scan"("p_job_id" "uuid", "p_success" boolean, "p_files_seen" integer, "p_files_md5_updated" integer, "p_files_removed" integer, "p_message" "text", "p_prune_missing" boolean) TO "authenticated";
+GRANT ALL ON FUNCTION "public"."bom_finalize_scan"("p_job_id" "uuid", "p_success" boolean, "p_files_seen" integer, "p_files_md5_updated" integer, "p_files_removed" integer, "p_message" "text", "p_prune_missing" boolean) TO "service_role";
+
+
+
+GRANT ALL ON FUNCTION "public"."bom_mark_scan_started"("p_job_id" "uuid", "p_message" "text") TO "anon";
+GRANT ALL ON FUNCTION "public"."bom_mark_scan_started"("p_job_id" "uuid", "p_message" "text") TO "authenticated";
+GRANT ALL ON FUNCTION "public"."bom_mark_scan_started"("p_job_id" "uuid", "p_message" "text") TO "service_role";
+
+
+
+REVOKE ALL ON FUNCTION "public"."bom_refresh_local_found_statuses"() FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."bom_refresh_local_found_statuses"() TO "anon";
+GRANT ALL ON FUNCTION "public"."bom_refresh_local_found_statuses"() TO "authenticated";
+GRANT ALL ON FUNCTION "public"."bom_refresh_local_found_statuses"() TO "service_role";
+
+
+
+REVOKE ALL ON FUNCTION "public"."bom_refresh_local_found_statuses_for_batch"("p_batch_id" "uuid") FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."bom_refresh_local_found_statuses_for_batch"("p_batch_id" "uuid") TO "anon";
+GRANT ALL ON FUNCTION "public"."bom_refresh_local_found_statuses_for_batch"("p_batch_id" "uuid") TO "authenticated";
+GRANT ALL ON FUNCTION "public"."bom_refresh_local_found_statuses_for_batch"("p_batch_id" "uuid") TO "service_role";
+
+
+
+REVOKE ALL ON FUNCTION "public"."bom_request_distribute_ext_pull"("p_batch_id" "uuid", "p_row_ids" "uuid"[]) FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."bom_request_distribute_ext_pull"("p_batch_id" "uuid", "p_row_ids" "uuid"[]) TO "anon";
+GRANT ALL ON FUNCTION "public"."bom_request_distribute_ext_pull"("p_batch_id" "uuid", "p_row_ids" "uuid"[]) TO "authenticated";
+GRANT ALL ON FUNCTION "public"."bom_request_distribute_ext_pull"("p_batch_id" "uuid", "p_row_ids" "uuid"[]) TO "service_role";
+
+
+
+REVOKE ALL ON FUNCTION "public"."bom_request_download"("p_batch_id" "uuid", "p_row_ids" "uuid"[]) FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."bom_request_download"("p_batch_id" "uuid", "p_row_ids" "uuid"[]) TO "anon";
+GRANT ALL ON FUNCTION "public"."bom_request_download"("p_batch_id" "uuid", "p_row_ids" "uuid"[]) TO "authenticated";
+GRANT ALL ON FUNCTION "public"."bom_request_download"("p_batch_id" "uuid", "p_row_ids" "uuid"[]) TO "service_role";
+
+
+
+REVOKE ALL ON FUNCTION "public"."bom_request_ext_sync"("p_batch_id" "uuid", "p_row_ids" "uuid"[]) FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."bom_request_ext_sync"("p_batch_id" "uuid", "p_row_ids" "uuid"[]) TO "anon";
+GRANT ALL ON FUNCTION "public"."bom_request_ext_sync"("p_batch_id" "uuid", "p_row_ids" "uuid"[]) TO "authenticated";
+GRANT ALL ON FUNCTION "public"."bom_request_ext_sync"("p_batch_id" "uuid", "p_row_ids" "uuid"[]) TO "service_role";
+
+
+
+REVOKE ALL ON FUNCTION "public"."bom_request_feishu_upload"("p_batch_id" "uuid", "p_row_ids" "uuid"[]) FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."bom_request_feishu_upload"("p_batch_id" "uuid", "p_row_ids" "uuid"[]) TO "anon";
+GRANT ALL ON FUNCTION "public"."bom_request_feishu_upload"("p_batch_id" "uuid", "p_row_ids" "uuid"[]) TO "authenticated";
+GRANT ALL ON FUNCTION "public"."bom_request_feishu_upload"("p_batch_id" "uuid", "p_row_ids" "uuid"[]) TO "service_role";
+
+
+
+GRANT ALL ON FUNCTION "public"."bom_request_scan"("p_trigger_source" "text") TO "anon";
+GRANT ALL ON FUNCTION "public"."bom_request_scan"("p_trigger_source" "text") TO "authenticated";
+GRANT ALL ON FUNCTION "public"."bom_request_scan"("p_trigger_source" "text") TO "service_role";
+
+
+
+REVOKE ALL ON FUNCTION "public"."bom_row_distribute_ext_pull_targets"("p_ids" "uuid"[]) FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."bom_row_distribute_ext_pull_targets"("p_ids" "uuid"[]) TO "anon";
+GRANT ALL ON FUNCTION "public"."bom_row_distribute_ext_pull_targets"("p_ids" "uuid"[]) TO "authenticated";
+GRANT ALL ON FUNCTION "public"."bom_row_distribute_ext_pull_targets"("p_ids" "uuid"[]) TO "service_role";
+
+
+
+REVOKE ALL ON FUNCTION "public"."bom_row_download_targets"("p_ids" "uuid"[]) FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."bom_row_download_targets"("p_ids" "uuid"[]) TO "anon";
+GRANT ALL ON FUNCTION "public"."bom_row_download_targets"("p_ids" "uuid"[]) TO "authenticated";
+GRANT ALL ON FUNCTION "public"."bom_row_download_targets"("p_ids" "uuid"[]) TO "service_role";
+
+
+
+REVOKE ALL ON FUNCTION "public"."bom_row_still_eligible_for_distribute_ext_pull"("p_row_id" "uuid") FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."bom_row_still_eligible_for_distribute_ext_pull"("p_row_id" "uuid") TO "anon";
+GRANT ALL ON FUNCTION "public"."bom_row_still_eligible_for_distribute_ext_pull"("p_row_id" "uuid") TO "authenticated";
+GRANT ALL ON FUNCTION "public"."bom_row_still_eligible_for_distribute_ext_pull"("p_row_id" "uuid") TO "service_role";
+
+
+
+REVOKE ALL ON FUNCTION "public"."bom_row_still_eligible_for_ext_sync"("p_row_id" "uuid") FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."bom_row_still_eligible_for_ext_sync"("p_row_id" "uuid") TO "anon";
+GRANT ALL ON FUNCTION "public"."bom_row_still_eligible_for_ext_sync"("p_row_id" "uuid") TO "authenticated";
+GRANT ALL ON FUNCTION "public"."bom_row_still_eligible_for_ext_sync"("p_row_id" "uuid") TO "service_role";
+
+
+
+REVOKE ALL ON FUNCTION "public"."bom_row_still_eligible_for_feishu_upload"("p_row_id" "uuid") FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."bom_row_still_eligible_for_feishu_upload"("p_row_id" "uuid") TO "anon";
+GRANT ALL ON FUNCTION "public"."bom_row_still_eligible_for_feishu_upload"("p_row_id" "uuid") TO "authenticated";
+GRANT ALL ON FUNCTION "public"."bom_row_still_eligible_for_feishu_upload"("p_row_id" "uuid") TO "service_role";
+
+
+
+REVOKE ALL ON FUNCTION "public"."bom_row_still_eligible_for_it_download"("p_row_id" "uuid") FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."bom_row_still_eligible_for_it_download"("p_row_id" "uuid") TO "anon";
+GRANT ALL ON FUNCTION "public"."bom_row_still_eligible_for_it_download"("p_row_id" "uuid") TO "authenticated";
+GRANT ALL ON FUNCTION "public"."bom_row_still_eligible_for_it_download"("p_row_id" "uuid") TO "service_role";
+
+
+
+REVOKE ALL ON FUNCTION "public"."bom_rows_for_it_download"("p_limit" integer) FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."bom_rows_for_it_download"("p_limit" integer) TO "anon";
+GRANT ALL ON FUNCTION "public"."bom_rows_for_it_download"("p_limit" integer) TO "authenticated";
+GRANT ALL ON FUNCTION "public"."bom_rows_for_it_download"("p_limit" integer) TO "service_role";
+
+
+
+REVOKE ALL ON FUNCTION "public"."bom_sync_bom_row_local_size_from_index"() FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."bom_sync_bom_row_local_size_from_index"() TO "anon";
+GRANT ALL ON FUNCTION "public"."bom_sync_bom_row_local_size_from_index"() TO "authenticated";
+GRANT ALL ON FUNCTION "public"."bom_sync_bom_row_local_size_from_index"() TO "service_role";
+
+
+
+GRANT ALL ON FUNCTION "public"."bom_upsert_local_file"("p_job_id" "uuid", "p_path" "text", "p_size_bytes" bigint, "p_mtime" timestamp with time zone, "p_md5" "text") TO "anon";
+GRANT ALL ON FUNCTION "public"."bom_upsert_local_file"("p_job_id" "uuid", "p_path" "text", "p_size_bytes" bigint, "p_mtime" timestamp with time zone, "p_md5" "text") TO "authenticated";
+GRANT ALL ON FUNCTION "public"."bom_upsert_local_file"("p_job_id" "uuid", "p_path" "text", "p_size_bytes" bigint, "p_mtime" timestamp with time zone, "p_md5" "text") TO "service_role";
+
+
+
+REVOKE ALL ON FUNCTION "public"."bom_upsert_local_file_web"("p_path" "text", "p_size_bytes" bigint, "p_mtime" timestamp with time zone, "p_md5" "text") FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."bom_upsert_local_file_web"("p_path" "text", "p_size_bytes" bigint, "p_mtime" timestamp with time zone, "p_md5" "text") TO "anon";
+GRANT ALL ON FUNCTION "public"."bom_upsert_local_file_web"("p_path" "text", "p_size_bytes" bigint, "p_mtime" timestamp with time zone, "p_md5" "text") TO "authenticated";
+GRANT ALL ON FUNCTION "public"."bom_upsert_local_file_web"("p_path" "text", "p_size_bytes" bigint, "p_mtime" timestamp with time zone, "p_md5" "text") TO "service_role";
+
+
+
+GRANT ALL ON FUNCTION "public"."bom_url_looks_like_it_artifactory"("p" "text") TO "anon";
+GRANT ALL ON FUNCTION "public"."bom_url_looks_like_it_artifactory"("p" "text") TO "authenticated";
+GRANT ALL ON FUNCTION "public"."bom_url_looks_like_it_artifactory"("p" "text") TO "service_role";
+
+
+
+GRANT ALL ON FUNCTION "public"."bom_url_path_basename"("p" "text") TO "anon";
+GRANT ALL ON FUNCTION "public"."bom_url_path_basename"("p" "text") TO "authenticated";
+GRANT ALL ON FUNCTION "public"."bom_url_path_basename"("p" "text") TO "service_role";
+
+
+
+GRANT ALL ON FUNCTION "public"."crypt"("text", "text") TO "anon";
+GRANT ALL ON FUNCTION "public"."crypt"("text", "text") TO "authenticated";
+GRANT ALL ON FUNCTION "public"."crypt"("text", "text") TO "service_role";
+
+
+
+GRANT ALL ON FUNCTION "public"."gen_salt"("text") TO "anon";
+GRANT ALL ON FUNCTION "public"."gen_salt"("text") TO "authenticated";
+GRANT ALL ON FUNCTION "public"."gen_salt"("text") TO "service_role";
+
+
+
+GRANT ALL ON FUNCTION "public"."update_updated_at_column"() TO "anon";
+GRANT ALL ON FUNCTION "public"."update_updated_at_column"() TO "authenticated";
+GRANT ALL ON FUNCTION "public"."update_updated_at_column"() TO "service_role";
+
+
+
+GRANT ALL ON TABLE "public"."bom_batches" TO "anon";
+GRANT ALL ON TABLE "public"."bom_batches" TO "authenticated";
+GRANT ALL ON TABLE "public"."bom_batches" TO "service_role";
+
+
+
+GRANT ALL ON TABLE "public"."bom_download_jobs" TO "anon";
+GRANT ALL ON TABLE "public"."bom_download_jobs" TO "authenticated";
+GRANT ALL ON TABLE "public"."bom_download_jobs" TO "service_role";
+
+
+
+GRANT ALL ON TABLE "public"."bom_ext_sync_jobs" TO "anon";
+GRANT ALL ON TABLE "public"."bom_ext_sync_jobs" TO "authenticated";
+GRANT ALL ON TABLE "public"."bom_ext_sync_jobs" TO "service_role";
+
+
+
+GRANT ALL ON TABLE "public"."bom_feishu_scan_jobs" TO "anon";
+GRANT ALL ON TABLE "public"."bom_feishu_scan_jobs" TO "authenticated";
+GRANT ALL ON TABLE "public"."bom_feishu_scan_jobs" TO "service_role";
+
+
+
+GRANT ALL ON TABLE "public"."bom_feishu_upload_jobs" TO "anon";
+GRANT ALL ON TABLE "public"."bom_feishu_upload_jobs" TO "authenticated";
+GRANT ALL ON TABLE "public"."bom_feishu_upload_jobs" TO "service_role";
+
+
+
+GRANT ALL ON TABLE "public"."bom_rows" TO "anon";
+GRANT ALL ON TABLE "public"."bom_rows" TO "authenticated";
+GRANT ALL ON TABLE "public"."bom_rows" TO "service_role";
+
+
+
+GRANT ALL ON TABLE "public"."bom_scan_jobs" TO "anon";
+GRANT ALL ON TABLE "public"."bom_scan_jobs" TO "authenticated";
+GRANT ALL ON TABLE "public"."bom_scan_jobs" TO "service_role";
+
+
+
+GRANT ALL ON TABLE "public"."local_file" TO "anon";
+GRANT ALL ON TABLE "public"."local_file" TO "authenticated";
+GRANT ALL ON TABLE "public"."local_file" TO "service_role";
+
+
+
+GRANT ALL ON TABLE "public"."products" TO "anon";
+GRANT ALL ON TABLE "public"."products" TO "authenticated";
+GRANT ALL ON TABLE "public"."products" TO "service_role";
+
+
+
+GRANT ALL ON TABLE "public"."system_settings" TO "anon";
+GRANT ALL ON TABLE "public"."system_settings" TO "authenticated";
+GRANT ALL ON TABLE "public"."system_settings" TO "service_role";
+
+
+
+ALTER DEFAULT PRIVILEGES FOR ROLE "postgres" IN SCHEMA "public" GRANT ALL ON SEQUENCES TO "postgres";
+ALTER DEFAULT PRIVILEGES FOR ROLE "postgres" IN SCHEMA "public" GRANT ALL ON SEQUENCES TO "anon";
+ALTER DEFAULT PRIVILEGES FOR ROLE "postgres" IN SCHEMA "public" GRANT ALL ON SEQUENCES TO "authenticated";
+ALTER DEFAULT PRIVILEGES FOR ROLE "postgres" IN SCHEMA "public" GRANT ALL ON SEQUENCES TO "service_role";
+
+
+
+
+
+
+ALTER DEFAULT PRIVILEGES FOR ROLE "postgres" IN SCHEMA "public" GRANT ALL ON FUNCTIONS TO "postgres";
+ALTER DEFAULT PRIVILEGES FOR ROLE "postgres" IN SCHEMA "public" GRANT ALL ON FUNCTIONS TO "anon";
+ALTER DEFAULT PRIVILEGES FOR ROLE "postgres" IN SCHEMA "public" GRANT ALL ON FUNCTIONS TO "authenticated";
+ALTER DEFAULT PRIVILEGES FOR ROLE "postgres" IN SCHEMA "public" GRANT ALL ON FUNCTIONS TO "service_role";
+
+
+
+
+
+
+ALTER DEFAULT PRIVILEGES FOR ROLE "postgres" IN SCHEMA "public" GRANT ALL ON TABLES TO "postgres";
+ALTER DEFAULT PRIVILEGES FOR ROLE "postgres" IN SCHEMA "public" GRANT ALL ON TABLES TO "anon";
+ALTER DEFAULT PRIVILEGES FOR ROLE "postgres" IN SCHEMA "public" GRANT ALL ON TABLES TO "authenticated";
+ALTER DEFAULT PRIVILEGES FOR ROLE "postgres" IN SCHEMA "public" GRANT ALL ON TABLES TO "service_role";
+
+
+
+
+
 
 

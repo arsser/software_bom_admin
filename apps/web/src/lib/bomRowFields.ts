@@ -83,6 +83,20 @@ export function extractExtUrlFromRow(row: BomRowRecord, keyMap: BomJsonKeyMap): 
   return firstNonEmptyByKeys(row, keys);
 }
 
+/**
+ * 分发页「从外部 Artifactory 拉取」前置条件：本地未校验通过时才可能出现拉取；本地已通过则一律不提供（与是否有 ext 链接无关）。
+ * 在可拉取前提下：ext 转存须为 https/http 且与 worker 一致须为 Artifactory 类链接（URL 中含 artifactory，不读「下载路径」列）。
+ */
+export function rowEligibleForDistributeExternalPull(row: BomBatchRow, keyMap: BomJsonKeyMap): boolean {
+  if (row.status.local === 'verified_ok') return false;
+  const extRaw = extractExtUrlFromRow(row.bom_row, keyMap);
+  if (!extRaw?.trim()) return false;
+  const url = extractHttpUrlFromDownloadCell(extRaw);
+  const u = url?.trim();
+  if (!u || !/^https?:\/\//i.test(u)) return false;
+  return /artifactory/i.test(u);
+}
+
 /** 解析单元格中的字节数（去千分位/空格；接受数值为整数或极接近整数的浮点） */
 function parseByteSizeFromCell(raw: string | null | undefined): number | null {
   if (!raw) return null;

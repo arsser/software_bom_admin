@@ -129,8 +129,8 @@ export const BOM_ROW_EXT_STATUS_LABEL: Record<BomRowExtStatus, string> = {
 
 export const BOM_ROW_FEISHU_STATUS_LABEL: Record<BomRowFeishuStatus, string> = {
   not_scanned: '未扫描',
-  absent: '飞书无文件',
-  present: '飞书已存在',
+  absent: '待上传或不一致',
+  present: '已与飞书对齐',
   error: '飞书扫描异常',
 };
 

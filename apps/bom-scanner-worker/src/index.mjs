@@ -6,6 +6,7 @@ import { pipeline } from 'node:stream/promises';
 import { Readable, Transform } from 'node:stream';
 import { createClient } from '@supabase/supabase-js';
 import { drainExtSyncJobs, failStaleExtSyncJobs } from './extArtifactorySync.mjs';
+import { drainFeishuUploadJobs, failStaleFeishuUploadJobs } from './feishuUpload.mjs';
 import {
   fetchBomScannerWorkerConfig,
   isRetriableSettingsFetchError,
@@ -684,13 +685,17 @@ async function claimDownloadJob(supabase) {
   const rows = Array.isArray(data) ? data : [data];
   const first = rows[0];
   if (!first?.id) return null;
-  return first;
+  const pull = first.pull_url_source ?? first.pullUrlSource;
+  return {
+    ...first,
+    pull_url_source: typeof pull === 'string' && pull.trim() ? pull.trim() : 'download',
+  };
 }
 
 /**
  * @param {import('@supabase/supabase-js').SupabaseClient} supabase
  * @param {string} rootAbs
- * @param {{ id: string, row_ids: string[], progress_total: number }} job
+ * @param {{ id: string, row_ids: string[], progress_total: number, pull_url_source?: string }} job
  * @param {import('./workerTuning.mjs').WorkerTuning} tuning
  */
 async function executeDownloadJob(supabase, rootAbs, job, tuning) {
@@ -721,7 +726,9 @@ async function executeDownloadJob(supabase, rootAbs, job, tuning) {
     return;
   }
 
-  const { data: targets, error: tErr } = await supabase.rpc('bom_row_download_targets', { p_ids: rowIds });
+  const extOnly = String(job.pull_url_source ?? 'download').toLowerCase() === 'ext_only';
+  const targetsRpc = extOnly ? 'bom_row_distribute_ext_pull_targets' : 'bom_row_download_targets';
+  const { data: targets, error: tErr } = await supabase.rpc(targetsRpc, { p_ids: rowIds });
   if (tErr) {
     await patchDownloadJob(supabase, jobId, {
       status: 'failed',
@@ -768,7 +775,8 @@ async function executeDownloadJob(supabase, rootAbs, job, tuning) {
         break;
       }
 
-      const { data: still, error: e1 } = await supabase.rpc('bom_row_still_eligible_for_it_download', { p_row_id: rowId });
+      const stillRpc = extOnly ? 'bom_row_still_eligible_for_distribute_ext_pull' : 'bom_row_still_eligible_for_it_download';
+      const { data: still, error: e1 } = await supabase.rpc(stillRpc, { p_row_id: rowId });
       if (e1) log('WARN bom_row_still_eligible', e1.message);
 
       if (!still) {
@@ -1034,10 +1042,12 @@ async function sleepWithDownloadPoll(supabase, rootAbs, intervalMs, tuning) {
   while (remaining > 0) {
     try {
       await failStaleExtSyncJobs(supabase, JOB_STALE_SECONDS);
+      await failStaleFeishuUploadJobs(supabase, JOB_STALE_SECONDS);
       await failStaleDownloadJobs(supabase, JOB_STALE_SECONDS);
       await failStaleScanJobs(supabase, SCAN_STALE_SECONDS);
       await drainWebDownloadJobs(supabase, rootAbs, tuning);
       await drainExtSyncJobs(supabase, rootAbs, tuning);
+      await drainFeishuUploadJobs(supabase, rootAbs, tuning);
       try {
         await pruneLocalIndexEntriesMissingOnDisk(supabase, rootAbs, 300);
       } catch (e) {
@@ -1073,7 +1083,7 @@ async function main() {
     root: rootAbs,
     cwd: process.cwd(),
     note:
-      'scan interval + workerTuning from system_settings.bom_scanner; it downloads via bom_download_jobs; ext sync via bom_ext_sync_jobs',
+      'scan interval + workerTuning from system_settings.bom_scanner; downloads bom_download_jobs; ext bom_ext_sync_jobs; feishu bom_feishu_upload_jobs',
   });
 
   await logItArtifactoryDbAtStartup(supabase);
@@ -1098,10 +1108,12 @@ async function main() {
       await reportBomLocalRootRuntime(supabase, rootAbs, { phase: 'idle' });
 
       await failStaleExtSyncJobs(supabase, JOB_STALE_SECONDS);
+      await failStaleFeishuUploadJobs(supabase, JOB_STALE_SECONDS);
       await failStaleDownloadJobs(supabase, JOB_STALE_SECONDS);
       await failStaleScanJobs(supabase, SCAN_STALE_SECONDS);
       await drainWebDownloadJobs(supabase, rootAbs, tuning);
       await drainExtSyncJobs(supabase, rootAbs, tuning);
+      await drainFeishuUploadJobs(supabase, rootAbs, tuning);
 
       try {
         await pruneLocalIndexEntriesMissingOnDisk(supabase, rootAbs);

@@ -391,11 +391,15 @@ serve(async (req) => {
     }
 
     // 5) 计算目标路径（与你们简化后的阶段 5 规则一致）
+    const moduleNameKeys: string[] = Array.isArray(jsonKeyMap.moduleName) && jsonKeyMap.moduleName.length
+      ? jsonKeyMap.moduleName
+      : ['模块', 'module', '组件', 'moduleName']
     const groupSegmentKeys: string[] = Array.isArray(jsonKeyMap.groupSegment) && jsonKeyMap.groupSegment.length
       ? jsonKeyMap.groupSegment
       : ['分组', 'group', 'groupName', '组别']
+    const modRaw = firstNonEmptyByKeysRelaxed(bomRow, moduleNameKeys)
     const groupRaw = firstNonEmptyByKeysRelaxed(bomRow, groupSegmentKeys)
-    const groupDir = groupRaw ? safePathSegment(groupRaw) : null
+    const midDir = modRaw ? safePathSegment(modRaw) : groupRaw ? safePathSegment(groupRaw) : null
 
     const fileName = (() => {
       const p = parsed.path.replace(/\/+$/, '')
@@ -405,7 +409,7 @@ serve(async (req) => {
     })()
 
     const batchDir = safePathSegment(batchName)
-    const targetRel = groupDir ? [batchDir, groupDir, fileName].join('/') : [batchDir, fileName].join('/')
+    const targetRel = midDir ? [batchDir, midDir, fileName].join('/') : [batchDir, fileName].join('/')
     const targetDl = getDownloadUrl(extBaseUrl, extRepo, targetRel)
 
     // 6) Copy 到当前版本目录入口（无论原入口是否已存在都 Copy，保证版本树完整）

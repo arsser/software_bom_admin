@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { ArrowLeft, HardDriveDownload, Loader2, RefreshCcw, Upload, XCircle } from 'lucide-react';
+import { ArrowLeft, HardDriveDownload, Loader2, RefreshCcw, Upload, UploadCloud, XCircle } from 'lucide-react';
 import {
   BOM_DOWNLOAD_JOB_STATUS_LABEL,
   cancelBomDownloadJob,
@@ -18,9 +18,17 @@ import {
   type BomExtSyncJob,
   type BomExtSyncJobStatus,
 } from '../lib/bomExtSyncJobs';
+import {
+  BOM_FEISHU_UPLOAD_JOB_STATUS_LABEL,
+  cancelBomFeishuUploadJob,
+  feishuUploadJobProgressPercent,
+  fetchBomFeishuUploadJobsForUser,
+  type BomFeishuUploadJob,
+  type BomFeishuUploadJobStatus,
+} from '../lib/bomFeishuUploadJobs';
 import { fetchBomBatches, type BomBatch } from '../lib/bomBatches';
 
-type StatusFilter = 'all' | BomDownloadJobStatus | BomExtSyncJobStatus;
+type StatusFilter = 'all' | BomDownloadJobStatus | BomExtSyncJobStatus | BomFeishuUploadJobStatus;
 
 export const BomDownloadJobsPage: React.FC = () => {
   const navigate = useNavigate();
@@ -29,9 +37,11 @@ export const BomDownloadJobsPage: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
   const [jobs, setJobs] = useState<BomDownloadJob[]>([]);
   const [extJobs, setExtJobs] = useState<BomExtSyncJob[]>([]);
+  const [feishuJobs, setFeishuJobs] = useState<BomFeishuUploadJob[]>([]);
   const [batches, setBatches] = useState<BomBatch[]>([]);
   const [cancelBusy, setCancelBusy] = useState<string | null>(null);
   const [extCancelBusy, setExtCancelBusy] = useState<string | null>(null);
+  const [feishuCancelBusy, setFeishuCancelBusy] = useState<string | null>(null);
 
   const batchIdFilter = searchParams.get('batchId') ?? '';
   const statusFilter = (searchParams.get('status') as StatusFilter) || 'all';
@@ -54,7 +64,7 @@ export const BomDownloadJobsPage: React.FC = () => {
     setLoading(true);
     setError(null);
     try {
-      const [bs, js, ej] = await Promise.all([
+      const [bs, js, ej, fj] = await Promise.all([
         fetchBomBatches(),
         fetchBomDownloadJobsForUser({
           batchId: batchIdFilter || null,
@@ -66,11 +76,17 @@ export const BomDownloadJobsPage: React.FC = () => {
           status: statusFilter,
           limit: 100,
         }),
+        fetchBomFeishuUploadJobsForUser({
+          batchId: batchIdFilter || null,
+          status: statusFilter,
+          limit: 100,
+        }),
       ]);
       setBatches(bs);
       const idToLabel = new Map(bs.map((b) => [b.id, `${b.productName} · ${b.name}`]));
       setJobs(js.map((j) => ({ ...j, batchName: j.batchName ?? idToLabel.get(j.batchId) ?? null })));
       setExtJobs(ej.map((j) => ({ ...j, batchName: j.batchName ?? idToLabel.get(j.batchId) ?? null })));
+      setFeishuJobs(fj.map((j) => ({ ...j, batchName: j.batchName ?? idToLabel.get(j.batchId) ?? null })));
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -86,8 +102,9 @@ export const BomDownloadJobsPage: React.FC = () => {
   const hasActive = useMemo(
     () =>
       jobs.some((j) => j.status === 'queued' || j.status === 'running') ||
-      extJobs.some((j) => j.status === 'queued' || j.status === 'running'),
-    [jobs, extJobs],
+      extJobs.some((j) => j.status === 'queued' || j.status === 'running') ||
+      feishuJobs.some((j) => j.status === 'queued' || j.status === 'running'),
+    [jobs, extJobs, feishuJobs],
   );
 
   const batchLabelById = useMemo(
@@ -109,9 +126,15 @@ export const BomDownloadJobsPage: React.FC = () => {
           status: statusFilter,
           limit: 100,
         }),
-      ]).then(([js, ej]) => {
+        fetchBomFeishuUploadJobsForUser({
+          batchId: batchIdFilter || null,
+          status: statusFilter,
+          limit: 100,
+        }),
+      ]).then(([js, ej, fj]) => {
         setJobs(js.map((j) => ({ ...j, batchName: j.batchName ?? batchLabelById.get(j.batchId) ?? null })));
         setExtJobs(ej.map((j) => ({ ...j, batchName: j.batchName ?? batchLabelById.get(j.batchId) ?? null })));
+        setFeishuJobs(fj.map((j) => ({ ...j, batchName: j.batchName ?? batchLabelById.get(j.batchId) ?? null })));
       });
     }, 2000);
     return () => window.clearInterval(id);
@@ -143,6 +166,19 @@ export const BomDownloadJobsPage: React.FC = () => {
     }
   };
 
+  const handleCancelFeishu = async (jobId: string) => {
+    setFeishuCancelBusy(jobId);
+    try {
+      const ok = await cancelBomFeishuUploadJob(jobId);
+      if (!ok) alert('无法取消：任务已结束、无权操作，或请刷新后重试。');
+      await load();
+    } catch (e) {
+      alert(e instanceof Error ? e.message : String(e));
+    } finally {
+      setFeishuCancelBusy(null);
+    }
+  };
+
   return (
     <div className="max-w-6xl mx-auto space-y-6">
       <div className="flex items-start justify-between gap-4 flex-wrap">
@@ -161,7 +197,7 @@ export const BomDownloadJobsPage: React.FC = () => {
             </button>
             <h2 className="text-2xl font-bold text-slate-900 mt-1">BOM 后台任务</h2>
             <p className="text-slate-500 mt-1 text-sm">
-              内部 Artifactory 拉取与外部 Artifactory 同步队列（均由 bom-scanner-worker 执行）。
+              内部 Artifactory 拉取、外部 Artifactory 同步、飞书云盘上传队列（均由 bom-scanner-worker 执行）。
             </p>
           </div>
         </div>
@@ -211,7 +247,7 @@ export const BomDownloadJobsPage: React.FC = () => {
           </select>
         </div>
         <p className="text-xs text-slate-500 pb-2">
-          {loading ? '加载中…' : `it 拉取 ${jobs.length} 条 · ext 同步 ${extJobs.length} 条`}
+          {loading ? '加载中…' : `it 拉取 ${jobs.length} 条 · ext 同步 ${extJobs.length} 条 · 飞书上传 ${feishuJobs.length} 条`}
           {hasActive ? ' · 自动刷新中' : ''}
         </p>
       </div>
@@ -418,6 +454,104 @@ export const BomDownloadJobsPage: React.FC = () => {
         {extJobs.some((j) => j.status === 'running' || j.status === 'queued') ? (
           <div className="px-4 py-2 border-t border-slate-100 bg-emerald-50/50 text-xs text-slate-600">
             ext 同步任务进行中时每 2 秒刷新。
+          </div>
+        ) : null}
+      </div>
+
+      <div className="flex items-center gap-2 text-sm font-medium text-slate-800 pt-2">
+        <UploadCloud size={18} className="text-violet-600" />
+        飞书云盘上传
+      </div>
+
+      <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
+        <div className="overflow-x-auto">
+          <table className="min-w-full text-sm">
+            <thead className="bg-slate-50 border-b border-slate-200">
+              <tr>
+                <th className="px-3 py-2 text-left text-xs font-semibold text-slate-700">状态</th>
+                <th className="px-3 py-2 text-left text-xs font-semibold text-slate-700">版本</th>
+                <th className="px-3 py-2 text-left text-xs font-semibold text-slate-700">进度</th>
+                <th className="px-3 py-2 text-left text-xs font-semibold text-slate-700">说明</th>
+                <th className="px-3 py-2 text-left text-xs font-semibold text-slate-700">时间</th>
+                <th className="px-3 py-2 text-right text-xs font-semibold text-slate-700">操作</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-100">
+              {feishuJobs.length === 0 && !loading ? (
+                <tr>
+                  <td colSpan={6} className="px-4 py-10 text-center text-slate-500">
+                    暂无任务。请在 BOM 分发页发起「上传选中到飞书」。
+                  </td>
+                </tr>
+              ) : null}
+              {feishuJobs.map((j) => {
+                const pct = feishuUploadJobProgressPercent(j);
+                const canCancelFeishu =
+                  j.status === 'queued' || j.status === 'running';
+                return (
+                  <tr key={j.id} className="hover:bg-slate-50/80">
+                    <td className="px-3 py-2 whitespace-nowrap">
+                      <span className="inline-flex rounded-md border border-violet-200 bg-violet-50/80 px-2 py-0.5 text-xs font-medium text-violet-900">
+                        {BOM_FEISHU_UPLOAD_JOB_STATUS_LABEL[j.status]}
+                      </span>
+                    </td>
+                    <td className="px-3 py-2">
+                      <div className="font-medium text-slate-900">{j.batchName ?? '—'}</div>
+                      <div className="text-[11px] text-slate-400 font-mono truncate max-w-[14rem]" title={j.batchId}>
+                        {j.batchId}
+                      </div>
+                    </td>
+                    <td className="px-3 py-2 text-slate-700">
+                      <div className="whitespace-nowrap">
+                        {j.progressTotal > 0 ? `${j.progressCurrent}/${j.progressTotal} 行` : '—'}
+                      </div>
+                      {(j.status === 'running' || j.status === 'queued') && pct > 0 ? (
+                        <div className="mt-1 h-1.5 w-28 rounded-full bg-slate-100 overflow-hidden">
+                          <div
+                            className="h-full bg-violet-600 transition-all duration-300"
+                            style={{ width: `${pct}%` }}
+                          />
+                        </div>
+                      ) : null}
+                    </td>
+                    <td className="px-3 py-2 text-xs text-slate-600 max-w-[20rem]">
+                      <div className="line-clamp-2 font-mono break-all" title={j.lastMessage ?? ''}>
+                        {j.lastMessage ?? '—'}
+                      </div>
+                    </td>
+                    <td className="px-3 py-2 text-xs text-slate-500 whitespace-nowrap">
+                      <div>创建 {new Date(j.createdAt).toLocaleString()}</div>
+                      {j.finishedAt ? <div>结束 {new Date(j.finishedAt).toLocaleString()}</div> : null}
+                    </td>
+                    <td className="px-3 py-2 text-right">
+                      {canCancelFeishu ? (
+                        <button
+                          type="button"
+                          disabled={feishuCancelBusy === j.id}
+                          onClick={() => void handleCancelFeishu(j.id)}
+                          title={
+                            j.status === 'running'
+                              ? '请求取消正在执行的飞书上传（再次点击可强制取消）'
+                              : '取消排队中的飞书上传任务'
+                          }
+                          className="inline-flex items-center gap-1 px-2 py-1 rounded border border-slate-300 text-xs text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+                        >
+                          {feishuCancelBusy === j.id ? <Loader2 size={12} className="animate-spin" /> : <XCircle size={12} />}
+                          {j.status === 'running' ? '取消任务' : '取消排队'}
+                        </button>
+                      ) : (
+                        <span className="text-slate-300">—</span>
+                      )}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+        {feishuJobs.some((j) => j.status === 'running' || j.status === 'queued') ? (
+          <div className="px-4 py-2 border-t border-slate-100 bg-violet-50/50 text-xs text-slate-600">
+            飞书上传任务进行中时每 2 秒刷新；分片进度（&gt;20MB 文件）实时显示在说明列。
           </div>
         ) : null}
       </div>

@@ -36,7 +36,7 @@ BEGIN
     'authenticated',
     'authenticated',
     'test@example.com',
-    crypt('test123456', gen_salt('bf')),
+    public.crypt('test123456', public.gen_salt('bf')),
     NOW(),
     '',
     '',

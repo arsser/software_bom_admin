@@ -11,8 +11,6 @@ import {
   Cloud,
   Eye,
   EyeOff,
-  ChevronRight,
-  ChevronDown,
 } from 'lucide-react';
 import { getAppConfig } from '../lib/appConfig';
 import {
@@ -23,11 +21,7 @@ import {
 import { fetchFeishuSettings, saveFeishuSettings, type FeishuConfig } from '../lib/feishuSettings';
 import {
   testFeishuAuth,
-  testFeishuListDrive,
-  testFeishuCreateChildFolder,
   type FeishuAuthTestResult,
-  type FeishuListDriveTestResult,
-  type FeishuCreateFolderTestResult,
 } from '../lib/feishuAuthTest';
 import {
   fetchBomScannerSettings,
@@ -37,161 +31,15 @@ import {
   type BomWorkerTuning,
 } from '../lib/bomScannerSettings';
 import { getArtifactoryApiInfo, type ApiInfoResult } from '../lib/artifactoryApi';
-import {
-  testBomExtArtifactoryRepo,
-  type BomExtRepoTestOutcome,
-} from '../lib/bomExtArtifactoryRepoTest';
+import { formatArtifactoryRepoPath } from '../lib/distributionTestUi';
+import { SettingsTestResultPanel } from './SettingsTestResultPanel';
 
 /** 设置页内所有「测试」按钮与 feishu_assistant 设置页「测试连接」一致：白底、灰边框、浅灰悬停 */
-const settingsTestButtonSm =
-  'inline-flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium rounded-lg bg-white border border-gray-300 text-slate-700 hover:bg-gray-50 shadow-sm transition-colors disabled:opacity-50 disabled:cursor-not-allowed';
-
 const settingsTestButtonLg =
   'inline-flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-lg bg-white border border-gray-300 text-slate-700 hover:bg-gray-50 shadow-sm transition-colors disabled:opacity-50 disabled:cursor-not-allowed';
 
 const settingsTestIconClass = 'text-orange-500 shrink-0';
 const settingsTestSpinnerClass = 'text-slate-500 shrink-0 animate-spin';
-
-/** 设置页测试结果：成功绿 / 失败红，简要信息默认展示，完整 JSON 可展开 */
-const SettingsTestResultPanel: React.FC<{
-  ok: boolean;
-  summary: React.ReactNode;
-  detail: unknown;
-}> = ({ ok, summary, detail }) => {
-  const [open, setOpen] = useState(false);
-  useEffect(() => {
-    setOpen(false);
-  }, [detail]);
-  const shell = ok
-    ? 'border-emerald-200 bg-emerald-50/70'
-    : 'border-red-200 bg-red-50/70';
-  const iconWrap = ok ? 'text-emerald-600' : 'text-red-600';
-  const summaryTone = ok ? 'text-emerald-950' : 'text-red-950';
-
-  return (
-    <div className={`mt-2 rounded-lg border ${shell} overflow-hidden`}>
-      <div className="flex items-start gap-2 px-3 py-2.5">
-        <span className={`shrink-0 mt-0.5 ${iconWrap}`}>
-          {ok ? <CheckCircle2 size={18} aria-hidden /> : <AlertCircle size={18} aria-hidden />}
-        </span>
-        <div className={`min-w-0 flex-1 text-sm leading-snug ${summaryTone}`}>{summary}</div>
-        <button
-          type="button"
-          onClick={() => setOpen((v) => !v)}
-          aria-expanded={open}
-          className="shrink-0 inline-flex items-center gap-0.5 text-xs font-medium text-slate-600 hover:text-slate-900 py-0.5 px-1 rounded-md hover:bg-white/60 transition-colors"
-        >
-          {open ? <ChevronDown size={14} aria-hidden /> : <ChevronRight size={14} aria-hidden />}
-          {open ? '收起' : '详情'}
-        </button>
-      </div>
-      {open ? (
-        <pre className="text-xs font-mono border-t border-slate-200/80 bg-white/85 text-slate-800 p-3 max-h-72 overflow-auto whitespace-pre-wrap break-all">
-          {JSON.stringify(detail, null, 2)}
-        </pre>
-      ) : null}
-    </div>
-  );
-};
-
-/** Artifactory 元数据里 path 常为 "/" 表示仓库根；不要拼成 repo// */
-function formatArtifactoryRepoPath(repo?: string, path?: string | null): string | null {
-  if (repo == null) return null;
-  const repoNorm = String(repo).trim().replace(/\/+$/, '');
-  if (!repoNorm) return null;
-  if (path == null) return repoNorm;
-  const raw = String(path).trim();
-  if (raw === '' || raw === '/') return repoNorm;
-  const p = raw.replace(/^\/+/, '');
-  return `${repoNorm}/${p}`;
-}
-
-function bomExtRepoSummary(o: BomExtRepoTestOutcome): React.ReactNode {
-  if (o.ok) {
-    const r = o.apiResult;
-    if (r) {
-      const path = formatArtifactoryRepoPath(r.info?.repo, r.info?.path);
-      return (
-        <>
-          <span className="font-semibold">成功</span>
-          <span className="text-emerald-900/90">
-            {typeof r.status === 'number' ? ` · HTTP ${r.status}` : ''}
-            {path ? ` · ${path}` : ''}
-          </span>
-        </>
-      );
-    }
-    return (
-      <>
-        <span className="font-semibold">成功</span>
-        <span className="text-emerald-900/90"> · 无详细返回（见 JSON）</span>
-      </>
-    );
-  }
-  return (
-    <>
-      <span className="font-semibold">失败</span>
-      <span className="text-red-900/90"> · {o.error || o.apiResult?.error || '未知错误'}</span>
-      {o.requestedUrl ? (
-        <span className="block text-xs font-normal text-red-800/80 mt-1 truncate" title={o.requestedUrl}>
-          {o.requestedUrl}
-        </span>
-      ) : null}
-    </>
-  );
-}
-
-function feishuListDriveSummary(r: FeishuListDriveTestResult): React.ReactNode {
-  if (r.ok) {
-    const n = r.itemCount ?? r.items?.length ?? 0;
-    return (
-      <>
-        <span className="font-semibold">成功</span>
-        <span className="text-emerald-900/90">
-          {typeof r.listHttpStatus === 'number' ? ` · HTTP ${r.listHttpStatus}` : ''}
-          {` · 本页 ${n} 条`}
-          {r.hasMore ? '（仍有下一页）' : ''}
-        </span>
-      </>
-    );
-  }
-  return (
-    <>
-      <span className="font-semibold">失败</span>
-      <span className="text-red-900/90"> · {r.error || '未知错误'}</span>
-    </>
-  );
-}
-
-function feishuCreateFolderSummary(r: FeishuCreateFolderTestResult): React.ReactNode {
-  if (r.ok) {
-    return (
-      <>
-        <span className="font-semibold">成功</span>
-        <span className="text-emerald-900/90">
-          {typeof r.createHttpStatus === 'number' ? ` · HTTP ${r.createHttpStatus}` : ''}
-          {r.usedName ? ` · 已创建「${r.usedName}」` : ''}
-        </span>
-        {r.newFolderUrl ? (
-          <a
-            href={r.newFolderUrl}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="block text-xs font-normal text-emerald-800 underline underline-offset-2 mt-1 truncate max-w-full"
-          >
-            在飞书中打开新文件夹
-          </a>
-        ) : null}
-      </>
-    );
-  }
-  return (
-    <>
-      <span className="font-semibold">失败</span>
-      <span className="text-red-900/90"> · {r.error || '未知错误'}</span>
-    </>
-  );
-}
 
 function artifactoryApiSummary(r: ApiInfoResult): React.ReactNode {
   if (r.ok) {
@@ -260,13 +108,6 @@ export const Settings: React.FC = () => {
   const [bomKeyMapJson, setBomKeyMapJson] = useState('');
   const [bomLoading, setBomLoading] = useState(false);
   const [bomSaveStatus, setBomSaveStatus] = useState<'idle' | 'success' | 'error'>('idle');
-  const [bomExtRepoTestLoading, setBomExtRepoTestLoading] = useState(false);
-  const [bomExtRepoTestOutcome, setBomExtRepoTestOutcome] = useState<BomExtRepoTestOutcome | null>(null);
-  const [bomFeishuRootTestLoading, setBomFeishuRootTestLoading] = useState(false);
-  const [bomFeishuRootTestOutcome, setBomFeishuRootTestOutcome] = useState<FeishuListDriveTestResult | null>(null);
-  const [bomFeishuMkdirTestName, setBomFeishuMkdirTestName] = useState('');
-  const [bomFeishuMkdirTestLoading, setBomFeishuMkdirTestLoading] = useState(false);
-  const [bomFeishuMkdirTestOutcome, setBomFeishuMkdirTestOutcome] = useState<FeishuCreateFolderTestResult | null>(null);
   const [showJsonKeyMap, setShowJsonKeyMap] = useState(false);
   const [showMainApiKey, setShowMainApiKey] = useState(false);
   const [showExtApiKey, setShowExtApiKey] = useState(false);
@@ -372,8 +213,6 @@ export const Settings: React.FC = () => {
       await saveBomScannerSettings({
         ...bomScanner,
         jsonKeyMap: parsed,
-        extArtifactoryRepo: bomScanner.extArtifactoryRepo?.trim() ?? '',
-        feishuDriveRootFolderToken: bomScanner.feishuDriveRootFolderToken?.trim() ?? '',
       });
       const next = await fetchBomScannerSettings();
       setBomScanner(next);
@@ -386,72 +225,6 @@ export const Settings: React.FC = () => {
       setTimeout(() => setBomSaveStatus('idle'), 3000);
     } finally {
       setBomLoading(false);
-    }
-  };
-
-  const handleTestBomExtRepo = async () => {
-    if (!bomScanner) return;
-    const repoKey = bomScanner.extArtifactoryRepo?.trim() ?? '';
-    if (!repoKey) {
-      alert('请填写外部 Artifactory 目标仓库 key');
-      return;
-    }
-    setBomExtRepoTestLoading(true);
-    setBomExtRepoTestOutcome(null);
-    try {
-      const o = await testBomExtArtifactoryRepo({ repoKey, previewConfig: artifactory });
-      setBomExtRepoTestOutcome(o);
-    } finally {
-      setBomExtRepoTestLoading(false);
-    }
-  };
-
-  const handleTestBomFeishuRoot = async () => {
-    if (!bomScanner) return;
-    const folder = bomScanner.feishuDriveRootFolderToken?.trim() ?? '';
-    if (!folder) {
-      alert('请填写飞书云盘根目录 folder_token');
-      return;
-    }
-    setBomFeishuRootTestLoading(true);
-    setBomFeishuRootTestOutcome(null);
-    try {
-      const r = await testFeishuListDrive({
-        appId: feishu.appId.trim(),
-        appSecret: feishu.appSecret,
-        folderToken: folder,
-      });
-      setBomFeishuRootTestOutcome(r);
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      setBomFeishuRootTestOutcome({ ok: false, error: msg });
-    } finally {
-      setBomFeishuRootTestLoading(false);
-    }
-  };
-
-  const handleTestBomFeishuMkdir = async () => {
-    if (!bomScanner) return;
-    const parent = bomScanner.feishuDriveRootFolderToken?.trim() ?? '';
-    if (!parent) {
-      alert('请填写飞书云盘根目录 folder_token');
-      return;
-    }
-    setBomFeishuMkdirTestLoading(true);
-    setBomFeishuMkdirTestOutcome(null);
-    try {
-      const r = await testFeishuCreateChildFolder({
-        appId: feishu.appId.trim(),
-        appSecret: feishu.appSecret,
-        parentFolderToken: parent,
-        childFolderName: bomFeishuMkdirTestName.trim() || undefined,
-      });
-      setBomFeishuMkdirTestOutcome(r);
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      setBomFeishuMkdirTestOutcome({ ok: false, action: 'create_folder', error: msg });
-    } finally {
-      setBomFeishuMkdirTestLoading(false);
     }
   };
 
@@ -639,136 +412,6 @@ export const Settings: React.FC = () => {
                     失败重试次数上限
                   </span>
                 </label>
-              </div>
-            </div>
-
-            <div className="rounded-lg border border-slate-200 bg-slate-50/80 p-4 space-y-4">
-              <div>
-                <label className="block text-sm font-medium text-slate-700 mb-1">
-                  外部 Artifactory 目标仓库 key
-                </label>
-                <input
-                  type="text"
-                  value={bomScanner?.extArtifactoryRepo ?? ''}
-                  onChange={(e) =>
-                    setBomScanner((s) => (s ? { ...s, extArtifactoryRepo: e.target.value } : s))
-                  }
-                  disabled={!bomScanner}
-                  placeholder="例如 software-bom-bucket"
-                  className="w-full max-w-xl px-4 py-2 border border-gray-200 rounded-lg font-mono text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 disabled:opacity-50"
-                />
-                
-                <div className="flex flex-wrap items-center gap-2 pt-1">
-                  <button
-                    type="button"
-                    onClick={() => void handleTestBomExtRepo()}
-                    disabled={!bomScanner || bomExtRepoTestLoading}
-                    className={settingsTestButtonSm}
-                  >
-                    {bomExtRepoTestLoading ? (
-                      <Loader2 size={14} className={settingsTestSpinnerClass} />
-                    ) : (
-                      <Zap size={14} className={settingsTestIconClass} />
-                    )}
-                    测试外部仓库
-                  </button>
-
-                </div>
-                {bomExtRepoTestOutcome !== null ? (
-                  <SettingsTestResultPanel
-                    ok={bomExtRepoTestOutcome.ok}
-                    summary={bomExtRepoSummary(bomExtRepoTestOutcome)}
-                    detail={bomExtRepoTestOutcome}
-                  />
-                ) : null}
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-slate-700 mb-1">
-                  飞书云盘根目录 <code className="font-mono text-xs font-normal text-slate-600">folder_token</code>
-                </label>
-                <input
-                  type="text"
-                  value={bomScanner?.feishuDriveRootFolderToken ?? ''}
-                  onChange={(e) =>
-                    setBomScanner((s) => (s ? { ...s, feishuDriveRootFolderToken: e.target.value } : s))
-                  }
-                  disabled={!bomScanner}
-                  placeholder="云文档里「批次文件夹的父目录」对应的 folder_token"
-                  className="w-full max-w-xl px-4 py-2 border border-gray-200 rounded-lg font-mono text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 disabled:opacity-50"
-                />
-                <p className="text-xs text-slate-500 mt-1 leading-relaxed max-w-2xl">
-                  填的是飞书<strong>云文档</strong>里某个文件夹的{' '}
-                  <code className="bg-slate-100 px-1 rounded text-[11px]">folder_token</code>
-                  （一串字母数字，不是文件夹显示名称、也不是整段网页链接）。在本产品中，它表示「根」：其<strong>下一级</strong>应有与
-                  BOM 批次名一致的子文件夹；扫描会在该子文件夹内按与外部仓库相同的相对路径匹配文件。token 可从飞书开放平台云文档相关
-                  API 的返回字段、或官方文档说明的方式取得；填好后可用下方「测试飞书根目录」确认能否列出子项。
-                </p>
-                <div className="flex flex-wrap items-center gap-2 pt-1">
-                  <button
-                    type="button"
-                    onClick={() => void handleTestBomFeishuRoot()}
-                    disabled={!bomScanner || bomFeishuRootTestLoading}
-                    className={settingsTestButtonSm}
-                  >
-                    {bomFeishuRootTestLoading ? (
-                      <Loader2 size={14} className={settingsTestSpinnerClass} />
-                    ) : (
-                      <Zap size={14} className={settingsTestIconClass} />
-                    )}
-                    测试飞书根目录
-                  </button>
-                  <span className="text-xs text-slate-500">
-                    使用「飞书」卡片当前 App ID / Secret 及本字段 folder_token，拉取第一页文件列表；成败均显示在下方。
-                  </span>
-                </div>
-                {bomFeishuRootTestOutcome !== null ? (
-                  <SettingsTestResultPanel
-                    ok={bomFeishuRootTestOutcome.ok}
-                    summary={feishuListDriveSummary(bomFeishuRootTestOutcome)}
-                    detail={bomFeishuRootTestOutcome}
-                  />
-                ) : null}
-
-                <div className="mt-4 pt-3 border-t border-slate-200/80 space-y-2">
-                  <label className="block text-sm font-medium text-slate-700">
-                    测试新建子文件夹（可选名称）
-                  </label>
-                  <input
-                    type="text"
-                    value={bomFeishuMkdirTestName}
-                    onChange={(e) => setBomFeishuMkdirTestName(e.target.value)}
-                    disabled={!bomScanner}
-                    placeholder="留空则自动生成 sbom-test-时间戳-随机串"
-                    className="w-full max-w-xl px-4 py-2 border border-gray-200 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 disabled:opacity-50"
-                  />
-                  <p className="text-xs text-slate-500 leading-relaxed max-w-2xl">
-                    调用飞书{' '}
-                    <code className="bg-slate-100 px-1 rounded text-[11px]">POST …/drive/v1/files/create_folder</code>
-                    ，在上方「云盘根目录」下<strong>真实创建</strong>一个子文件夹（需应用具备编辑该父目录等权限，与列表不同）。重名会失败；用完后可在飞书云文档中手动删除。
-                  </p>
-                  <div className="flex flex-wrap items-center gap-2 pt-0.5">
-                    <button
-                      type="button"
-                      onClick={() => void handleTestBomFeishuMkdir()}
-                      disabled={!bomScanner || bomFeishuMkdirTestLoading}
-                      className={settingsTestButtonSm}
-                    >
-                      {bomFeishuMkdirTestLoading ? (
-                        <Loader2 size={14} className={settingsTestSpinnerClass} />
-                      ) : (
-                        <Zap size={14} className={settingsTestIconClass} />
-                      )}
-                      测试新建子文件夹
-                    </button>
-                  </div>
-                  {bomFeishuMkdirTestOutcome !== null ? (
-                    <SettingsTestResultPanel
-                      ok={bomFeishuMkdirTestOutcome.ok}
-                      summary={feishuCreateFolderSummary(bomFeishuMkdirTestOutcome)}
-                      detail={bomFeishuMkdirTestOutcome}
-                    />
-                  ) : null}
-                </div>
               </div>
             </div>
 
@@ -969,7 +612,7 @@ export const Settings: React.FC = () => {
         </div>
       </div>
 
-      {/* 飞书：应用凭据（云盘根目录 folder_token 在「BOM 本地扫描」中与 ext 仓库 key 同属 bom_scanner） */}
+      {/* 飞书：应用凭据（产品级云盘根目录在 BOM 管理「编辑产品」中维护） */}
       <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-6 space-y-4">
         <div className="flex items-center gap-2">
           <Cloud size={18} className="text-violet-600" />

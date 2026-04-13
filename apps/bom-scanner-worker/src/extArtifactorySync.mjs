@@ -192,6 +192,33 @@ export async function fetchBomScannerValue(supabase) {
 
 /**
  * @param {import('@supabase/supabase-js').SupabaseClient} supabase
+ * @param {string} batchId
+ */
+export async function fetchBatchProductDistributionSettings(supabase, batchId) {
+  const { data, error } = await supabase
+    .from('bom_batches')
+    .select('name,product_id,products(name,ext_artifactory_repo,feishu_drive_root_folder_token)')
+    .eq('id', batchId)
+    .maybeSingle();
+  if (error) throw error;
+  const batchName = data?.name && String(data.name).trim() ? String(data.name).trim() : '';
+  const product = data?.products ?? {};
+  return {
+    batchName,
+    productName: product?.name && String(product.name).trim() ? String(product.name).trim() : '',
+    extArtifactoryRepo:
+      product?.ext_artifactory_repo && String(product.ext_artifactory_repo).trim()
+        ? String(product.ext_artifactory_repo).trim()
+        : '',
+    feishuDriveRootFolderToken:
+      product?.feishu_drive_root_folder_token && String(product.feishu_drive_root_folder_token).trim()
+        ? String(product.feishu_drive_root_folder_token).trim()
+        : '',
+  };
+}
+
+/**
+ * @param {import('@supabase/supabase-js').SupabaseClient} supabase
  */
 async function loadExtCredsFromDb(supabase) {
   const { data, error } = await supabase.from('system_settings').select('value').eq('key', 'artifactory_config').maybeSingle();
@@ -408,13 +435,13 @@ export async function executeExtSyncJob(supabase, rootAbs, job, tuning) {
 
   const scannerVal = await fetchBomScannerValue(supabase);
   const keyMap = mergeKeyMap(scannerVal);
-  const extRepoRaw = scannerVal.extArtifactoryRepo;
-  const extRepo = typeof extRepoRaw === 'string' ? extRepoRaw.trim() : '';
+  const batchProdCfg = await fetchBatchProductDistributionSettings(supabase, job.batch_id);
+  const extRepo = batchProdCfg.extArtifactoryRepo;
   if (!extRepo) {
     await patchExtSyncJob(supabase, jobId, {
       status: 'failed',
       finished_at: new Date().toISOString(),
-      last_message: '未配置 ext 目标仓库：请在系统设置 BOM 中填写 extArtifactoryRepo（仓库 key）',
+      last_message: '未配置 ext 目标仓库：请在产品分发配置中填写外部 Artifactory 仓库 key',
       cancel_requested: false,
     });
     return;
@@ -423,13 +450,7 @@ export async function executeExtSyncJob(supabase, rootAbs, job, tuning) {
   const rootUrl = normalizeArtifactoryRootUrl(creds.baseUrl);
 
   // 阶段 5 目标路径：一级目录用 bom_batches.name；二级目录用 bom_row["分组"]
-  const { data: batchRec, error: bErr } = await supabase
-    .from('bom_batches')
-    .select('name')
-    .eq('id', job.batch_id)
-    .maybeSingle();
-  if (bErr) log('WARN load bom_batches for ext sync', job.batch_id, bErr.message);
-  const batchNameRaw = batchRec?.name && String(batchRec.name).trim() ? String(batchRec.name).trim() : '';
+  const batchNameRaw = batchProdCfg.batchName;
   const batchNameFallback = `batch-${String(job.batch_id).replace(/-/g, '').slice(0, 8)}`;
   const batchName = batchNameRaw || batchNameFallback;
 

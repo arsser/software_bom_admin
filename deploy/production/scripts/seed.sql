@@ -107,8 +107,6 @@ VALUES
         "extFileSizeBytes": ["ext_size_bytes", "ext文件大小", "extSize", "ext大小"],
         "remark": ["备注", "note", "remark"]
       },
-      "extArtifactoryRepo": "",
-      "feishuDriveRootFolderToken": "",
       "workerTuning": {
         "heartbeatMs": 5000,
         "httpTimeoutMs": 3600000,

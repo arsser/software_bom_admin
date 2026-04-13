@@ -46,6 +46,7 @@ import { requestBomDistributeExtPull } from '../lib/bomDownloadJobs';
 import { requestBomFeishuScan } from '../lib/bomFeishuScan';
 import { requestBomFeishuUpload, fetchBomFeishuUploadJobsForBatch, type BomFeishuUploadJob } from '../lib/bomFeishuUploadJobs';
 import { BomDataTableCell, headerIsDownloadColumn, headerIsMd5Column } from '../lib/bomTableCell';
+import { fetchProductDistributionSettings } from '../lib/products';
 
 /** 分发页 tooltip：await_manual_download 在文案上显示为「待处理」，枚举值仍保留在括号内 */
 function formatDistributePageBomRowStatusTooltip(s: BomRowStatusJson): string {
@@ -94,6 +95,7 @@ export const BomDistributePage: React.FC = () => {
   const [productName, setProductName] = useState('');
   const [batchHeaderOrder, setBatchHeaderOrder] = useState<string[]>([]);
   const [config, setConfig] = useState<BomScannerConfig | null>(null);
+  const [productFeishuRootFolderToken, setProductFeishuRootFolderToken] = useState('');
   const [loadedBomRows, setLoadedBomRows] = useState<BomBatchRow[]>([]);
   const [localInfoByMd5, setLocalInfoByMd5] = useState<Map<string, LocalFileIndexInfo>>(() => new Map());
   const [localIndexReady, setLocalIndexReady] = useState(true);
@@ -243,10 +245,11 @@ export const BomDistributePage: React.FC = () => {
     setError(null);
     try {
       const scanner = await fetchBomScannerSettings();
-      setConfig(scanner);
-
       const b = await fetchBomBatchById(batchId);
       if (!b) throw new Error('未找到该版本');
+      const prodCfg = await fetchProductDistributionSettings(b.productId);
+      setConfig(scanner);
+      setProductFeishuRootFolderToken(prodCfg.feishuDriveRootFolderToken);
       setBatchName(b.name);
       setProductName(b.productName ?? '');
       setBatchHeaderOrder(b.headerOrder ?? []);
@@ -590,7 +593,7 @@ export const BomDistributePage: React.FC = () => {
                 !batchId ||
                 loadedBomRows.length === 0 ||
                 feishuScanBusy ||
-                !(config?.feishuDriveRootFolderToken ?? '').trim()
+                !productFeishuRootFolderToken.trim()
               }
               onClick={() => void handleFeishuScan()}
               className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg border border-violet-300 bg-white text-violet-950 text-sm font-medium hover:bg-violet-100 disabled:opacity-50"
@@ -603,7 +606,7 @@ export const BomDistributePage: React.FC = () => {
                 type="checkbox"
                 checked={feishuAutoCreateVersionFolder}
                 onChange={(e) => setFeishuAutoCreateVersionFolder(e.target.checked)}
-                disabled={feishuScanBusy || !(config?.feishuDriveRootFolderToken ?? '').trim()}
+                disabled={feishuScanBusy || !productFeishuRootFolderToken.trim()}
                 className="rounded border-violet-400 text-violet-700 focus:ring-violet-500"
               />
               <span title="在配置的飞书根目录下，若无与当前版本名一致的文件夹，则先创建再扫描（文件夹名与扫描规则中的版本目录一致）">
@@ -615,7 +618,7 @@ export const BomDistributePage: React.FC = () => {
               disabled={
                 feishuUploadBusy ||
                 feishuJobActive ||
-                !(config?.feishuDriveRootFolderToken ?? '').trim() ||
+                !productFeishuRootFolderToken.trim() ||
                 uploadScopeRows.length === 0
               }
               title={
@@ -661,9 +664,9 @@ export const BomDistributePage: React.FC = () => {
               查看详情或取消。
             </p>
           ) : null}
-          {!(config?.feishuDriveRootFolderToken ?? '').trim() ? (
+          {!productFeishuRootFolderToken.trim() ? (
             <p className="text-xs text-amber-900">
-              请先在系统设置 →「BOM 本地扫描」中配置飞书云盘根目录 folder_token。
+              请先在产品分发配置中配置飞书云盘根目录 folder_token。
             </p>
           ) : null}
         </div>

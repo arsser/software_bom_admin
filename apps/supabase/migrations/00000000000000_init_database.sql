@@ -2130,6 +2130,8 @@ CREATE TABLE IF NOT EXISTS "public"."products" (
     "id" "uuid" DEFAULT "gen_random_uuid"() NOT NULL,
     "user_id" "uuid" NOT NULL,
     "name" "text" NOT NULL,
+    "ext_artifactory_repo" "text" DEFAULT ''::"text" NOT NULL,
+    "feishu_drive_root_folder_token" "text" DEFAULT ''::"text" NOT NULL,
     "created_at" timestamp with time zone DEFAULT "now"() NOT NULL,
     "updated_at" timestamp with time zone DEFAULT "now"() NOT NULL,
     "sort_order" integer DEFAULT 0 NOT NULL
@@ -2144,6 +2146,14 @@ COMMENT ON TABLE "public"."products" IS '产品（用户维度）';
 
 
 COMMENT ON COLUMN "public"."products"."name" IS '产品名称';
+
+
+
+COMMENT ON COLUMN "public"."products"."ext_artifactory_repo" IS '产品维度：外部 Artifactory 目标仓库 key';
+
+
+
+COMMENT ON COLUMN "public"."products"."feishu_drive_root_folder_token" IS '产品维度：飞书云盘根目录 folder_token';
 
 
 

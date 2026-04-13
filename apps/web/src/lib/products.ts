@@ -9,12 +9,19 @@ export type Product = {
   id: string;
   name: string;
   sortOrder: number;
+  extArtifactoryRepo: string;
+  feishuDriveRootFolderToken: string;
+};
+
+export type ProductDistributionSettings = {
+  extArtifactoryRepo: string;
+  feishuDriveRootFolderToken: string;
 };
 
 export async function fetchProducts(): Promise<Product[]> {
   const { data, error } = await supabase
     .from('products')
-    .select('id,name,sort_order,created_at')
+    .select('id,name,sort_order,created_at,ext_artifactory_repo,feishu_drive_root_folder_token')
     .order('sort_order', { ascending: true })
     .order('created_at', { ascending: true })
     .order('name', { ascending: true });
@@ -23,12 +30,26 @@ export async function fetchProducts(): Promise<Product[]> {
     id: String(x.id),
     name: String(x.name ?? ''),
     sortOrder: Number.isFinite(Number(x.sort_order)) ? Number(x.sort_order) : 0,
+    extArtifactoryRepo:
+      typeof x.ext_artifactory_repo === 'string' ? x.ext_artifactory_repo.trim() : '',
+    feishuDriveRootFolderToken:
+      typeof x.feishu_drive_root_folder_token === 'string'
+        ? x.feishu_drive_root_folder_token.trim()
+        : '',
   }));
 }
 
-export async function createProduct(payload: { name: string }): Promise<string> {
+export async function createProduct(payload: {
+  name: string;
+  extArtifactoryRepo: string;
+  feishuDriveRootFolderToken: string;
+}): Promise<string> {
   const trimmed = payload.name.trim();
   if (!trimmed) throw new Error('产品名称不能为空');
+  const extRepo = payload.extArtifactoryRepo.trim();
+  const feishuRoot = payload.feishuDriveRootFolderToken.trim();
+  if (!extRepo) throw new Error('请填写外部 Artifactory 目标仓库 key');
+  if (!feishuRoot) throw new Error('请填写飞书云盘根目录 folder_token');
 
   const { data: authData, error: authError } = await supabase.auth.getUser();
   if (authError) throw authError;
@@ -49,7 +70,13 @@ export async function createProduct(payload: { name: string }): Promise<string> 
 
   const { data, error } = await supabase
     .from('products')
-    .insert({ user_id: userId, name: trimmed, sort_order: nextSort })
+    .insert({
+      user_id: userId,
+      name: trimmed,
+      sort_order: nextSort,
+      ext_artifactory_repo: extRepo,
+      feishu_drive_root_folder_token: feishuRoot,
+    })
     .select('id')
     .single();
   if (error) throw error;
@@ -63,6 +90,40 @@ export async function updateProduct(payload: { id: string; name: string }): Prom
     .from('products')
     .update({ name: trimmed })
     .eq('id', payload.id);
+  if (error) throw error;
+}
+
+export async function fetchProductDistributionSettings(
+  productId: string,
+): Promise<ProductDistributionSettings> {
+  const { data, error } = await supabase
+    .from('products')
+    .select('ext_artifactory_repo,feishu_drive_root_folder_token')
+    .eq('id', productId)
+    .maybeSingle();
+  if (error) throw error;
+  return {
+    extArtifactoryRepo:
+      typeof data?.ext_artifactory_repo === 'string' ? data.ext_artifactory_repo.trim() : '',
+    feishuDriveRootFolderToken:
+      typeof data?.feishu_drive_root_folder_token === 'string'
+        ? data.feishu_drive_root_folder_token.trim()
+        : '',
+  };
+}
+
+export async function updateProductDistributionSettings(payload: {
+  productId: string;
+  extArtifactoryRepo: string;
+  feishuDriveRootFolderToken: string;
+}): Promise<void> {
+  const { error } = await supabase
+    .from('products')
+    .update({
+      ext_artifactory_repo: payload.extArtifactoryRepo.trim(),
+      feishu_drive_root_folder_token: payload.feishuDriveRootFolderToken.trim(),
+    })
+    .eq('id', payload.productId);
   if (error) throw error;
 }
 

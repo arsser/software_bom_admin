@@ -2,6 +2,7 @@ import path from 'node:path';
 import fs from 'node:fs/promises';
 import {
   fetchBomScannerValue,
+  fetchBatchProductDistributionSettings,
   findLocalPathForMd5,
   mergeKeyMap,
   firstNonEmptyByKeysRelaxed,
@@ -615,24 +616,19 @@ export async function executeFeishuUploadJob(supabase, rootAbs, job, tuning) {
 
   const scannerVal = await fetchBomScannerValue(supabase);
   const keyMap = mergeKeyMap(scannerVal);
-  const rootFolder = safeTrim(scannerVal.feishuDriveRootFolderToken);
+  const batchProdCfg = await fetchBatchProductDistributionSettings(supabase, job.batch_id);
+  const rootFolder = safeTrim(batchProdCfg.feishuDriveRootFolderToken);
   if (!rootFolder) {
     await patchFeishuUploadJob(supabase, jobId, {
       status: 'failed',
       finished_at: new Date().toISOString(),
-      last_message: '未配置飞书云盘根目录 folder_token（bom_scanner.feishuDriveRootFolderToken）',
+      last_message: '未配置飞书云盘根目录 folder_token（请在产品分发配置中设置）',
       cancel_requested: false,
     });
     return;
   }
 
-  const { data: batchRec, error: bErr } = await supabase
-    .from('bom_batches')
-    .select('name')
-    .eq('id', job.batch_id)
-    .maybeSingle();
-  if (bErr) log('WARN load bom_batches for feishu upload', job.batch_id, bErr.message);
-  const batchNameRaw = batchRec?.name && String(batchRec.name).trim() ? String(batchRec.name).trim() : '';
+  const batchNameRaw = batchProdCfg.batchName;
   const batchNameFallback = `batch-${String(job.batch_id).replace(/-/g, '').slice(0, 8)}`;
   const batchDir = safePathSegment(batchNameRaw || batchNameFallback);
 

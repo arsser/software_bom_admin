@@ -444,7 +444,7 @@ serve(async (req) => {
 
   const { data: batch, error: batchErr } = await userClient
     .from('bom_batches')
-    .select('id,name')
+    .select('id,name,product_id')
     .eq('id', batchId)
     .maybeSingle()
 
@@ -471,9 +471,17 @@ serve(async (req) => {
   }
 
   const scannerVal = (scannerRow?.value ?? {}) as Record<string, unknown>
-  const rootFolder = safeTrim(scannerVal.feishuDriveRootFolderToken)
+  const { data: productRow, error: productErr } = await svc
+    .from('products')
+    .select('feishu_drive_root_folder_token')
+    .eq('id', batch.product_id)
+    .maybeSingle()
+  if (productErr) {
+    return jsonResponse({ ok: false, error: `读取产品配置失败：${productErr.message}` }, 500)
+  }
+  const rootFolder = safeTrim(productRow?.feishu_drive_root_folder_token)
   if (!rootFolder) {
-    return jsonResponse({ ok: false, error: '未配置飞书存储根目录 folder_token（系统设置 → BOM 本地扫描 → 飞书云盘根目录）' }, 400)
+    return jsonResponse({ ok: false, error: '未配置飞书存储根目录 folder_token（产品分发配置）' }, 400)
   }
 
   const keyMap = mergeKeyMap(scannerVal.jsonKeyMap)

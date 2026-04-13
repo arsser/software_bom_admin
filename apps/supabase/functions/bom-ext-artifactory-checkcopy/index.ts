@@ -230,7 +230,7 @@ serve(async (req) => {
     // 1) 读 bom_row + batch name
     const { data: rowData, error: rowErr } = await admin
       .from('bom_rows')
-      .select('id,batch_id,bom_row,status,bom_batches(name)')
+      .select('id,batch_id,bom_row,status,bom_batches(name,product_id)')
       .eq('id', rowId)
       .maybeSingle()
 
@@ -257,12 +257,30 @@ serve(async (req) => {
       ? jsonKeyMap.extFileSizeBytes
       : ['ext_size_bytes', 'ext文件大小', 'extSize', 'ext大小']
 
-    const extRepo = safeTrim(bomScanner?.extArtifactoryRepo)
+    const productId = safeTrim(rowData?.bom_batches?.product_id)
+    const { data: prodCfg, error: prodErr } = await admin
+      .from('products')
+      .select('ext_artifactory_repo')
+      .eq('id', productId)
+      .maybeSingle()
+    if (prodErr) {
+      await updateBomRowExtError(
+        admin,
+        rowId,
+        `读取产品分发配置失败：${prodErr.message}`,
+        rowData.status,
+      )
+      return new Response(JSON.stringify({ ok: false, error: `load product failed: ${prodErr.message}` }), {
+        status: 200,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      })
+    }
+    const extRepo = safeTrim(prodCfg?.ext_artifactory_repo)
     if (!extRepo) {
       await updateBomRowExtError(
         admin,
         rowId,
-        '未配置 ext 目标仓库：请在系统设置 → BOM 本地扫描填写 extArtifactoryRepo',
+        '未配置 ext 目标仓库：请在产品分发配置中填写外部 Artifactory 仓库 key',
         rowData.status,
       )
       return new Response(JSON.stringify({ ok: false, error: 'Missing extArtifactoryRepo' }), {

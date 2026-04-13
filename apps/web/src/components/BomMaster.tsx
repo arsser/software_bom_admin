@@ -1,8 +1,23 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { ArrowDown, ArrowUp, Package, Pencil, Plus, RefreshCcw, Share2, Trash2 } from 'lucide-react';
+import {
+  ArrowDown,
+  ArrowUp,
+  Package,
+  Pencil,
+  Plus,
+  RefreshCcw,
+  Share2,
+  Trash2,
+} from 'lucide-react';
 import { deleteBomBatch, fetchBomBatches, type BomBatch } from '../lib/bomBatches';
-import { createProduct, deleteProduct, fetchProducts, moveProduct, type Product, updateProduct } from '../lib/products';
+import {
+  deleteProduct,
+  fetchProducts,
+  moveProduct,
+  type Product,
+} from '../lib/products';
+import { BomProductEditorModal } from './BomProductEditorModal';
 
 type ProductWithBatches = {
   product: Product;
@@ -17,6 +32,10 @@ export const BomMaster: React.FC = () => {
   const [batches, setBatches] = useState<BomBatch[]>([]);
   const [deletingBatchId, setDeletingBatchId] = useState<string | null>(null);
   const [productBusyId, setProductBusyId] = useState<string | null>(null);
+
+  const [editorOpen, setEditorOpen] = useState(false);
+  const [editorMode, setEditorMode] = useState<'create' | 'edit'>('create');
+  const [editorProduct, setEditorProduct] = useState<Product | null>(null);
 
   const load = async () => {
     setLoading(true);
@@ -40,6 +59,18 @@ export const BomMaster: React.FC = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  const openCreateProduct = () => {
+    setEditorMode('create');
+    setEditorProduct(null);
+    setEditorOpen(true);
+  };
+
+  const openEditProduct = (product: Product) => {
+    setEditorMode('edit');
+    setEditorProduct(product);
+    setEditorOpen(true);
+  };
+
   const handleDeleteBatch = async (batch: BomBatch) => {
     const warning = batch.rowCount > 0
       ? `将删除版本「${batch.name}」及其 ${batch.rowCount} 行数据，并级联删除关联下载/同步任务记录。该操作不可恢复。`
@@ -53,26 +84,6 @@ export const BomMaster: React.FC = () => {
       alert(e instanceof Error ? e.message : String(e));
     } finally {
       setDeletingBatchId(null);
-    }
-  };
-
-  const handleRenameProduct = async (product: Product) => {
-    const next = window.prompt('请输入新的产品名称', product.name);
-    if (next == null) return;
-    const trimmed = next.trim();
-    if (!trimmed) {
-      alert('产品名称不能为空');
-      return;
-    }
-    if (trimmed === product.name) return;
-    setProductBusyId(product.id);
-    try {
-      await updateProduct({ id: product.id, name: trimmed });
-      await load();
-    } catch (e) {
-      alert(e instanceof Error ? e.message : String(e));
-    } finally {
-      setProductBusyId(null);
     }
   };
 
@@ -93,25 +104,6 @@ export const BomMaster: React.FC = () => {
       } else {
         alert(msg);
       }
-    } finally {
-      setProductBusyId(null);
-    }
-  };
-
-  const handleCreateProduct = async () => {
-    const next = window.prompt('请输入产品名称');
-    if (next == null) return;
-    const trimmed = next.trim();
-    if (!trimmed) {
-      alert('产品名称不能为空');
-      return;
-    }
-    setProductBusyId('__creating__');
-    try {
-      await createProduct({ name: trimmed });
-      await load();
-    } catch (e) {
-      alert(e instanceof Error ? e.message : String(e));
     } finally {
       setProductBusyId(null);
     }
@@ -139,8 +131,22 @@ export const BomMaster: React.FC = () => {
     return Array.from(map.values());
   }, [products, batches]);
 
+  const distConfigured = (p: Product) =>
+    Boolean(p.extArtifactoryRepo.trim() && p.feishuDriveRootFolderToken.trim());
+
   return (
     <div className="max-w-5xl mx-auto space-y-6">
+      <BomProductEditorModal
+        open={editorOpen}
+        mode={editorMode}
+        product={editorProduct}
+        onClose={() => setEditorOpen(false)}
+        onSaved={async () => {
+          await load();
+          setEditorOpen(false);
+        }}
+      />
+
       <div className="flex items-start justify-between gap-4">
         <div className="flex items-start gap-3">
           <div className="w-10 h-10 rounded-lg bg-indigo-600 text-white flex items-center justify-center flex-shrink-0">
@@ -149,7 +155,7 @@ export const BomMaster: React.FC = () => {
           <div>
             <h2 className="text-2xl font-bold text-slate-900">BOM 管理</h2>
             <p className="text-slate-500 mt-1">
-              产品清单与版本列表。新增或编辑将进入明细页。
+              产品清单与版本列表；名称与分发配置在各产品旁「编辑产品」中维护。
             </p>
           </div>
         </div>
@@ -165,8 +171,8 @@ export const BomMaster: React.FC = () => {
           </button>
           <button
             type="button"
-            onClick={handleCreateProduct}
-            disabled={productBusyId === '__creating__'}
+            onClick={openCreateProduct}
+            disabled={editorOpen}
             className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-indigo-600 text-white hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed"
           >
             <Plus size={16} />
@@ -193,15 +199,28 @@ export const BomMaster: React.FC = () => {
           {grouped.map(({ product, batches: bs }) => (
             <div key={product.id} className="px-5 py-4">
               <div className="flex items-center justify-between gap-4">
-                <div>
+                <div className="min-w-0">
                   <div className="text-sm font-semibold text-slate-900">
                     {product.name}
                   </div>
                   <div className="text-xs text-slate-500 mt-0.5">
                     版本数：{bs.length}
+                    {!distConfigured(product) ? (
+                      <span className="text-amber-700 ml-2">· 分发配置未完整</span>
+                    ) : null}
                   </div>
                 </div>
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-2 flex-wrap justify-end">
+                  <button
+                    type="button"
+                    onClick={() => openEditProduct(product)}
+                    disabled={productBusyId === product.id || editorOpen}
+                    className="text-xs px-2.5 py-1.5 rounded-lg border border-emerald-300 text-emerald-800 bg-emerald-50/80 hover:bg-emerald-100 disabled:opacity-50 inline-flex items-center gap-1"
+                    title="编辑名称与分发配置（外部仓库、飞书根目录），并可测试连接"
+                  >
+                    <Pencil size={12} />
+                    编辑产品
+                  </button>
                   <button
                     type="button"
                     onClick={() => handleMoveProduct(product, 'up')}
@@ -219,16 +238,6 @@ export const BomMaster: React.FC = () => {
                     title="下移产品"
                   >
                     <ArrowDown size={12} />
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => handleRenameProduct(product)}
-                    disabled={productBusyId === product.id}
-                    className="text-xs px-2.5 py-1.5 rounded-lg border border-slate-300 text-slate-700 hover:bg-slate-50 disabled:opacity-50 disabled:cursor-not-allowed inline-flex items-center gap-1"
-                    title="重命名产品"
-                  >
-                    <Pencil size={12} />
-                    重命名
                   </button>
                   <button
                     type="button"
@@ -313,7 +322,7 @@ export const BomMaster: React.FC = () => {
 
           {!loading && grouped.length === 0 ? (
             <div className="px-5 py-10 text-center text-slate-500">
-              暂无产品。请先点击右上角“新增产品”创建。
+              暂无产品。请先点击右上角「新增产品」创建（需填写名称与分发配置）。
             </div>
           ) : null}
         </div>
@@ -321,4 +330,3 @@ export const BomMaster: React.FC = () => {
     </div>
   );
 };
-

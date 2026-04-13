@@ -86,6 +86,7 @@ import { BomDataTableCell, headerIsDownloadColumn, headerIsMd5Column } from '../
 import { formatBomRowStatusTooltip } from '../lib/bomRowStatus';
 import {
   fetchProducts,
+  fetchProductDistributionSettings,
   type Product,
 } from '../lib/products';
 
@@ -98,6 +99,7 @@ export const BomDetail: React.FC = () => {
   const isNew = batchId === null;
 
   const [config, setConfig] = useState<BomScannerConfig | null>(null);
+  const [productExtArtifactoryRepo, setProductExtArtifactoryRepo] = useState('');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [saveLoading, setSaveLoading] = useState(false);
@@ -293,9 +295,12 @@ export const BomDetail: React.FC = () => {
         const pick = presetProductId && prods.some((p) => p.id === presetProductId) ? presetProductId : (prods[0]?.id ?? '');
         if (!selectedProductId) setSelectedProductId(pick);
         setLoadedBomRows([]);
+        setProductExtArtifactoryRepo('');
       } else {
         const b = await fetchBomBatchById(batchId);
         if (!b) throw new Error('未找到该版本');
+        const prodCfg = await fetchProductDistributionSettings(b.productId);
+        setProductExtArtifactoryRepo(prodCfg.extArtifactoryRepo);
         setBatchName(b.name);
         setInitialBatchName(b.name);
         setSelectedProductId(b.productId);
@@ -1536,7 +1541,7 @@ export const BomDetail: React.FC = () => {
                         extCheckBusy ||
                         loadedBomRows.length === 0 ||
                         hasActiveExtSyncJob ||
-                        !(config?.extArtifactoryRepo ?? '').trim()
+                        !productExtArtifactoryRepo.trim()
                       }
                       onClick={() => void handleExtCheckAll()}
                       className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg border border-slate-300 bg-white text-slate-700 text-sm font-medium hover:bg-slate-50 disabled:opacity-50 disabled:cursor-not-allowed"
@@ -1551,7 +1556,7 @@ export const BomDetail: React.FC = () => {
                         eligibleExtSyncCount === 0 ||
                         extSyncBusy !== null ||
                         hasActiveExtSyncJob ||
-                        !(config?.extArtifactoryRepo ?? '').trim()
+                        !productExtArtifactoryRepo.trim()
                       }
                       onClick={() => void handleExtSyncAll()}
                       className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg border border-emerald-300 bg-white text-emerald-900 text-sm font-medium hover:bg-emerald-100 disabled:opacity-50 disabled:cursor-not-allowed"
@@ -1638,9 +1643,9 @@ export const BomDetail: React.FC = () => {
                     />
                   </div>
                 ) : null}
-                {!(config?.extArtifactoryRepo ?? '').trim() ? (
+                {!productExtArtifactoryRepo.trim() ? (
                   <p className="text-xs text-amber-900 bg-amber-50 border border-amber-200 rounded-md px-2.5 py-2">
-                    请先在<strong>系统设置 → BOM 本地扫描</strong>中填写 <span className="font-mono">外部 Artifactory 目标仓库 key</span>。
+                    请先在<strong>产品分发配置</strong>中填写 <span className="font-mono">外部 Artifactory 目标仓库 key</span>。
                   </p>
                 ) : null}
                 {latestExtSyncJob ? (
@@ -1910,7 +1915,7 @@ export const BomDetail: React.FC = () => {
                                 disabled={
                                   extSyncBusy !== null ||
                                   hasActiveExtSyncJob ||
-                                  !(config?.extArtifactoryRepo ?? '').trim()
+                                  !productExtArtifactoryRepo.trim()
                                 }
                                 onClick={() => void handleExtSyncOne(lr.id)}
                                 title="本地已有文件：查重并 Copy 到 ext 版本目录（必要时排队 PUT）；无本地文件请用顶部「外部 Artifactory 全部检查」"

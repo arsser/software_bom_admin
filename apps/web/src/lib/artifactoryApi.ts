@@ -34,7 +34,7 @@ export interface ApiInfoResult {
 }
 
 export async function getArtifactoryApiInfo(payload: {
-  urls: string[];
+  urls?: string[];
   /** 与表单一致；非空字段在 Edge 内覆盖本次 Storage 请求用配置，不写库 */
   previewConfig?: Partial<ArtifactoryConfig>;
 }): Promise<ApiInfoResult[]> {

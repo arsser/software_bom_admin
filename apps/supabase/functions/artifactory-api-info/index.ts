@@ -60,7 +60,7 @@ function normalizeBaseUrl(url?: string | null): string | undefined {
 function buildHeaders(apiKey?: string): HeadersInit {
   const headers: Record<string, string> = {
     'User-Agent': 'software-bom-admin/1.0',
-    Accept: 'application/json',
+    Accept: '*/*',
   }
   if (apiKey) {
     headers['X-JFrog-Art-Api'] = apiKey
@@ -126,6 +126,81 @@ function pickHeadersByUrl(cleanUrl: string, cfg: DbArtifactoryConfig): HeadersIn
   if (extBase && cleanUrl.startsWith(extBase)) return buildHeaders(cfg.artifactoryExtApiKey)
   if (!primaryBase && !extBase) return buildHeaders(cfg.artifactoryApiKey || cfg.artifactoryExtApiKey)
   return buildHeaders(undefined)
+}
+
+function buildSystemPingUrl(baseUrl: string): string {
+  const trimmed = normalizeBaseUrl(baseUrl) ?? ''
+  if (!trimmed) return ''
+  if (/\/artifactory$/i.test(trimmed)) return `${trimmed}/api/system/ping`
+  return `${trimmed}/artifactory/api/system/ping`
+}
+
+function parseErrorText(text: string, status: number): string {
+  const body = (text || '').trim()
+  let msg = `HTTP ${status}`
+  if (status === 401 || status === 403) return 'Authorization failed (401/403)'
+  if (!body) return msg
+  try {
+    const j = JSON.parse(body) as Record<string, unknown>
+    const errors = Array.isArray(j.errors) ? (j.errors as Array<Record<string, unknown>>) : []
+    const firstError = errors[0]
+    const detail =
+      (firstError && typeof firstError.message === 'string' && firstError.message) ||
+      (typeof j?.error === 'string' && j.error) ||
+      (typeof j?.message === 'string' && j.message)
+    if (detail && detail.trim()) return detail.trim()
+  } catch {
+    // noop
+  }
+  return body.slice(0, 200)
+}
+
+async function probeCredentials(cfg: DbArtifactoryConfig): Promise<ApiInfoResult[]> {
+  const runSingle = async (
+    roleLabel: string,
+    baseUrl: string | undefined,
+    apiKey: string | undefined,
+  ): Promise<ApiInfoResult> => {
+    const nBase = normalizeBaseUrl(baseUrl)
+    if (!nBase) {
+      return { url: '', ok: false, error: `${roleLabel}缺少 Base URL` }
+    }
+    if (!apiKey) {
+      return { url: buildSystemPingUrl(nBase), ok: false, error: `${roleLabel}缺少 API Key` }
+    }
+    const pingUrl = buildSystemPingUrl(nBase)
+    if (!pingUrl) {
+      return { url: '', ok: false, error: `${roleLabel}Base URL 无效` }
+    }
+    try {
+      const controller = new AbortController()
+      const timeout = setTimeout(() => controller.abort(), TIMEOUT_MS)
+      const res = await fetch(pingUrl, {
+        method: 'GET',
+        headers: buildHeaders(apiKey),
+        signal: controller.signal,
+      })
+      clearTimeout(timeout)
+      if (!res.ok) {
+        const text = await res.text()
+        return { url: pingUrl, ok: false, status: res.status, error: parseErrorText(text, res.status) }
+      }
+      return { url: pingUrl, ok: true, status: res.status }
+    } catch (e: unknown) {
+      const err = e as { name?: string; message?: string }
+      const error = err.name === 'AbortError' ? 'Request timed out' : err.message || String(e)
+      return { url: pingUrl, ok: false, error }
+    }
+  }
+
+  const results: ApiInfoResult[] = []
+  results.push(
+    await runSingle('内部', normalizeBaseUrl(cfg.artifactoryBaseUrl), cfg.artifactoryApiKey),
+  )
+  results.push(
+    await runSingle('外部', normalizeBaseUrl(cfg.artifactoryExtBaseUrl), cfg.artifactoryExtApiKey),
+  )
+  return results
 }
 
 function toStorageApiUrl(rawUrl: string): string | null {
@@ -197,10 +272,12 @@ async function getSingleApiInfo(url: string, headers: HeadersInit): Promise<ApiI
 
 async function getApiInfo(dto: GetApiInfoBody): Promise<ApiInfoResult[]> {
   const { urls, previewConfig } = dto
-  if (!urls || !Array.isArray(urls)) return []
 
   const dbCfg = await readDbArtifactoryConfig()
   const cfg = mergeArtifactoryPreview(dbCfg, previewConfig)
+  if (!urls || !Array.isArray(urls) || urls.length === 0) {
+    return await probeCredentials(cfg)
+  }
   if (!hasAnyApiKey(cfg)) {
     throw new Error('缺少 API Key：请在表单填写完整后测试，或先在数据库保存 artifactory_config')
   }
@@ -248,13 +325,6 @@ serve(async (req) => {
         JSON.stringify({ error: '已废弃 body.apiKey；请使用 previewConfig 传入与表单一致的凭据预览' }),
         { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
       )
-    }
-
-    if (!body.urls?.length) {
-      return new Response(JSON.stringify({ error: 'urls is required and must be non-empty' }), {
-        status: 400,
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-      })
     }
 
     const data = await getApiInfo(body)

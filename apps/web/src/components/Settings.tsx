@@ -70,6 +70,12 @@ function artifactoryApiSummary(r: ApiInfoResult): React.ReactNode {
   );
 }
 
+function artifactoryProbeLabel(index: number): string {
+  if (index === 0) return '内部凭证测试';
+  if (index === 1) return '外部凭证测试';
+  return `凭证测试 #${index + 1}`;
+}
+
 function feishuAuthSummary(r: FeishuAuthTestResult): React.ReactNode {
   if (r.ok) {
     return (
@@ -100,9 +106,8 @@ export const Settings: React.FC = () => {
   const [artifactoryLoading, setArtifactoryLoading] = useState(false);
   const [artifactorySaveStatus, setArtifactorySaveStatus] = useState<'idle' | 'success' | 'error'>('idle');
 
-  const [testUrl, setTestUrl] = useState('');
   const [artifactoryTestLoading, setArtifactoryTestLoading] = useState(false);
-  const [artifactoryTestResult, setArtifactoryTestResult] = useState<ApiInfoResult | null>(null);
+  const [artifactoryTestResults, setArtifactoryTestResults] = useState<ApiInfoResult[]>([]);
 
   const [bomScanner, setBomScanner] = useState<BomScannerConfig | null>(null);
   const [bomKeyMapJson, setBomKeyMapJson] = useState('');
@@ -263,26 +268,18 @@ export const Settings: React.FC = () => {
   };
 
   const handleTestArtifactory = async () => {
-    const url = testUrl.trim();
-    if (!url) {
-      alert('请输入要测试的 Artifactory URL');
-      return;
-    }
-
     setArtifactoryTestLoading(true);
-    setArtifactoryTestResult(null);
+    setArtifactoryTestResults([]);
     try {
       const results = await getArtifactoryApiInfo({
-        urls: [url],
         previewConfig: artifactory,
       });
 
-      const r = results[0];
-      if (!r) throw new Error('未返回测试结果');
-      setArtifactoryTestResult(r);
+      if (!results.length) throw new Error('未返回测试结果');
+      setArtifactoryTestResults(results);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      setArtifactoryTestResult({ url, ok: false, error: msg });
+      setArtifactoryTestResults([{ url: '', ok: false, error: msg }]);
       alert('测试失败：' + msg);
     } finally {
       setArtifactoryTestLoading(false);
@@ -491,7 +488,7 @@ export const Settings: React.FC = () => {
               value={artifactory.artifactoryBaseUrl ?? ''}
               onChange={(e) => setArtifactory((a) => ({ ...a, artifactoryBaseUrl: e.target.value }))}
               placeholder="https://artifactory.example.com"
-              className="w-full px-4 py-2 border border-gray-200 rounded-lg font-mono text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
+              className="w-full px-4 py-2 border border-gray-200 rounded-lg font-mono text-xs focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
             />
           </div>
           <div>
@@ -503,7 +500,7 @@ export const Settings: React.FC = () => {
                 onChange={(e) => setArtifactory((a) => ({ ...a, artifactoryApiKey: e.target.value }))}
                 placeholder="X-JFrog-Art-Api"
                 autoComplete="off"
-                className="w-full px-4 py-2 pr-11 border border-gray-200 rounded-lg font-mono text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
+                className="w-full px-4 py-2 pr-11 border border-gray-200 rounded-lg font-mono text-xs focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
               />
               <button
                 type="button"
@@ -522,7 +519,7 @@ export const Settings: React.FC = () => {
               value={artifactory.artifactoryExtBaseUrl ?? ''}
               onChange={(e) => setArtifactory((a) => ({ ...a, artifactoryExtBaseUrl: e.target.value }))}
               placeholder="https://artifactory-ext.example.com"
-              className="w-full px-4 py-2 border border-gray-200 rounded-lg font-mono text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
+              className="w-full px-4 py-2 border border-gray-200 rounded-lg font-mono text-xs focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
             />
           </div>
           <div>
@@ -534,7 +531,7 @@ export const Settings: React.FC = () => {
                 onChange={(e) => setArtifactory((a) => ({ ...a, artifactoryExtApiKey: e.target.value }))}
                 placeholder="X-JFrog-Art-Api"
                 autoComplete="off"
-                className="w-full px-4 py-2 pr-11 border border-gray-200 rounded-lg font-mono text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
+                className="w-full px-4 py-2 pr-11 border border-gray-200 rounded-lg font-mono text-xs focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
               />
               <button
                 type="button"
@@ -549,21 +546,7 @@ export const Settings: React.FC = () => {
         </div>
 
         <div className="border-t border-gray-100 pt-4">
-          <div className="grid gap-4 md:grid-cols-2 items-end">
-            <div>
-              <label className="block text-sm font-medium text-slate-700 mb-1">
-                测试 URL（Storage API 鉴权）
-              </label>
-              <input
-                type="url"
-                value={testUrl}
-                onChange={(e) => setTestUrl(e.target.value)}
-                placeholder="https://artifactory.example.com/artifactory/repo/path/file.jar"
-                className="w-full px-4 py-2 border border-gray-200 rounded-lg font-mono text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
-              />
-            </div>
-
-            <div className="flex justify-end gap-3 md:justify-end">
+          <div className="flex justify-end gap-3">
               <button
                 type="button"
                 onClick={handleTestArtifactory}
@@ -577,16 +560,16 @@ export const Settings: React.FC = () => {
                 )}
                 测试凭证
               </button>
-            </div>
           </div>
 
-          {artifactoryTestResult ? (
-            <SettingsTestResultPanel
-              ok={artifactoryTestResult.ok}
-              summary={artifactoryApiSummary(artifactoryTestResult)}
-              detail={artifactoryTestResult}
-            />
-          ) : null}
+          {artifactoryTestResults.length > 0
+            ? artifactoryTestResults.map((r, idx) => (
+                <div key={`${r.url || 'empty'}-${idx}`} className="mt-2">
+                  <p className="text-xs font-medium text-slate-600 mb-1">{artifactoryProbeLabel(idx)}</p>
+                  <SettingsTestResultPanel ok={r.ok} summary={artifactoryApiSummary(r)} detail={r} />
+                </div>
+              ))
+            : null}
         </div>
 
         <div className="flex justify-end items-center gap-3 pt-2">

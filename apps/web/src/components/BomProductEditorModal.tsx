@@ -3,7 +3,6 @@ import { Loader2, Save, X, Zap } from 'lucide-react';
 import { fetchArtifactorySettings, type ArtifactoryConfig } from '../lib/artifactorySettings';
 import { fetchFeishuSettings, type FeishuConfig } from '../lib/feishuSettings';
 import {
-  testFeishuAuth,
   testFeishuListDrive,
   testFeishuCreateChildFolder,
   type FeishuListDriveTestResult,
@@ -66,8 +65,6 @@ export const BomProductEditorModal: React.FC<BomProductEditorModalProps> = ({
   const [bomFeishuMkdirTestLoading, setBomFeishuMkdirTestLoading] = useState(false);
   const [bomFeishuMkdirTestOutcome, setBomFeishuMkdirTestOutcome] =
     useState<FeishuCreateFolderTestResult | null>(null);
-
-  const [feishuCredTestLoading, setFeishuCredTestLoading] = useState(false);
 
   useEffect(() => {
     if (!open) return;
@@ -173,26 +170,6 @@ export const BomProductEditorModal: React.FC<BomProductEditorModalProps> = ({
       setBomFeishuMkdirTestOutcome({ ok: false, action: 'create_folder', error: msg });
     } finally {
       setBomFeishuMkdirTestLoading(false);
-    }
-  };
-
-  const handleTestFeishuCredentials = async () => {
-    setFeishuCredTestLoading(true);
-    try {
-      const r = await testFeishuAuth({
-        appId: feishu.appId.trim(),
-        appSecret: feishu.appSecret,
-      });
-      if (!r.ok) {
-        alert('飞书凭据测试失败：' + (r.error || '未知错误'));
-      } else {
-        alert('飞书凭据可用（token 已获取）。云盘测试仍依赖系统设置中的飞书应用凭据。');
-      }
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      alert('飞书凭据测试失败：' + msg);
-    } finally {
-      setFeishuCredTestLoading(false);
     }
   };
 
@@ -345,22 +322,9 @@ export const BomProductEditorModal: React.FC<BomProductEditorModalProps> = ({
               disabled={saveBusy}
             />
             <p className="text-xs text-slate-500 mt-1">
-              飞书应用凭据在「系统设置」中配置。可先测试凭据是否可用，再测试本目录。
+              飞书应用凭据在「系统设置」中配置。
             </p>
             <div className="flex flex-wrap items-center gap-2 pt-1">
-              <button
-                type="button"
-                onClick={() => void handleTestFeishuCredentials()}
-                disabled={feishuCredTestLoading || saveBusy}
-                className={testBtnSm}
-              >
-                {feishuCredTestLoading ? (
-                  <Loader2 size={14} className={testSpinnerClass} />
-                ) : (
-                  <Zap size={14} className={testIconClass} />
-                )}
-                测试飞书凭据
-              </button>
               <button
                 type="button"
                 onClick={() => void handleTestBomFeishuRoot()}
@@ -405,7 +369,7 @@ export const BomProductEditorModal: React.FC<BomProductEditorModalProps> = ({
                   ) : (
                     <Zap size={14} className={testIconClass} />
                   )}
-                  测试新建子文件夹
+                  飞书测试新建子文件夹
                 </button>
               </div>
               {bomFeishuMkdirTestOutcome !== null ? (

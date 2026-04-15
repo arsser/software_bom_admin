@@ -1847,6 +1847,7 @@ CREATE TABLE IF NOT EXISTS "public"."bom_batches" (
     "id" "uuid" DEFAULT "gen_random_uuid"() NOT NULL,
     "user_id" "uuid" NOT NULL,
     "name" "text" NOT NULL,
+    "original_bom_url" "text" DEFAULT ''::"text" NOT NULL,
     "created_at" timestamp with time zone DEFAULT "now"() NOT NULL,
     "updated_at" timestamp with time zone DEFAULT "now"() NOT NULL,
     "product_id" "uuid" NOT NULL,
@@ -1862,6 +1863,10 @@ COMMENT ON TABLE "public"."bom_batches" IS 'BOM 批次/名称';
 
 
 COMMENT ON COLUMN "public"."bom_batches"."name" IS '批次显示名或清单名';
+
+
+
+COMMENT ON COLUMN "public"."bom_batches"."original_bom_url" IS '原始 BOM 页面链接（可选），用于在版本列表中快速跳转';
 
 
 

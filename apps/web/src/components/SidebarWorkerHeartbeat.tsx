@@ -37,7 +37,7 @@ export function SidebarWorkerHeartbeat({ collapsed }: Props) {
       }
     };
     void load();
-    const id = window.setInterval(() => void load(), 30_000);
+    const id = window.setInterval(() => void load(), 5_000);
     return () => {
       cancelled = true;
       window.clearInterval(id);

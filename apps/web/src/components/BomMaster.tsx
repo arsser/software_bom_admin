@@ -134,6 +134,18 @@ export const BomMaster: React.FC = () => {
   const distConfigured = (p: Product) =>
     Boolean(p.extArtifactoryRepo.trim() && p.feishuDriveRootFolderToken.trim());
 
+  const normalizeOptionalHttpUrl = (raw: string): string => {
+    const v = raw.trim();
+    if (!v) return '';
+    try {
+      const u = new URL(v);
+      if (u.protocol !== 'http:' && u.protocol !== 'https:') return '';
+      return u.toString();
+    } catch {
+      return '';
+    }
+  };
+
   return (
     <div className="max-w-5xl mx-auto space-y-6">
       <BomProductEditorModal
@@ -281,6 +293,24 @@ export const BomMaster: React.FC = () => {
                             <td className="px-3 py-2 text-slate-600">{new Date(b.createdAt).toLocaleString()}</td>
                             <td className="px-3 py-2">
                               <div className="flex items-center justify-end gap-3 flex-wrap">
+                              {normalizeOptionalHttpUrl(b.originalBomUrl) ? (
+                                <a
+                                  href={normalizeOptionalHttpUrl(b.originalBomUrl)}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="text-sky-700 hover:text-sky-800 text-sm font-medium"
+                                  title="打开原始 BOM 页面"
+                                >
+                                  原始BOM
+                                </a>
+                              ) : (
+                                <span
+                                  className="text-slate-300 text-sm font-medium cursor-not-allowed"
+                                  title="未设置原始 BOM 页面链接"
+                                >
+                                  原始BOM
+                                </span>
+                              )}
                               <button
                                 type="button"
                                 onClick={() => handleDeleteBatch(b)}

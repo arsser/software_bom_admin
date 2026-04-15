@@ -22,7 +22,33 @@ function log(...args) {
   console.log(new Date().toISOString(), ...args);
 }
 
-const FEISHU_UPLOAD_ALL_MAX_BYTES = 20 * 1024 * 1024;
+/**
+ * 提取错误对象的可诊断细节（含 cause 链），便于定位网络层问题（如 ECONNRESET / ENOTFOUND）。
+ * @param {unknown} err
+ */
+function extractErrorDetail(err) {
+  /** @type {Array<Record<string, unknown>>} */
+  const chain = [];
+  /** @type {unknown} */
+  let cur = err;
+  for (let i = 0; i < 4 && cur && typeof cur === 'object'; i += 1) {
+    const o = /** @type {Record<string, unknown>} */ (cur);
+    const one = {};
+    if (typeof o.name === 'string' && o.name) one.name = o.name;
+    if (typeof o.message === 'string' && o.message) one.message = o.message;
+    if (typeof o.code === 'string' && o.code) one.code = o.code;
+    if (typeof o.errno === 'number') one.errno = o.errno;
+    if (typeof o.syscall === 'string' && o.syscall) one.syscall = o.syscall;
+    if (typeof o.hostname === 'string' && o.hostname) one.hostname = o.hostname;
+    if (typeof o.address === 'string' && o.address) one.address = o.address;
+    if (typeof o.port === 'number') one.port = o.port;
+    if (Object.keys(one).length > 0) chain.push(one);
+    cur = o.cause;
+  }
+  return chain;
+}
+
+const FEISHU_UPLOAD_ALL_MAX_BYTES = 5 * 1024 * 1024;
 const FEISHU_UPLOAD_ID_TTL_MS = 23 * 60 * 60 * 1000;
 const FEISHU_PART_RETRY_MAX = 2;
 const FEISHU_PART_DELAY_MS = 220;
@@ -638,6 +664,7 @@ export async function executeFeishuUploadJob(supabase, rootAbs, job, tuning) {
   let currentRowAbort = null;
   let lastJobMessage = '';
   const jobStartMs = Date.now();
+  let hbLogCounter = 0;
 
   try {
     await reportBomLocalRootRuntime(supabase, rootAbs, { phase: 'busy', busyHint: 'feishu-upload' });
@@ -651,6 +678,14 @@ export async function executeFeishuUploadJob(supabase, rootAbs, job, tuning) {
         heartbeat_at: new Date().toISOString(),
         last_message: lastJobMessage ? `${lastJobMessage} ${timeTag}`.slice(0, 2000) : `上传中… ${timeTag}`,
       });
+      hbLogCounter += 1;
+      if (hbLogCounter % 2 === 0) {
+        log('feishu-upload heartbeat', {
+          jobId,
+          message: (lastJobMessage || '上传中…').slice(0, 180),
+          elapsedSec: elapsed,
+        });
+      }
       void (async () => {
         if (await isFeishuUploadJobCancelRequested(supabase, jobId)) {
           if (currentRowAbort) currentRowAbort.abort();
@@ -664,6 +699,13 @@ export async function executeFeishuUploadJob(supabase, rootAbs, job, tuning) {
     let nOk = 0;
     let nFail = 0;
     let nSkip = 0;
+    /** @type {string[]} */
+    const failSamples = [];
+    const rememberFailSample = (msg) => {
+      const m = String(msg ?? '').trim();
+      if (!m) return;
+      if (failSamples.length < 3) failSamples.push(m.slice(0, 160));
+    };
     let userCancelled = false;
 
     for (const rowId of rowIds) {
@@ -698,7 +740,9 @@ export async function executeFeishuUploadJob(supabase, rootAbs, job, tuning) {
       if (rowErr || !rowRec) {
         nFail += 1;
         completed += 1;
-        lastJobMessage = `${completed}/${total} 行不存在`;
+        const reason = rowErr?.message ? `读取行失败：${rowErr.message}` : '行不存在';
+        rememberFailSample(reason);
+        lastJobMessage = `${completed}/${total} ${reason}`;
         await patchFeishuUploadJob(supabase, jobId, {
           progress_current: completed,
           running_row_id: null,
@@ -714,7 +758,9 @@ export async function executeFeishuUploadJob(supabase, rootAbs, job, tuning) {
       if (!md5Lower) {
         nFail += 1;
         completed += 1;
-        await patchBomRowFeishuUploadError(supabase, rowId, '飞书上传：缺少合法期望 MD5');
+        const reason = '飞书上传：缺少合法期望 MD5';
+        rememberFailSample(reason);
+        await patchBomRowFeishuUploadError(supabase, rowId, reason);
         lastJobMessage = `${completed}/${total} 缺少 MD5`;
         await patchFeishuUploadJob(supabase, jobId, {
           progress_current: completed,
@@ -729,7 +775,9 @@ export async function executeFeishuUploadJob(supabase, rootAbs, job, tuning) {
       if (!relPathDisk) {
         nFail += 1;
         completed += 1;
-        await patchBomRowFeishuUploadError(supabase, rowId, '飞书上传：本地索引中无该 MD5，请先完成本地扫描');
+        const reason = '飞书上传：本地索引中无该 MD5，请先完成本地扫描';
+        rememberFailSample(reason);
+        await patchBomRowFeishuUploadError(supabase, rowId, reason);
         lastJobMessage = `${completed}/${total} 本地无文件`;
         await patchFeishuUploadJob(supabase, jobId, {
           progress_current: completed,
@@ -828,6 +876,13 @@ export async function executeFeishuUploadJob(supabase, rootAbs, job, tuning) {
         const msg = (e instanceof Error ? e.message : String(e)).slice(0, 1000);
         nFail += 1;
         completed += 1;
+        rememberFailSample(msg);
+        log('feishu-upload row failed', {
+          jobId,
+          rowId,
+          error: msg,
+          detail: extractErrorDetail(e),
+        });
         await patchBomRowFeishuUploadError(supabase, rowId, `飞书上传失败：${msg}`);
         lastJobMessage = `${completed}/${total} 失败 ${msg}`.slice(0, 2000);
         await patchFeishuUploadJob(supabase, jobId, {
@@ -855,8 +910,15 @@ export async function executeFeishuUploadJob(supabase, rootAbs, job, tuning) {
 
     let finalStatus = 'succeeded';
     let summary = `完成：成功 ${nOk}，失败 ${nFail}，跳过 ${nSkip}`;
-    if (nOk === 0 && nFail > 0) finalStatus = 'failed';
-    else if (nOk > 0 && nFail > 0) summary = `部分失败：成功 ${nOk}，失败 ${nFail}，跳过 ${nSkip}`;
+    if (nOk === 0 && nFail > 0) {
+      finalStatus = 'failed';
+      summary = `失败：成功 ${nOk}，失败 ${nFail}，跳过 ${nSkip}`;
+    } else if (nOk > 0 && nFail > 0) {
+      summary = `部分失败：成功 ${nOk}，失败 ${nFail}，跳过 ${nSkip}`;
+    }
+    if (nFail > 0 && failSamples.length > 0) {
+      summary = `${summary}；原因示例：${failSamples.join(' | ')}`.slice(0, 2000);
+    }
 
     await patchFeishuUploadJob(supabase, jobId, {
       status: finalStatus,
@@ -865,7 +927,7 @@ export async function executeFeishuUploadJob(supabase, rootAbs, job, tuning) {
       running_row_id: null,
       cancel_requested: false,
     });
-    log('feishu-upload-job done', jobId, summary);
+    log('feishu-upload-job done', jobId, { status: finalStatus, summary });
   } finally {
     if (globalHbTimer) clearInterval(globalHbTimer);
     currentRowAbort = null;
@@ -902,7 +964,10 @@ export async function drainFeishuUploadJobs(supabase, rootAbs, tuning) {
       );
     } catch (e) {
       const msg = (e instanceof Error ? e.message : String(e)).slice(0, 2000);
-      log('ERROR executeFeishuUploadJob', first.id, msg);
+      log('ERROR executeFeishuUploadJob', first.id, {
+        error: msg,
+        detail: extractErrorDetail(e),
+      });
       await patchFeishuUploadJob(supabase, first.id, {
         status: 'failed',
         finished_at: new Date().toISOString(),

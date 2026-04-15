@@ -15,6 +15,7 @@ export type BomBatch = {
   name: string;
   productId: string;
   productName: string;
+  originalBomUrl: string;
   headerOrder: string[];
   createdAt: string;
   rowCount: number;
@@ -30,7 +31,7 @@ export type BomBatchRow = {
 export async function fetchBomBatches(): Promise<BomBatch[]> {
   const { data, error } = await supabase
     .from('bom_batches')
-    .select('id,name,created_at,product_id,header_order,products(name),bom_rows(count)')
+    .select('id,name,original_bom_url,created_at,product_id,header_order,products(name),bom_rows(count)')
     .order('created_at', { ascending: false });
 
   if (error) throw error;
@@ -40,6 +41,7 @@ export async function fetchBomBatches(): Promise<BomBatch[]> {
     name: item.name as string,
     productId: item.product_id as string,
     productName: item.products?.name ?? '未知产品',
+    originalBomUrl: (item.original_bom_url as string | null | undefined) ?? '',
     headerOrder: Array.isArray(item.header_order) ? (item.header_order as string[]) : [],
     createdAt: item.created_at as string,
     rowCount: Number(item.bom_rows?.[0]?.count ?? 0),
@@ -48,10 +50,10 @@ export async function fetchBomBatches(): Promise<BomBatch[]> {
 
 export async function fetchBomBatchById(
   batchId: string,
-): Promise<Pick<BomBatch, 'id' | 'name' | 'productId' | 'productName' | 'headerOrder'> | null> {
+): Promise<Pick<BomBatch, 'id' | 'name' | 'productId' | 'productName' | 'originalBomUrl' | 'headerOrder'> | null> {
   const { data, error } = await supabase
     .from('bom_batches')
-    .select('id,name,product_id,header_order,products(name)')
+    .select('id,name,original_bom_url,product_id,header_order,products(name)')
     .eq('id', batchId)
     .maybeSingle();
   if (error && error.code !== 'PGRST116') throw error;
@@ -61,6 +63,7 @@ export async function fetchBomBatchById(
     name: (data as any).name as string,
     productId: (data as any).product_id as string,
     productName: (data as any).products?.name ?? '未知产品',
+    originalBomUrl: ((data as any).original_bom_url as string | null | undefined) ?? '',
     headerOrder: Array.isArray((data as any).header_order) ? (((data as any).header_order) as string[]) : [],
   };
 }
@@ -73,11 +76,15 @@ export async function updateBomBatchHeaderOrder(batchId: string, headerOrder: st
   if (error) throw error;
 }
 
-export async function updateBomBatchMeta(batchId: string, payload: { name: string; productId?: string }): Promise<void> {
-  const patch: { name: string; product_id?: string } = {
+export async function updateBomBatchMeta(
+  batchId: string,
+  payload: { name: string; productId?: string; originalBomUrl?: string },
+): Promise<void> {
+  const patch: { name: string; product_id?: string; original_bom_url?: string } = {
     name: payload.name.trim(),
   };
   if (payload.productId) patch.product_id = payload.productId;
+  if (payload.originalBomUrl !== undefined) patch.original_bom_url = payload.originalBomUrl.trim();
   const { error } = await supabase
     .from('bom_batches')
     .update(patch)

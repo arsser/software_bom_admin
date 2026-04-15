@@ -8,7 +8,11 @@ import {
   type FeishuListDriveTestResult,
   type FeishuCreateFolderTestResult,
 } from '../lib/feishuAuthTest';
-import { testBomExtArtifactoryRepo, type BomExtRepoTestOutcome } from '../lib/bomExtArtifactoryRepoTest';
+import {
+  buildExtArtifactoryRepoBrowseUrl,
+  testBomExtArtifactoryRepo,
+  type BomExtRepoTestOutcome,
+} from '../lib/bomExtArtifactoryRepoTest';
 import {
   createProduct,
   updateProduct,
@@ -24,6 +28,8 @@ import {
 
 const testBtnSm =
   'inline-flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium rounded-lg bg-white border border-gray-300 text-slate-700 hover:bg-gray-50 shadow-sm transition-colors disabled:opacity-50 disabled:cursor-not-allowed';
+const openBtnSm =
+  'inline-flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium rounded-lg bg-green-50 border border-green-200 text-green-800 hover:bg-green-100 shadow-sm transition-colors disabled:opacity-50 disabled:cursor-not-allowed';
 const testIconClass = 'text-orange-500 shrink-0';
 const testSpinnerClass = 'text-slate-500 shrink-0 animate-spin';
 
@@ -126,6 +132,25 @@ export const BomProductEditorModal: React.FC<BomProductEditorModalProps> = ({
     }
   };
 
+  const handleOpenExtArtifactoryRepo = () => {
+    const repoKey = form.extArtifactoryRepo?.trim() ?? '';
+    if (!repoKey) {
+      alert('请先填写外部 Artifactory 目标仓库 key');
+      return;
+    }
+    const extBase = artifactory?.artifactoryExtBaseUrl?.trim() ?? '';
+    if (!extBase) {
+      alert('请先在系统设置中配置「外部 Artifactory Base URL」');
+      return;
+    }
+    const url = buildExtArtifactoryRepoBrowseUrl(extBase, repoKey);
+    if (!url) {
+      alert('无法生成仓库地址，请检查外部 Base URL 与仓库 key');
+      return;
+    }
+    window.open(url, '_blank', 'noopener,noreferrer');
+  };
+
   const handleTestBomFeishuRoot = async () => {
     const folder = form.feishuDriveRootFolderToken?.trim() ?? '';
     if (!folder) {
@@ -171,6 +196,16 @@ export const BomProductEditorModal: React.FC<BomProductEditorModalProps> = ({
     } finally {
       setBomFeishuMkdirTestLoading(false);
     }
+  };
+
+  const handleOpenFeishuRootFolder = () => {
+    const folder = form.feishuDriveRootFolderToken?.trim() ?? '';
+    if (!folder) {
+      alert('请先填写飞书云盘根目录 folder_token');
+      return;
+    }
+    const url = `https://feishu.cn/drive/folder/${encodeURIComponent(folder)}`;
+    window.open(url, '_blank', 'noopener,noreferrer');
   };
 
   const handleSubmit = async () => {
@@ -297,6 +332,14 @@ export const BomProductEditorModal: React.FC<BomProductEditorModalProps> = ({
                 )}
                 测试外部仓库
               </button>
+              <button
+                type="button"
+                onClick={handleOpenExtArtifactoryRepo}
+                disabled={saveBusy}
+                className={openBtnSm}
+              >
+                打开 Artifactory 目标仓库
+              </button>
             </div>
             {bomExtRepoTestOutcome !== null ? (
               <SettingsTestResultPanel
@@ -336,7 +379,15 @@ export const BomProductEditorModal: React.FC<BomProductEditorModalProps> = ({
                 ) : (
                   <Zap size={14} className={testIconClass} />
                 )}
-                测试飞书根目录
+                飞书测试根目录
+              </button>
+              <button
+                type="button"
+                onClick={handleOpenFeishuRootFolder}
+                disabled={saveBusy}
+                className={openBtnSm}
+              >
+                打开 飞书云盘根目录
               </button>
             </div>
             {bomFeishuRootTestOutcome !== null ? (

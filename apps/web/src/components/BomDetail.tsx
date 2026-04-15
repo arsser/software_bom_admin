@@ -106,8 +106,10 @@ export const BomDetail: React.FC = () => {
   const [metaSaveLoading, setMetaSaveLoading] = useState(false);
 
   const [batchName, setBatchName] = useState('');
+  const [originalBomUrl, setOriginalBomUrl] = useState('');
   const [selectedProductId, setSelectedProductId] = useState('');
   const [initialBatchName, setInitialBatchName] = useState('');
+  const [initialOriginalBomUrl, setInitialOriginalBomUrl] = useState('');
   const [initialProductId, setInitialProductId] = useState('');
   const [products, setProducts] = useState<Product[]>([]);
 
@@ -176,6 +178,21 @@ export const BomDetail: React.FC = () => {
       safeHeaders.map((h) => escapeDelimitedCell(r?.[h] ?? '', delimiter)).join(delimiter),
     );
     return [headerLine, ...lines].join('\n');
+  }
+
+  function normalizeOptionalHttpUrl(raw: string): string {
+    const v = raw.trim();
+    if (!v) return '';
+    let u: URL;
+    try {
+      u = new URL(v);
+    } catch {
+      throw new Error('原始 BOM 页面链接格式无效，请输入完整的 http(s) URL');
+    }
+    if (u.protocol !== 'http:' && u.protocol !== 'https:') {
+      throw new Error('原始 BOM 页面链接仅支持 http(s) 协议');
+    }
+    return u.toString();
   }
 
   const headerExampleCells = useMemo(() => {
@@ -303,6 +320,8 @@ export const BomDetail: React.FC = () => {
         setProductExtArtifactoryRepo(prodCfg.extArtifactoryRepo);
         setBatchName(b.name);
         setInitialBatchName(b.name);
+        setOriginalBomUrl(b.originalBomUrl ?? '');
+        setInitialOriginalBomUrl(b.originalBomUrl ?? '');
         setSelectedProductId(b.productId);
         setInitialProductId(b.productId);
         setBatchHeaderOrder(b.headerOrder ?? []);
@@ -786,6 +805,32 @@ export const BomDetail: React.FC = () => {
     });
   };
 
+  const copyTextWithFallback = async (text: string): Promise<void> => {
+    const modernCopy = globalThis.navigator?.clipboard?.writeText;
+    if (typeof modernCopy === 'function') {
+      await modernCopy.call(globalThis.navigator.clipboard, text);
+      return;
+    }
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    ta.setAttribute('readonly', 'true');
+    ta.style.position = 'fixed';
+    ta.style.left = '-9999px';
+    ta.style.top = '0';
+    document.body.appendChild(ta);
+    ta.focus();
+    ta.select();
+    let ok = false;
+    try {
+      ok = document.execCommand('copy');
+    } finally {
+      document.body.removeChild(ta);
+    }
+    if (!ok) {
+      throw new Error('当前环境不支持自动复制，请手动复制。');
+    }
+  };
+
   const handleCopyDownloadCommands = async (tool: 'curl' | 'wget') => {
     if (!config) return;
     const af = artifactoryConfig;
@@ -814,7 +859,7 @@ export const BomDetail: React.FC = () => {
       clip += `\n\n# 以下行已跳过：\n${errors.map((e) => `# ${e}`).join('\n')}`;
     }
     try {
-      await navigator.clipboard.writeText(clip);
+      await copyTextWithFallback(clip);
       const label = tool === 'curl' ? 'curl' : 'wget';
       setCopyCmdToast(`已复制 ${label}（${items.length} 条命令${errors.length ? `，${errors.length} 条跳过` : ''}）`);
       window.setTimeout(() => setCopyCmdToast(null), 4000);
@@ -854,7 +899,7 @@ export const BomDetail: React.FC = () => {
       clip += `\n\n# 以下行已跳过：\n${errors.map((e) => `# ${e}`).join('\n')}`;
     }
     try {
-      await navigator.clipboard.writeText(clip);
+      await copyTextWithFallback(clip);
       const label = tool === 'curl' ? 'curl' : 'wget';
       setExtCopyCmdToast(
         `已复制 ext ${label}（${items.length} 条命令${errors.length ? `，${errors.length} 条跳过` : ''}）`,
@@ -1016,12 +1061,25 @@ export const BomDetail: React.FC = () => {
       alert('请填写版本名称');
       return;
     }
+    let normalizedOriginalBomUrl = '';
+    try {
+      normalizedOriginalBomUrl = normalizeOptionalHttpUrl(originalBomUrl);
+    } catch (e) {
+      alert(e instanceof Error ? e.message : String(e));
+      return;
+    }
     setMetaSaveLoading(true);
     try {
-      await updateBomBatchMeta(batchId, { name: batchName, productId: selectedProductId });
+      await updateBomBatchMeta(batchId, {
+        name: batchName,
+        productId: selectedProductId,
+        originalBomUrl: normalizedOriginalBomUrl,
+      });
       setInitialBatchName(batchName);
+      setOriginalBomUrl(normalizedOriginalBomUrl);
+      setInitialOriginalBomUrl(normalizedOriginalBomUrl);
       setInitialProductId(selectedProductId);
-      setLastMessage('已保存版本信息（名称与所属产品）');
+      setLastMessage('已保存版本信息（名称、所属产品与原始 BOM 页面链接）');
     } catch (e) {
       alert(e instanceof Error ? e.message : String(e));
     } finally {
@@ -1085,7 +1143,9 @@ export const BomDetail: React.FC = () => {
   };
 
   const hasMetaChanged = !isNew && (
-    batchName.trim() !== initialBatchName.trim() || selectedProductId !== initialProductId
+    batchName.trim() !== initialBatchName.trim() ||
+    selectedProductId !== initialProductId ||
+    originalBomUrl.trim() !== initialOriginalBomUrl.trim()
   );
   const hasPastedChanged = isNew || lastSavedPastedText == null || pastedText !== lastSavedPastedText;
   const canSaveBomList = pastedText.trim().length > 0 && hasPastedChanged;
@@ -1173,6 +1233,23 @@ export const BomDetail: React.FC = () => {
               className="w-full px-4 py-2 border border-gray-200 rounded-lg"
             />
           </div>
+          {!isNew ? (
+            <div className="md:col-span-2">
+              <label className="block text-sm font-medium text-slate-700 mb-1">
+                原始 BOM 页面链接（可选）
+              </label>
+              <input
+                type="url"
+                value={originalBomUrl}
+                onChange={(e) => setOriginalBomUrl(e.target.value)}
+                placeholder="https://example.com/original-bom-page"
+                className="w-full px-4 py-2 border border-gray-200 rounded-lg font-mono text-sm"
+              />
+              <p className="text-xs text-slate-500 mt-1">
+                留空则不设置；保存后可在 BOM 管理页版本操作栏直接打开。
+              </p>
+            </div>
+          ) : null}
         </div>
 
         <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-600">

@@ -617,23 +617,20 @@ export const BomDistributePage: React.FC = () => {
               type="button"
               disabled={
                 feishuUploadBusy ||
-                feishuJobActive ||
                 !productFeishuRootFolderToken.trim() ||
                 uploadScopeRows.length === 0
               }
               title={
-                feishuJobActive
-                  ? '已有飞书上传任务进行中，请等待完成或在后台任务页取消'
-                  : uploadScopeRows.length === 0
-                    ? '请先在表格中勾选要上传的行（须为当前筛选后的列表内）'
-                    : uploadScopeEligibleRows.length === 0
-                      ? '所选行中暂无满足上传条件的行（需本地校验通过且飞书已扫描为待上传或扫描异常）'
-                      : '上传范围：当前筛选 ∩ 勾选；仅实际上传满足条件的行（worker 异步）'
+                uploadScopeRows.length === 0
+                  ? '请先在表格中勾选要上传的行（须为当前筛选后的列表内）'
+                  : uploadScopeEligibleRows.length === 0
+                    ? '所选行中暂无满足上传条件的行（需本地校验通过且飞书已扫描为待上传或扫描异常）'
+                    : '上传范围：当前筛选 ∩ 勾选；仅实际上传满足条件的行（worker 按队列顺序执行，可与其它任务并行排队）'
               }
               onClick={() => void handleFeishuUploadRows(uploadScopeRows)}
               className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg border border-violet-300 bg-white text-violet-950 text-sm font-medium hover:bg-violet-100 disabled:opacity-50"
             >
-              {feishuUploadBusy || feishuJobActive ? <Loader2 size={16} className="animate-spin" /> : <UploadCloud size={16} />}
+              {feishuUploadBusy ? <Loader2 size={16} className="animate-spin" /> : <UploadCloud size={16} />}
               上传选中到飞书（可执行 {uploadScopeEligibleRows.length} / 已选 {uploadScopeRows.length}）
             </button>
           </div>
@@ -653,7 +650,7 @@ export const BomDistributePage: React.FC = () => {
                     : '排队中',
                 )
                 .join('；')}
-              ），上传按钮已禁用。可在
+              ）；仍可继续提交上传，新任务将排在队列后由 worker 顺序执行。可在
               <button
                 type="button"
                 onClick={() => navigate('/bom/jobs')}
@@ -913,13 +910,9 @@ export const BomDistributePage: React.FC = () => {
                             {canFeishuStubRow ? (
                               <button
                                 type="button"
-                                disabled={feishuUploadBusy || feishuJobActive}
+                                disabled={feishuUploadBusy}
                                 onClick={() => void handleFeishuUploadRows([lr])}
-                                title={
-                                  feishuJobActive
-                                    ? '已有飞书上传任务进行中，请等待完成或在后台任务页取消'
-                                    : '上传到飞书网盘（排队由 worker 执行）；需先扫描且飞书侧非已对齐'
-                                }
+                                title="上传到飞书网盘（排队由 worker 按顺序执行）；需先扫描且飞书侧非已对齐"
                                 className="inline-flex items-center justify-center p-1 rounded-md border border-violet-200 bg-violet-50 text-violet-900 hover:bg-violet-100 disabled:opacity-50"
                               >
                                 <UploadCloud size={14} />

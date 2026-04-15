@@ -1,4 +1,5 @@
 name: Build and Push Docker Images
+run-name: Build and Push Docker Images · ${{ github.ref_name }}
 
 # 仅在推送版本标签（如 v1.0.0）时自动构建并推送镜像；不再因 main 推送或 PR 触发。
 # 需要手动补构建时可使用 workflow_dispatch。

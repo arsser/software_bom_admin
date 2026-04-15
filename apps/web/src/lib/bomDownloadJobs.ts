@@ -1,5 +1,6 @@
 import { supabase } from './supabase';
 import { formatBytesHuman } from './bytesFormat';
+import { formatSupabaseError } from './bomScannerJobs';
 
 export type BomDownloadJobStatus = 'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled';
 
@@ -75,7 +76,7 @@ export async function requestBomItDownload(batchId: string, rowIds?: string[] | 
     p_batch_id: batchId,
     p_row_ids: rowIds && rowIds.length > 0 ? rowIds : null,
   });
-  if (error) throw error;
+  if (error) throw new Error(formatSupabaseError(error));
   if (data == null || typeof data !== 'string') throw new Error('bom_request_download 未返回任务 ID');
   return data;
 }
@@ -86,7 +87,7 @@ export async function requestBomDistributeExtPull(batchId: string, rowIds?: stri
     p_batch_id: batchId,
     p_row_ids: rowIds && rowIds.length > 0 ? rowIds : null,
   });
-  if (error) throw error;
+  if (error) throw new Error(formatSupabaseError(error));
   if (data == null || typeof data !== 'string') throw new Error('bom_request_distribute_ext_pull 未返回任务 ID');
   return data;
 }
@@ -94,7 +95,7 @@ export async function requestBomDistributeExtPull(batchId: string, rowIds?: stri
 /** 排队中立即取消；执行中则标记 cancel_requested；失败可关闭为 cancelled；已成功/已取消幂等 true */
 export async function cancelBomDownloadJob(jobId: string): Promise<boolean> {
   const { data, error } = await supabase.rpc('bom_cancel_download_job', { p_job_id: jobId });
-  if (error) throw error;
+  if (error) throw new Error(formatSupabaseError(error));
   // 勿用 Boolean(data)：[] 等为 truthy，会导致误判成功
   return data === true;
 }

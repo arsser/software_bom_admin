@@ -458,7 +458,7 @@ export const BomDistributePage: React.FC = () => {
         eligible.map((r) => r.id),
       );
       alert(
-        `已创建飞书上传任务（排队由 bom-scanner-worker 执行）。任务 ID：${jobId}\n将自动创建版本目录/分组子目录（与扫描规则一致）；≤20MB 整文件上传，>20MB 自动分片上传（支持断点续传）。`,
+        `已创建飞书上传任务（排队由 bom-scanner-worker 执行）。任务 ID：${jobId}\n将自动创建版本目录/分组子目录（与扫描规则一致）；≤5MB 整文件上传，>5MB 自动分片上传（支持断点续传）。`,
       );
       await load();
     } catch (e) {
@@ -584,7 +584,7 @@ export const BomDistributePage: React.FC = () => {
           <p className="text-xs text-violet-900/90">
             扫描：在飞书根目录下按版本名文件夹 +（组件或分组）+ 本地文件名 查找文件，读取飞书字节数，与{' '}
             <code className="bg-violet-100/80 px-1 rounded text-[10px]">local_file</code> 索引比对文件名与大小；不经
-            worker、不用 MD5。上传：入队后由 worker 使用 upload_all（≤20MB）写入飞书，并自动创建版本/分组目录。
+            worker、不用 MD5。上传：入队后由 worker 使用 upload_all（≤5MB）写入飞书，并自动创建版本/分组目录。
           </p>
           <div className="flex flex-wrap items-center gap-2 gap-x-3">
             <button

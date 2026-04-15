@@ -129,7 +129,13 @@ export async function fetchBomRows(batchId: string): Promise<BomBatchRow[]> {
   }));
 }
 
-export async function createBatchWithRows(payload: { name: string; productId: string; headerOrder: string[]; rows: BomRowRecord[] }): Promise<string> {
+export async function createBatchWithRows(payload: {
+  name: string;
+  productId: string;
+  originalBomUrl?: string;
+  headerOrder: string[];
+  rows: BomRowRecord[];
+}): Promise<string> {
   const { data: authData, error: authError } = await supabase.auth.getUser();
   if (authError) throw authError;
   const userId = authData.user?.id;
@@ -137,7 +143,13 @@ export async function createBatchWithRows(payload: { name: string; productId: st
 
   const { data: batch, error: batchError } = await supabase
     .from('bom_batches')
-    .insert({ name: payload.name.trim(), user_id: userId, product_id: payload.productId, header_order: payload.headerOrder })
+    .insert({
+      name: payload.name.trim(),
+      user_id: userId,
+      product_id: payload.productId,
+      original_bom_url: payload.originalBomUrl?.trim() ?? '',
+      header_order: payload.headerOrder,
+    })
     .select('id')
     .single();
   if (batchError) throw batchError;

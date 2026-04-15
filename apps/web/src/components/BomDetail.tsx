@@ -1101,6 +1101,13 @@ export const BomDetail: React.FC = () => {
       alert('请先粘贴 BOM 内容');
       return;
     }
+    let normalizedOriginalBomUrl = '';
+    try {
+      normalizedOriginalBomUrl = normalizeOptionalHttpUrl(originalBomUrl);
+    } catch (e) {
+      alert(e instanceof Error ? e.message : String(e));
+      return;
+    }
 
     try {
       const parsed = parsePastedBom(pastedText);
@@ -1115,7 +1122,13 @@ export const BomDetail: React.FC = () => {
 
       setSaveLoading(true);
       if (isNew) {
-        const id = await createBatchWithRows({ name: batchName, productId: selectedProductId, headerOrder: parsed.headers, rows: parsed.rows });
+        const id = await createBatchWithRows({
+          name: batchName,
+          productId: selectedProductId,
+          originalBomUrl: normalizedOriginalBomUrl,
+          headerOrder: parsed.headers,
+          rows: parsed.rows,
+        });
         setLastMessage(`已创建版本，共 ${parsed.rows.length} 行；告警 ${buildBomWarnings(parsed.rows, config.jsonKeyMap).length} 条`);
         navigate(`/bom/${id}`, { replace: true });
       } else {
@@ -1233,23 +1246,21 @@ export const BomDetail: React.FC = () => {
               className="w-full px-4 py-2 border border-gray-200 rounded-lg"
             />
           </div>
-          {!isNew ? (
-            <div className="md:col-span-2">
-              <label className="block text-sm font-medium text-slate-700 mb-1">
-                原始 BOM 页面链接（可选）
-              </label>
-              <input
-                type="url"
-                value={originalBomUrl}
-                onChange={(e) => setOriginalBomUrl(e.target.value)}
-                placeholder="https://example.com/original-bom-page"
-                className="w-full px-4 py-2 border border-gray-200 rounded-lg font-mono text-sm"
-              />
-              <p className="text-xs text-slate-500 mt-1">
-                留空则不设置；保存后可在 BOM 管理页版本操作栏直接打开。
-              </p>
-            </div>
-          ) : null}
+          <div className="md:col-span-2">
+            <label className="block text-sm font-medium text-slate-700 mb-1">
+              原始 BOM 页面链接（可选）
+            </label>
+            <input
+              type="url"
+              value={originalBomUrl}
+              onChange={(e) => setOriginalBomUrl(e.target.value)}
+              placeholder="https://example.com/original-bom-page"
+              className="w-full px-4 py-2 border border-gray-200 rounded-lg font-mono text-sm"
+            />
+            <p className="text-xs text-slate-500 mt-1">
+              留空则不设置；保存后可在 BOM 管理页版本操作栏直接打开。
+            </p>
+          </div>
         </div>
 
         <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-600">

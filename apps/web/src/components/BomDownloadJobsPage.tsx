@@ -551,7 +551,7 @@ export const BomDownloadJobsPage: React.FC = () => {
         </div>
         {feishuJobs.some((j) => j.status === 'running' || j.status === 'queued') ? (
           <div className="px-4 py-2 border-t border-slate-100 bg-violet-50/50 text-xs text-slate-600">
-            飞书上传任务进行中时每 2 秒刷新；分片进度（&gt;20MB 文件）实时显示在说明列。
+            飞书上传任务进行中时每 2 秒刷新；分片进度（&gt;5MB 文件）实时显示在说明列。
           </div>
         ) : null}
       </div>

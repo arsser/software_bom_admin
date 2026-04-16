@@ -36,6 +36,13 @@ export const BomMaster: React.FC = () => {
   const [editorOpen, setEditorOpen] = useState(false);
   const [editorMode, setEditorMode] = useState<'create' | 'edit'>('create');
   const [editorProduct, setEditorProduct] = useState<Product | null>(null);
+  const [batchSort, setBatchSort] = useState<{
+    key: 'name' | 'rowCount' | 'createdAt';
+    direction: 'asc' | 'desc';
+  }>({
+    key: 'createdAt',
+    direction: 'desc',
+  });
 
   const load = async () => {
     setLoading(true);
@@ -130,6 +137,39 @@ export const BomMaster: React.FC = () => {
     });
     return Array.from(map.values());
   }, [products, batches]);
+
+  const toggleBatchSort = (key: 'name' | 'rowCount' | 'createdAt') => {
+    setBatchSort((prev) => {
+      if (prev.key === key) {
+        return {
+          key,
+          direction: prev.direction === 'asc' ? 'desc' : 'asc',
+        };
+      }
+      return {
+        key,
+        direction: key === 'createdAt' ? 'desc' : 'asc',
+      };
+    });
+  };
+
+  const sortBatches = (list: BomBatch[]): BomBatch[] =>
+    list.slice().sort((a, b) => {
+      let diff = 0;
+      if (batchSort.key === 'name') {
+        diff = a.name.localeCompare(b.name, 'zh-Hans-CN');
+      } else if (batchSort.key === 'rowCount') {
+        diff = a.rowCount - b.rowCount;
+      } else {
+        diff = a.createdAt.localeCompare(b.createdAt);
+      }
+      return batchSort.direction === 'asc' ? diff : -diff;
+    });
+
+  const sortArrow = (key: 'name' | 'rowCount' | 'createdAt') => {
+    if (batchSort.key !== key) return '↕';
+    return batchSort.direction === 'asc' ? '↑' : '↓';
+  };
 
   const distConfigured = (p: Product) =>
     Boolean(p.extArtifactoryRepo.trim() && p.feishuDriveRootFolderToken.trim());
@@ -276,17 +316,44 @@ export const BomMaster: React.FC = () => {
                   <table className="min-w-full text-sm">
                     <thead className="bg-slate-50">
                       <tr>
-                        <th className="px-3 py-2 text-left text-xs font-semibold text-slate-700 border-b border-slate-200">版本名称</th>
-                        <th className="px-3 py-2 text-left text-xs font-semibold text-slate-700 border-b border-slate-200">行数</th>
-                        <th className="px-3 py-2 text-left text-xs font-semibold text-slate-700 border-b border-slate-200">创建时间</th>
+                        <th className="px-3 py-2 text-left text-xs font-semibold text-slate-700 border-b border-slate-200">
+                          <button
+                            type="button"
+                            onClick={() => toggleBatchSort('name')}
+                            className="inline-flex items-center gap-1 hover:text-indigo-700"
+                            title="按版本名称排序"
+                          >
+                            版本名称
+                            <span className="text-[11px]">{sortArrow('name')}</span>
+                          </button>
+                        </th>
+                        <th className="px-3 py-2 text-left text-xs font-semibold text-slate-700 border-b border-slate-200">
+                          <button
+                            type="button"
+                            onClick={() => toggleBatchSort('rowCount')}
+                            className="inline-flex items-center gap-1 hover:text-indigo-700"
+                            title="按行数排序"
+                          >
+                            行数
+                            <span className="text-[11px]">{sortArrow('rowCount')}</span>
+                          </button>
+                        </th>
+                        <th className="px-3 py-2 text-left text-xs font-semibold text-slate-700 border-b border-slate-200">
+                          <button
+                            type="button"
+                            onClick={() => toggleBatchSort('createdAt')}
+                            className="inline-flex items-center gap-1 hover:text-indigo-700"
+                            title="按创建时间排序"
+                          >
+                            创建时间
+                            <span className="text-[11px]">{sortArrow('createdAt')}</span>
+                          </button>
+                        </th>
                         <th className="px-3 py-2 text-right text-xs font-semibold text-slate-700 border-b border-slate-200">操作</th>
                       </tr>
                     </thead>
                     <tbody>
-                      {bs
-                        .slice()
-                        .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
-                        .map((b) => (
+                      {sortBatches(bs).map((b) => (
                           <tr key={b.id} className="border-b last:border-b-0">
                             <td className="px-3 py-2 text-slate-900">{b.name}</td>
                             <td className="px-3 py-2 text-slate-700">{b.rowCount}</td>

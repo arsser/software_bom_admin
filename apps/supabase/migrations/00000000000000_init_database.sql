@@ -965,7 +965,6 @@ BEGIN
     FROM bom_rows br2
   ) sub
   WHERE br.id = sub.id
-    AND (br.status->>'ext') IS DISTINCT FROM 'synced_or_skipped'
     AND (
       (br.status->>'local') IS DISTINCT FROM (
         CASE
@@ -992,7 +991,7 @@ $_$;
 ALTER FUNCTION "public"."bom_refresh_local_found_statuses"() OWNER TO "postgres";
 
 
-COMMENT ON FUNCTION "public"."bom_refresh_local_found_statuses"() IS '扫描结束后仅更新 status.local；不修改 ext=synced_or_skipped；local_fetch_error 在本地终态时清除';
+COMMENT ON FUNCTION "public"."bom_refresh_local_found_statuses"() IS '扫描结束后按 local_file 重算 status.local；即使 ext=synced_or_skipped 也会收敛；local_fetch_error 在本地终态时清除';
 
 
 
@@ -1076,7 +1075,6 @@ BEGIN
   ) sub
   WHERE br.id = sub.id
     AND br.batch_id = p_batch_id
-    AND (br.status->>'ext') IS DISTINCT FROM 'synced_or_skipped'
     AND (
       (br.status->>'local') IS DISTINCT FROM (
         CASE
@@ -1103,7 +1101,7 @@ $_$;
 ALTER FUNCTION "public"."bom_refresh_local_found_statuses_for_batch"("p_batch_id" "uuid") OWNER TO "postgres";
 
 
-COMMENT ON FUNCTION "public"."bom_refresh_local_found_statuses_for_batch"("p_batch_id" "uuid") IS '按 local_file 重算该批次 status.local（跳过 ext=synced_or_skipped）；local_fetch_error 在本地终态时清除';
+COMMENT ON FUNCTION "public"."bom_refresh_local_found_statuses_for_batch"("p_batch_id" "uuid") IS '按 local_file 重算该批次 status.local；即使 ext=synced_or_skipped 也会收敛；local_fetch_error 在本地终态时清除';
 
 
 
@@ -1496,6 +1494,90 @@ ALTER FUNCTION "public"."bom_row_still_eligible_for_distribute_ext_pull"("p_row_
 
 
 COMMENT ON FUNCTION "public"."bom_row_still_eligible_for_distribute_ext_pull"("p_row_id" "uuid") IS '分发 ext 拉取：与 it 拉取相同本地/md5 条件，但 URL 仅认 ext 列';
+
+
+CREATE OR REPLACE FUNCTION "public"."bom_debug_distribute_ext_pull_eligibility"("p_row_id" "uuid")
+RETURNS TABLE(
+    "row_id" "uuid",
+    "batch_id" "uuid",
+    "local_status" "text",
+    "ext_url" "text",
+    "expected_md5" "text",
+    "ext_url_present" boolean,
+    "ext_url_is_http" boolean,
+    "ext_url_looks_like_artifactory" boolean,
+    "expected_md5_missing" boolean,
+    "expected_md5_in_local_file" boolean,
+    "local_status_allowed" boolean,
+    "eligible" boolean
+)
+    LANGUAGE "sql" STABLE SECURITY DEFINER
+    SET "search_path" TO 'public'
+    AS $$
+  WITH base AS (
+    SELECT
+      br.id AS row_id,
+      br.batch_id,
+      br.status->>'local' AS local_status,
+      NULLIF(BTRIM(bom_extract_ext_url(br.bom_row)), '') AS ext_url,
+      bom_extract_expected_md5(br.bom_row) AS expected_md5
+    FROM bom_rows br
+    WHERE br.id = p_row_id
+  )
+  SELECT
+    b.row_id,
+    b.batch_id,
+    b.local_status,
+    b.ext_url,
+    b.expected_md5,
+    (b.ext_url IS NOT NULL) AS ext_url_present,
+    (b.ext_url IS NOT NULL AND b.ext_url ~ '^https?://') AS ext_url_is_http,
+    bom_url_looks_like_it_artifactory(b.ext_url) AS ext_url_looks_like_artifactory,
+    (b.expected_md5 IS NULL) AS expected_md5_missing,
+    EXISTS (
+      SELECT 1
+      FROM local_file lf
+      WHERE lf.md5 IS NOT NULL
+        AND lf.md5 ~ '^[a-f0-9]{32}$'
+        AND LOWER(lf.md5) = b.expected_md5
+    ) AS expected_md5_in_local_file,
+    (
+      b.local_status IN ('pending', 'error')
+      OR (
+        b.local_status IN ('verified_ok', 'verified_fail', 'local_found')
+        AND b.expected_md5 ~ '^[a-f0-9]{32}$'
+      )
+    ) AS local_status_allowed,
+    (
+      b.ext_url IS NOT NULL
+      AND b.ext_url ~ '^https?://'
+      AND bom_url_looks_like_it_artifactory(b.ext_url)
+      AND (
+        b.expected_md5 IS NULL
+        OR NOT EXISTS (
+          SELECT 1
+          FROM local_file lf
+          WHERE lf.md5 IS NOT NULL
+            AND lf.md5 ~ '^[a-f0-9]{32}$'
+            AND LOWER(lf.md5) = b.expected_md5
+        )
+      )
+      AND (
+        b.local_status IN ('pending', 'error')
+        OR (
+          b.local_status IN ('verified_ok', 'verified_fail', 'local_found')
+          AND b.expected_md5 ~ '^[a-f0-9]{32}$'
+        )
+      )
+    ) AS eligible
+  FROM base b;
+$$;
+
+
+ALTER FUNCTION "public"."bom_debug_distribute_ext_pull_eligibility"("p_row_id" "uuid") OWNER TO "postgres";
+
+
+COMMENT ON FUNCTION "public"."bom_debug_distribute_ext_pull_eligibility"("p_row_id" "uuid") IS '诊断单行是否满足分发 ext 拉取条件，拆解 URL、MD5、本地状态与最终 eligible 结果';
 
 
 
@@ -2797,6 +2879,13 @@ REVOKE ALL ON FUNCTION "public"."bom_row_still_eligible_for_distribute_ext_pull"
 GRANT ALL ON FUNCTION "public"."bom_row_still_eligible_for_distribute_ext_pull"("p_row_id" "uuid") TO "anon";
 GRANT ALL ON FUNCTION "public"."bom_row_still_eligible_for_distribute_ext_pull"("p_row_id" "uuid") TO "authenticated";
 GRANT ALL ON FUNCTION "public"."bom_row_still_eligible_for_distribute_ext_pull"("p_row_id" "uuid") TO "service_role";
+
+
+
+REVOKE ALL ON FUNCTION "public"."bom_debug_distribute_ext_pull_eligibility"("p_row_id" "uuid") FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."bom_debug_distribute_ext_pull_eligibility"("p_row_id" "uuid") TO "anon";
+GRANT ALL ON FUNCTION "public"."bom_debug_distribute_ext_pull_eligibility"("p_row_id" "uuid") TO "authenticated";
+GRANT ALL ON FUNCTION "public"."bom_debug_distribute_ext_pull_eligibility"("p_row_id" "uuid") TO "service_role";
 
 
 

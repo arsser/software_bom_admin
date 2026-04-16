@@ -88,7 +88,13 @@ export function extractExtUrlFromRow(row: BomRowRecord, keyMap: BomJsonKeyMap): 
  * 在可拉取前提下：ext 转存须为 https/http 且与 worker 一致须为 Artifactory 类链接（URL 中含 artifactory，不读「下载路径」列）。
  */
 export function rowEligibleForDistributeExternalPull(row: BomBatchRow, keyMap: BomJsonKeyMap): boolean {
-  if (row.status.local === 'verified_ok') return false;
+  const local = row.status.local;
+  const md5 = extractExpectedMd5FromRow(row.bom_row, keyMap);
+  const localEligibleByStatus =
+    local === 'pending' ||
+    local === 'error' ||
+    ((local === 'verified_ok' || local === 'verified_fail' || local === 'local_found') && Boolean(md5));
+  if (!localEligibleByStatus) return false;
   const extRaw = extractExtUrlFromRow(row.bom_row, keyMap);
   if (!extRaw?.trim()) return false;
   const url = extractHttpUrlFromDownloadCell(extRaw);

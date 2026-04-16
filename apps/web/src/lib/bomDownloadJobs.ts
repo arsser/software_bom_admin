@@ -70,13 +70,32 @@ function mapJob(raw: Record<string, unknown>, batchName?: string | null): BomDow
 const JOB_SELECT =
   'id,batch_id,status,progress_current,progress_total,last_message,created_at,finished_at,started_at,heartbeat_at,running_file_name,running_bytes_downloaded,running_bytes_total,bytes_downloaded_total,bytes_total';
 
+function toFriendlyDownloadRequestError(err: unknown, fallback: string): string {
+  if (err && typeof err === 'object') {
+    const o = err as Record<string, unknown>;
+    const code = typeof o.code === 'string' ? o.code : '';
+    const msg = typeof o.message === 'string' ? o.message : '';
+    if (code === 'P0001' && /no eligible rows/i.test(msg)) {
+      return fallback;
+    }
+  }
+  return formatSupabaseError(err);
+}
+
 /** 创建拉取任务：p_row_ids 为空表示当前版本全部 eligible 行（仅 BOM「下载路径」列，内部/外部 Artifactory） */
 export async function requestBomItDownload(batchId: string, rowIds?: string[] | null): Promise<string> {
   const { data, error } = await supabase.rpc('bom_request_download', {
     p_batch_id: batchId,
     p_row_ids: rowIds && rowIds.length > 0 ? rowIds : null,
   });
-  if (error) throw new Error(formatSupabaseError(error));
+  if (error) {
+    throw new Error(
+      toFriendlyDownloadRequestError(
+        error,
+        '没有可拉取的行（可能都已本地校验通过，或不满足可请求链接条件）。',
+      ),
+    );
+  }
   if (data == null || typeof data !== 'string') throw new Error('bom_request_download 未返回任务 ID');
   return data;
 }
@@ -87,7 +106,14 @@ export async function requestBomDistributeExtPull(batchId: string, rowIds?: stri
     p_batch_id: batchId,
     p_row_ids: rowIds && rowIds.length > 0 ? rowIds : null,
   });
-  if (error) throw new Error(formatSupabaseError(error));
+  if (error) {
+    throw new Error(
+      toFriendlyDownloadRequestError(
+        error,
+        '当前没有可执行分发拉取的行（可能都已本地校验通过，或 ext 链接不符合条件）。',
+      ),
+    );
+  }
   if (data == null || typeof data !== 'string') throw new Error('bom_request_distribute_ext_pull 未返回任务 ID');
   return data;
 }

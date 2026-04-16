@@ -375,8 +375,15 @@ function createFeishuTokenManager(appId, appSecret) {
   let obtainedAt = 0;
   return async function getAccessToken() {
     if (!token || Date.now() - obtainedAt > FEISHU_TOKEN_REFRESH_MS) {
+      const isRefresh = Boolean(token);
+      const prevAgeSec = token ? Math.round((Date.now() - obtainedAt) / 1000) : null;
       token = await feishuTenantToken(appId, appSecret);
       obtainedAt = Date.now();
+      log('feishu token obtained', {
+        kind: isRefresh ? 'refresh' : 'initial',
+        prevAgeSec,
+        refreshAfterSec: Math.round(FEISHU_TOKEN_REFRESH_MS / 1000),
+      });
     }
     return token;
   };

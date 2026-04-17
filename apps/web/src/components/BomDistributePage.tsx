@@ -105,6 +105,9 @@ export const BomDistributePage: React.FC = () => {
   const [feishuScanBusy, setFeishuScanBusy] = useState(false);
   const [feishuUploadBusy, setFeishuUploadBusy] = useState(false);
   const [distributeExtPullBusy, setDistributeExtPullBusy] = useState(false);
+  const [showDebugLinks, setShowDebugLinks] = useState(false);
+  const [debugDialogText, setDebugDialogText] = useState<string | null>(null);
+  const [debugDialogTitle, setDebugDialogTitle] = useState('');
   const [activeFeishuJobs, setActiveFeishuJobs] = useState<BomFeishuUploadJob[]>([]);
   const feishuJobActive = activeFeishuJobs.some((j) => j.status === 'queued' || j.status === 'running');
   /** 扫描时若飞书根下无版本名文件夹，是否自动 create_folder（与 Edge batchDir 规则一致） */
@@ -193,8 +196,11 @@ export const BomDistributePage: React.FC = () => {
   );
   /** 本地非校验通过且具备可请求 ext 链接、行内会出现拉取按钮的行数 */
   const distributeExternalPullUrlRowCount = useMemo(
-    () => loadedBomRows.filter((lr) => rowEligibleForDistributeExternalPull(lr, tableKeyMap)).length,
-    [loadedBomRows, tableKeyMap],
+    () =>
+      loadedBomRows.filter((lr) =>
+        rowEligibleForDistributeExternalPull(lr, tableKeyMap, localInfoByMd5, localIndexReady),
+      ).length,
+    [loadedBomRows, tableKeyMap, localInfoByMd5, localIndexReady],
   );
   /** 全表：已本地校验通过且飞书扫描结论为「待上传/异常」的行数 */
   const feishuUploadStubCount = useMemo(
@@ -379,7 +385,7 @@ export const BomDistributePage: React.FC = () => {
   };
 
   const handleDistributeExtPullRow = async (lr: BomBatchRow) => {
-    if (!batchId || !rowEligibleForDistributeExternalPull(lr, tableKeyMap)) return;
+    if (!batchId || !rowEligibleForDistributeExternalPull(lr, tableKeyMap, localInfoByMd5, localIndexReady)) return;
     setDistributeExtPullBusy(true);
     try {
       const jobId = await requestBomDistributeExtPull(batchId, [lr.id]);
@@ -422,6 +428,51 @@ export const BomDistributePage: React.FC = () => {
   };
 
   const clearUploadSelection = () => setSelectedUploadRowIds(new Set());
+
+  const handleOpenRowDebugInfo = (lr: BomBatchRow) => {
+    const text = JSON.stringify(
+      {
+        row_id: lr.id,
+        bom_row: lr.bom_row,
+        status: lr.status,
+      },
+      null,
+      2,
+    );
+    setDebugDialogTitle(`调试信息 · 第 ${loadedBomRows.findIndex((x) => x.id === lr.id) + 1} 行 · ${lr.id}`);
+    setDebugDialogText(text);
+  };
+
+  const handleCopyDebugInfo = async () => {
+    if (!debugDialogText) return;
+    try {
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(debugDialogText);
+        alert('调试信息已复制');
+        return;
+      }
+    } catch {
+      // continue to fallback
+    }
+    const ta = document.createElement('textarea');
+    ta.value = debugDialogText;
+    ta.setAttribute('readonly', 'true');
+    ta.style.position = 'fixed';
+    ta.style.left = '-9999px';
+    document.body.appendChild(ta);
+    ta.select();
+    let ok = false;
+    try {
+      ok = document.execCommand('copy');
+    } finally {
+      document.body.removeChild(ta);
+    }
+    if (ok) {
+      alert('调试信息已复制');
+    } else {
+      alert('复制失败，请手动全选弹窗内容复制。');
+    }
+  };
 
   const handleFeishuScan = async () => {
     if (!batchId) return;
@@ -711,6 +762,13 @@ export const BomDistributePage: React.FC = () => {
                 >
                   清除勾选
                 </button>
+                <button
+                  type="button"
+                  onClick={() => setShowDebugLinks((v) => !v)}
+                  className="text-xs font-medium text-slate-600 hover:text-slate-900"
+                >
+                  {showDebugLinks ? '隐藏调试链接' : '显示调试链接'}
+                </button>
               </div>
               {groupSegmentFilter !== GROUP_FILTER_ALL ? (
                 <span className="text-xs text-slate-500">
@@ -858,13 +916,32 @@ export const BomDistributePage: React.FC = () => {
                           .join('\n') || undefined;
                       const canFeishuStubRow = feishuRowEligibleForUploadStub(lr.status);
                       const localVerifiedOk = lr.status.local === 'verified_ok';
-                      const canExternalPullRow = rowEligibleForDistributeExternalPull(lr, tableKeyMap);
+                      const canExternalPullRow = rowEligibleForDistributeExternalPull(
+                        lr,
+                        tableKeyMap,
+                        localInfoByMd5,
+                        localIndexReady,
+                      );
                       const feishuNameDisp = lr.status.feishu_file_name?.trim() ?? '';
                       const feishuSz = lr.status.feishu_size_bytes;
 
                       return (
                         <tr key={lr.id} className="border-b last:border-b-0">
-                          <td className="px-3 py-2 text-slate-500 whitespace-nowrap align-middle w-12">{i + 1}</td>
+                          <td className="px-3 py-2 text-slate-500 whitespace-nowrap align-middle w-12">
+                            <div className="flex flex-col items-start leading-tight">
+                              <span>{i + 1}</span>
+                              {showDebugLinks ? (
+                                <button
+                                  type="button"
+                                  onClick={() => handleOpenRowDebugInfo(lr)}
+                                  className="mt-1 text-[10px] font-medium text-indigo-700 hover:text-indigo-900 underline"
+                                  title="查看该行 bom_row 与 status 的 JSON 调试信息"
+                                >
+                                  调试
+                                </button>
+                              ) : null}
+                            </div>
+                          </td>
                           <td className="px-3 py-2 align-middle w-10 text-center">
                             <input
                               type="checkbox"
@@ -899,7 +976,9 @@ export const BomDistributePage: React.FC = () => {
                                 title={
                                   localVerifiedOk
                                     ? '本地已校验通过，无需从外部拉取'
-                                    : '本行无有效的外部转存（ext）http(s) 链接，无法从远端拉取'
+                                    : indexedMd5Hit === true
+                                      ? '期望 MD5 已在 local_file 索引中命中；后端不会因该行入分发拉取队列'
+                                      : '本行无有效的外部转存（ext）http(s) 链接或其它不满足拉取条件'
                                 }
                               >
                                 —
@@ -1084,6 +1163,40 @@ export const BomDistributePage: React.FC = () => {
           <p className="text-xs text-slate-500">列数过多时仅展示前 32 列。</p>
         ) : null}
       </div>
+      {debugDialogText ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+          <div className="w-full max-w-5xl max-h-[85vh] overflow-hidden rounded-xl border border-slate-300 bg-white shadow-2xl">
+            <div className="flex items-center justify-between border-b border-slate-200 px-4 py-2">
+              <div className="text-sm font-medium text-slate-900 truncate pr-2" title={debugDialogTitle}>
+                {debugDialogTitle}
+              </div>
+              <div className="flex items-center gap-2 shrink-0">
+                <button
+                  type="button"
+                  onClick={() => void handleCopyDebugInfo()}
+                  className="rounded-md border border-slate-300 px-2 py-1 text-xs text-slate-700 hover:bg-slate-50"
+                >
+                  复制
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setDebugDialogText(null)}
+                  className="rounded-md border border-slate-300 px-2 py-1 text-xs text-slate-700 hover:bg-slate-50"
+                >
+                  关闭
+                </button>
+              </div>
+            </div>
+            <div className="p-3">
+              <textarea
+                readOnly
+                value={debugDialogText}
+                className="h-[68vh] w-full rounded-lg border border-slate-200 bg-slate-50 p-3 font-mono text-xs leading-5 text-slate-800"
+              />
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 };

@@ -84,10 +84,17 @@ export function extractExtUrlFromRow(row: BomRowRecord, keyMap: BomJsonKeyMap): 
 }
 
 /**
- * 分发页「从外部 Artifactory 拉取」前置条件：本地未校验通过时才可能出现拉取；本地已通过则一律不提供（与是否有 ext 链接无关）。
- * 在可拉取前提下：ext 转存须为 https/http 且与 worker 一致须为 Artifactory 类链接（URL 中含 artifactory，不读「下载路径」列）。
+ * 分发页「从外部 Artifactory 拉取」前置条件（与 `bom_request_distribute_ext_pull` 一致）：
+ * - 本地状态：pending / error，或 (verified_ok|verified_fail|local_found 且 BOM 中有合法期望 MD5)；
+ * - ext 列为可解析的 http(s) 且 URL 含 artifactory；
+ * - 若已传入 `localMd5Indexed` 且 `localIndexReady`：期望 MD5 已在本地索引命中时不可再拉取（后端会因「已在 local_file」不入队）。
  */
-export function rowEligibleForDistributeExternalPull(row: BomBatchRow, keyMap: BomJsonKeyMap): boolean {
+export function rowEligibleForDistributeExternalPull(
+  row: BomBatchRow,
+  keyMap: BomJsonKeyMap,
+  localMd5Indexed?: ReadonlyMap<string, unknown> | null,
+  localIndexReady = true,
+): boolean {
   const local = row.status.local;
   const md5 = extractExpectedMd5FromRow(row.bom_row, keyMap);
   const localEligibleByStatus =
@@ -100,7 +107,9 @@ export function rowEligibleForDistributeExternalPull(row: BomBatchRow, keyMap: B
   const url = extractHttpUrlFromDownloadCell(extRaw);
   const u = url?.trim();
   if (!u || !/^https?:\/\//i.test(u)) return false;
-  return /artifactory/i.test(u);
+  if (!/artifactory/i.test(u)) return false;
+  if (localIndexReady && md5 != null && localMd5Indexed?.has(md5)) return false;
+  return true;
 }
 
 /** 解析单元格中的字节数（去千分位/空格；接受数值为整数或极接近整数的浮点） */

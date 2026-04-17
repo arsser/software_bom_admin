@@ -146,11 +146,13 @@ export const BomDistributePage: React.FC = () => {
 
   const dataHeaders = useMemo(() => {
     const sizeKeys = tableKeyMap.fileSizeBytes ?? [];
+    const legacySizeAliases = ['文件大小', 'size_bytes', '远端大小'];
+    const allSizeKeys = Array.from(new Set([...sizeKeys, ...legacySizeAliases]));
     const extSizeKeys = tableKeyMap.extFileSizeBytes ?? [];
     const extUrlKeys = tableKeyMap.extUrl ?? [];
     return existingHeaders.filter((h) => {
       if (normalizeBomKeyForMatch(h) === 'ext_sync_kind') return false;
-      if (sizeKeys.length && headerMatchesAny(h, sizeKeys)) return false;
+      if (allSizeKeys.length && headerMatchesAny(h, allSizeKeys)) return false;
       if (extSizeKeys.length && headerMatchesAny(h, extSizeKeys)) return false;
       if (extUrlKeys.length && headerMatchesAny(h, extUrlKeys)) return false;
       return true;
@@ -840,7 +842,7 @@ export const BomDistributePage: React.FC = () => {
                       </th>
                       <th
                         className="px-3 py-2 text-left font-semibold text-slate-700 border-b border-gray-200 whitespace-nowrap min-w-[9rem] w-[11rem]"
-                        title="本地索引字节数与飞书扫描字节数；飞书有值且与本地不一致时整格标红"
+                        title="统一展示大小来源：本地文件索引与飞书扫描结果；不一致时整格标红"
                       >
                         大小
                       </th>

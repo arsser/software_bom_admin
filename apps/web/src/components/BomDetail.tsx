@@ -72,6 +72,7 @@ import {
   extractHttpUrlFromDownloadCell,
   extractExtSizeBytesFromRow,
   extractRemoteSizeBytesFromRow,
+  normalizeBomKeyForMatch,
   normalizeLocalRelativePath,
   headerMatchesAny,
   remarkColumnKeys,
@@ -242,10 +243,12 @@ export const BomDetail: React.FC = () => {
   /** 动态 BOM 列：保留导入表头顺序（含备注列）；仅排除系统单独展示的体积/ext 直链列 */
   const dataHeaders = useMemo(() => {
     const sizeKeys = tableKeyMap.fileSizeBytes ?? [];
+    const legacySizeAliases = ['文件大小', 'size_bytes', '远端大小'];
+    const allSizeKeys = Array.from(new Set([...sizeKeys, ...legacySizeAliases]));
     const extSizeKeys = tableKeyMap.extFileSizeBytes ?? [];
     const extUrlKeys = tableKeyMap.extUrl ?? [];
     return existingHeaders.filter((h) => {
-      if (sizeKeys.length && headerMatchesAny(h, sizeKeys)) return false;
+      if (allSizeKeys.length && headerMatchesAny(h, allSizeKeys)) return false;
       if (extSizeKeys.length && headerMatchesAny(h, extSizeKeys)) return false;
       if (extUrlKeys.length && headerMatchesAny(h, extUrlKeys)) return false;
       return true;
@@ -253,6 +256,20 @@ export const BomDetail: React.FC = () => {
   }, [existingHeaders, tableKeyMap]);
 
   const remarkHeaderKeys = useMemo(() => remarkColumnKeys(tableKeyMap), [tableKeyMap]);
+  const previewDisplayHeaders = useMemo(() => {
+    const sizeKeys = tableKeyMap.fileSizeBytes ?? [];
+    const extSizeKeys = tableKeyMap.extFileSizeBytes ?? [];
+    const extUrlKeys = tableKeyMap.extUrl ?? [];
+    const legacySizeAliases = ['文件大小', 'size_bytes', '远端大小'];
+    const allSizeKeys = Array.from(new Set([...sizeKeys, ...legacySizeAliases]));
+    return previewHeaders.filter((h) => {
+      if (normalizeBomKeyForMatch(h) === 'ext_sync_kind') return false;
+      if (allSizeKeys.length && headerMatchesAny(h, allSizeKeys)) return false;
+      if (extSizeKeys.length && headerMatchesAny(h, extSizeKeys)) return false;
+      if (extUrlKeys.length && headerMatchesAny(h, extUrlKeys)) return false;
+      return true;
+    });
+  }, [previewHeaders, tableKeyMap]);
 
   const handleParsePreview = (rawText: string) => {
     if (!rawText.trim()) {
@@ -1380,7 +1397,7 @@ export const BomDetail: React.FC = () => {
                     <th className="px-3 py-2 text-left font-semibold text-slate-700 border-b border-gray-200 whitespace-nowrap w-12">
                       行号
                     </th>
-                    {previewHeaders.map((h) => {
+                    {previewDisplayHeaders.map((h) => {
                       const linkOrMd5 =
                         headerIsDownloadColumn(h, tableKeyMap) || headerIsMd5Column(h, tableKeyMap);
                       return (
@@ -1400,7 +1417,7 @@ export const BomDetail: React.FC = () => {
                   {previewRows.map((r, i) => (
                     <tr key={i} className="border-b last:border-b-0">
                       <td className="px-3 py-2 text-slate-500 whitespace-nowrap w-12 align-middle">{i + 1}</td>
-                      {previewHeaders.map((h) => {
+                      {previewDisplayHeaders.map((h) => {
                         const linkOrMd5 =
                           headerIsDownloadColumn(h, tableKeyMap) || headerIsMd5Column(h, tableKeyMap);
                         return (
@@ -1867,7 +1884,10 @@ export const BomDetail: React.FC = () => {
                       >
                         本地文件
                       </th>
-                      <th className="px-3 py-2 text-left font-semibold text-slate-700 border-b border-gray-200 whitespace-nowrap w-[11rem]">
+                      <th
+                        className="px-3 py-2 text-left font-semibold text-slate-700 border-b border-gray-200 whitespace-nowrap w-[11rem]"
+                        title="统一展示大小来源：外部 Artifactory、本地文件索引、内部 Artifactory（若有）"
+                      >
                         大小
                       </th>
                       {dataHeaders.map((h) => {

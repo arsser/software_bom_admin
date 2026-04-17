@@ -370,6 +370,20 @@ function formatBytes(bytes) {
   return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)}GB`;
 }
 
+/**
+ * @param {number} seconds
+ */
+function formatEtaSeconds(seconds) {
+  const sec = Math.max(0, Math.ceil(seconds));
+  if (sec < 60) return `${sec}秒`;
+  const min = Math.floor(sec / 60);
+  const remSec = sec % 60;
+  if (min < 60) return remSec > 0 ? `${min}分${remSec}秒` : `${min}分`;
+  const hour = Math.floor(min / 60);
+  const remMin = min % 60;
+  return remMin > 0 ? `${hour}时${remMin}分` : `${hour}时`;
+}
+
 function createFeishuTokenManager(appId, appSecret) {
   let token = null;
   let obtainedAt = 0;
@@ -799,7 +813,7 @@ export async function executeFeishuUploadJob(supabase, rootAbs, job, tuning) {
 
       log('feishu-upload row start', { jobId, rowId, md5: md5Lower, fileName, pathSegments });
 
-      lastJobMessage = `${completed + 1}/${total} 上传中… ${fileName}`;
+      lastJobMessage = `${completed + 1}/${total} 上传中…（分片 1/1） 文件：${fileName}`;
       await patchFeishuUploadJob(supabase, jobId, {
         running_row_id: rowId,
         heartbeat_at: new Date().toISOString(),
@@ -815,6 +829,7 @@ export async function executeFeishuUploadJob(supabase, rootAbs, job, tuning) {
           throw new Error(`本地文件不存在：${diskAbs}`);
         }
         if (!fileStat.isFile()) throw new Error('本地路径不是文件');
+        const rowUploadStartedAt = Date.now();
 
         const token = await getToken();
         const parentToken = await ensureFolderPath(token, rootFolder, pathSegments);
@@ -842,7 +857,18 @@ export async function executeFeishuUploadJob(supabase, rootAbs, job, tuning) {
             rowStatus: rowRec.status,
             signal: currentRowAbort.signal,
             onChunkDone: ({ seq, blockNum, bytesUploaded }) => {
-              lastJobMessage = `${completed + 1}/${total} 上传中… ${fileName}（分片 ${seq + 1}/${blockNum}，${formatBytes(bytesUploaded)}/${formatBytes(fileStat.size)}）`;
+              const elapsedMs = Date.now() - rowUploadStartedAt;
+              let etaText = '预计剩余 --';
+              if (bytesUploaded >= fileStat.size) {
+                etaText = '预计剩余 0秒';
+              } else if (bytesUploaded > 0 && elapsedMs >= 1500) {
+                const speedBytesPerSec = bytesUploaded / (elapsedMs / 1000);
+                if (speedBytesPerSec > 0) {
+                  const etaSeconds = (fileStat.size - bytesUploaded) / speedBytesPerSec;
+                  etaText = `预计剩余 ${formatEtaSeconds(etaSeconds)}`;
+                }
+              }
+              lastJobMessage = `${completed + 1}/${total} 上传中…（分片 ${seq + 1}/${blockNum}，${formatBytes(bytesUploaded)}/${formatBytes(fileStat.size)}，${etaText}） 文件：${fileName}`;
               void patchFeishuUploadJob(supabase, jobId, {
                 heartbeat_at: new Date().toISOString(),
                 last_message: lastJobMessage,
@@ -861,7 +887,7 @@ export async function executeFeishuUploadJob(supabase, rootAbs, job, tuning) {
 
         nOk += 1;
         completed += 1;
-        lastJobMessage = `${completed}/${total} OK ${fileName}（${formatBytes(sizeBytes)}）`;
+        lastJobMessage = `${completed}/${total} OK（${formatBytes(sizeBytes)}） 文件：${fileName}`;
         await patchFeishuUploadJob(supabase, jobId, {
           progress_current: completed,
           running_row_id: null,
@@ -888,7 +914,7 @@ export async function executeFeishuUploadJob(supabase, rootAbs, job, tuning) {
           detail: extractErrorDetail(e),
         });
         await patchBomRowFeishuUploadError(supabase, rowId, `飞书上传失败：${msg}`);
-        lastJobMessage = `${completed}/${total} 失败 ${msg}`.slice(0, 2000);
+        lastJobMessage = `${completed}/${total} 失败（${msg}） 文件：${fileName}`.slice(0, 2000);
         await patchFeishuUploadJob(supabase, jobId, {
           progress_current: completed,
           running_row_id: null,

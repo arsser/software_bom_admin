@@ -59,6 +59,8 @@ export const BomDownloadJobsPage: React.FC = () => {
   const [extCancelBusy, setExtCancelBusy] = useState<string | null>(null);
   const [feishuCancelBusy, setFeishuCancelBusy] = useState<string | null>(null);
   const [nowMs, setNowMs] = useState(() => Date.now());
+  const [expandedMessageKeys, setExpandedMessageKeys] = useState<Record<string, boolean>>({});
+  const [copiedMessageKey, setCopiedMessageKey] = useState<string | null>(null);
 
   const batchIdFilter = searchParams.get('batchId') ?? '';
   const statusFilter = (searchParams.get('status') as StatusFilter) || 'all';
@@ -209,6 +211,82 @@ export const BomDownloadJobsPage: React.FC = () => {
     }
   };
 
+  const toggleMessageExpanded = (key: string) => {
+    setExpandedMessageKeys((prev) => ({ ...prev, [key]: !prev[key] }));
+  };
+
+  const copyToClipboard = async (text: string): Promise<boolean> => {
+    if (!text.trim()) return false;
+    try {
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(text);
+        return true;
+      }
+    } catch {
+      // fallback to execCommand below
+    }
+    try {
+      const ta = document.createElement('textarea');
+      ta.value = text;
+      ta.style.position = 'fixed';
+      ta.style.left = '-9999px';
+      document.body.appendChild(ta);
+      ta.focus();
+      ta.select();
+      const ok = document.execCommand('copy');
+      document.body.removeChild(ta);
+      return ok;
+    } catch {
+      return false;
+    }
+  };
+
+  const handleCopyMessage = async (key: string, message: string | null) => {
+    if (!message) return;
+    const ok = await copyToClipboard(message);
+    if (!ok) {
+      alert('复制失败，请手动选择文本复制。');
+      return;
+    }
+    setCopiedMessageKey(key);
+    window.setTimeout(() => {
+      setCopiedMessageKey((prev) => (prev === key ? null : prev));
+    }, 1500);
+  };
+
+  const renderMessageCell = (key: string, message: string | null) => {
+    const content = message ?? '—';
+    const expanded = Boolean(expandedMessageKeys[key]);
+    return (
+      <div>
+        <div
+          className={expanded ? 'font-mono break-all whitespace-pre-wrap select-text' : 'line-clamp-2 font-mono break-all select-text'}
+          title={!expanded ? content : undefined}
+        >
+          {content}
+        </div>
+        {message ? (
+          <div className="mt-1 flex items-center gap-3 text-[11px]">
+            <button
+              type="button"
+              onClick={() => toggleMessageExpanded(key)}
+              className="text-indigo-600 hover:text-indigo-700 underline decoration-indigo-300/80"
+            >
+              {expanded ? '收起' : '展开'}
+            </button>
+            <button
+              type="button"
+              onClick={() => void handleCopyMessage(key, message)}
+              className="text-slate-600 hover:text-slate-800 underline decoration-slate-300/80"
+            >
+              {copiedMessageKey === key ? '已复制' : '复制'}
+            </button>
+          </div>
+        ) : null}
+      </div>
+    );
+  };
+
   return (
     <div className="max-w-6xl mx-auto space-y-6">
       <div className="flex items-start justify-between gap-4 flex-wrap">
@@ -356,9 +434,7 @@ export const BomDownloadJobsPage: React.FC = () => {
                       ) : null}
                     </td>
                     <td className="px-3 py-2 text-xs text-slate-600 max-w-[20rem]">
-                      <div className="line-clamp-2 font-mono break-all" title={j.lastMessage ?? ''}>
-                        {j.lastMessage ?? '—'}
-                      </div>
+                      {renderMessageCell(`it-${j.id}`, j.lastMessage)}
                     </td>
                     <td className="px-3 py-2 text-xs text-slate-500 whitespace-nowrap">
                       <div>创建 {new Date(j.createdAt).toLocaleString()}</div>
@@ -470,9 +546,7 @@ export const BomDownloadJobsPage: React.FC = () => {
                       ) : null}
                     </td>
                     <td className="px-3 py-2 text-xs text-slate-600 max-w-[20rem]">
-                      <div className="line-clamp-2 font-mono break-all" title={j.lastMessage ?? ''}>
-                        {j.lastMessage ?? '—'}
-                      </div>
+                      {renderMessageCell(`ext-${j.id}`, j.lastMessage)}
                     </td>
                     <td className="px-3 py-2 text-xs text-slate-500 whitespace-nowrap">
                       <div>创建 {new Date(j.createdAt).toLocaleString()}</div>
@@ -584,9 +658,7 @@ export const BomDownloadJobsPage: React.FC = () => {
                       ) : null}
                     </td>
                     <td className="px-3 py-2 text-xs text-slate-600 max-w-[20rem]">
-                      <div className="line-clamp-2 font-mono break-all" title={j.lastMessage ?? ''}>
-                        {j.lastMessage ?? '—'}
-                      </div>
+                      {renderMessageCell(`feishu-${j.id}`, j.lastMessage)}
                     </td>
                     <td className="px-3 py-2 text-xs text-slate-500 whitespace-nowrap">
                       <div>创建 {new Date(j.createdAt).toLocaleString()}</div>

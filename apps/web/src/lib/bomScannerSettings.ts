@@ -1,6 +1,7 @@
 import { supabase } from './supabase';
 
 export const BOM_SCANNER_SETTINGS_KEY = 'bom_scanner';
+export const BOM_JSON_KEY_MAP_REQUIRED_KEYS = ['downloadUrl', 'expectedMd5', 'extUrl'] as const;
 
 export type BomJsonKeyMap = {
   downloadUrl: string[];
@@ -86,6 +87,13 @@ export type BomScannerConfig = {
   workerBusyHint?: string;
 };
 
+export type BomScannerSettingsRawView = {
+  exists: boolean;
+  valueRaw: Record<string, unknown> | null;
+  jsonKeyMapRaw: unknown;
+  missingRequiredJsonKeyMapKeys: string[];
+};
+
 const defaultJsonKeyMap: BomJsonKeyMap = {
   downloadUrl: ['下载路径', 'url', 'download_url', '下载地址'],
   expectedMd5: ['MD5', 'md5', 'checksum'],
@@ -152,6 +160,16 @@ function mergeConfig(raw: BomScannerRaw | null | undefined): BomScannerConfig {
   };
 }
 
+function nonEmptyStringArray(v: unknown): v is string[] {
+  return Array.isArray(v) && v.length > 0 && v.every((x) => typeof x === 'string' && x.trim() !== '');
+}
+
+function detectMissingRequiredJsonKeyMapKeys(raw: unknown): string[] {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return [...BOM_JSON_KEY_MAP_REQUIRED_KEYS];
+  const o = raw as Record<string, unknown>;
+  return BOM_JSON_KEY_MAP_REQUIRED_KEYS.filter((k) => !nonEmptyStringArray(o[k]));
+}
+
 export async function fetchBomScannerSettings(): Promise<BomScannerConfig> {
   const { data, error } = await supabase
     .from('system_settings')
@@ -166,6 +184,27 @@ export async function fetchBomScannerSettings(): Promise<BomScannerConfig> {
 
   const value = (data?.value ?? {}) as BomScannerRaw;
   return mergeConfig(value);
+}
+
+/** 仅用于设置页展示：返回数据库原始值（不做默认回填） */
+export async function fetchBomScannerSettingsRawView(): Promise<BomScannerSettingsRawView> {
+  const { data, error } = await supabase
+    .from('system_settings')
+    .select('value')
+    .eq('key', BOM_SCANNER_SETTINGS_KEY)
+    .maybeSingle();
+  if (error && error.code !== 'PGRST116') throw error;
+  const valueRaw =
+    data?.value && typeof data.value === 'object' && !Array.isArray(data.value)
+      ? (data.value as Record<string, unknown>)
+      : null;
+  const jsonKeyMapRaw = valueRaw ? valueRaw.jsonKeyMap : null;
+  return {
+    exists: Boolean(data),
+    valueRaw,
+    jsonKeyMapRaw,
+    missingRequiredJsonKeyMapKeys: detectMissingRequiredJsonKeyMapKeys(jsonKeyMapRaw),
+  };
 }
 
 export async function saveBomScannerSettings(config: BomScannerConfig): Promise<void> {

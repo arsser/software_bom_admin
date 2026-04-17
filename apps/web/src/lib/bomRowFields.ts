@@ -97,6 +97,8 @@ export function rowEligibleForDistributeExternalPull(
 ): boolean {
   const local = row.status.local;
   const md5 = extractExpectedMd5FromRow(row.bom_row, keyMap);
+  // 索引尚未就绪时，先不展示依赖 MD5 索引命中的拉取按钮，避免页面刷新/扫描后短暂闪现。
+  if (!localIndexReady && md5 != null) return false;
   const localEligibleByStatus =
     local === 'pending' ||
     local === 'error' ||

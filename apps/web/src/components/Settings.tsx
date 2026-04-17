@@ -24,11 +24,10 @@ import {
   type FeishuAuthTestResult,
 } from '../lib/feishuAuthTest';
 import {
+  BOM_JSON_KEY_MAP_REQUIRED_KEYS,
   fetchBomScannerSettings,
-  mergeWorkerTuning,
-  saveBomScannerSettings,
+  fetchBomScannerSettingsRawView,
   type BomScannerConfig,
-  type BomWorkerTuning,
 } from '../lib/bomScannerSettings';
 import { getArtifactoryApiInfo, type ApiInfoResult } from '../lib/artifactoryApi';
 import { formatArtifactoryRepoPath } from '../lib/distributionTestUi';
@@ -111,8 +110,8 @@ export const Settings: React.FC = () => {
 
   const [bomScanner, setBomScanner] = useState<BomScannerConfig | null>(null);
   const [bomKeyMapJson, setBomKeyMapJson] = useState('');
-  const [bomLoading, setBomLoading] = useState(false);
-  const [bomSaveStatus, setBomSaveStatus] = useState<'idle' | 'success' | 'error'>('idle');
+  const [bomJsonKeyMapMissingKeys, setBomJsonKeyMapMissingKeys] = useState<string[]>([]);
+  const [bomScannerSettingsExists, setBomScannerSettingsExists] = useState(true);
   const [showJsonKeyMap, setShowJsonKeyMap] = useState(false);
   const [showMainApiKey, setShowMainApiKey] = useState(false);
   const [showExtApiKey, setShowExtApiKey] = useState(false);
@@ -122,12 +121,6 @@ export const Settings: React.FC = () => {
   const [feishuTestLoading, setFeishuTestLoading] = useState(false);
   const [feishuTestResult, setFeishuTestResult] = useState<FeishuAuthTestResult | null>(null);
   const [showFeishuSecret, setShowFeishuSecret] = useState(false);
-
-  const patchWorkerTuning = (patch: Partial<BomWorkerTuning>) => {
-    setBomScanner((s) =>
-      s ? { ...s, workerTuning: mergeWorkerTuning({ ...s.workerTuning, ...patch }) } : s,
-    );
-  };
 
   // 与 supabase 客户端一致：优先 window.__APP_CONFIG__，否则 VITE_*
   const { supabaseUrl: envSupabaseUrl } = getAppConfig();
@@ -168,10 +161,15 @@ export const Settings: React.FC = () => {
     let cancelled = false;
     (async () => {
       try {
-        const cfg = await fetchBomScannerSettings();
+        const [cfg, rawView] = await Promise.all([
+          fetchBomScannerSettings(),
+          fetchBomScannerSettingsRawView(),
+        ]);
         if (cancelled) return;
         setBomScanner(cfg);
-        setBomKeyMapJson(JSON.stringify(cfg.jsonKeyMap, null, 2));
+        setBomScannerSettingsExists(rawView.exists);
+        setBomJsonKeyMapMissingKeys(rawView.missingRequiredJsonKeyMapKeys);
+        setBomKeyMapJson(JSON.stringify(rawView.jsonKeyMapRaw ?? null, null, 2));
       } catch (e) {
         console.error(e);
       }
@@ -180,58 +178,6 @@ export const Settings: React.FC = () => {
       cancelled = true;
     };
   }, []);
-
-  const handleSaveBomScanner = async () => {
-    if (!bomScanner) return;
-    let parsed: BomScannerConfig['jsonKeyMap'];
-    try {
-      const raw = JSON.parse(bomKeyMapJson) as unknown;
-      if (!raw || typeof raw !== 'object') throw new Error('jsonKeyMap 必须是 JSON 对象');
-      const o = raw as Record<string, unknown>;
-      const arr = (k: string) => {
-        const v = o[k];
-        if (!Array.isArray(v) || !v.every((x) => typeof x === 'string')) {
-          throw new Error(`jsonKeyMap.${k} 必须是非空字符串数组`);
-        }
-        return v as string[];
-      };
-      parsed = {
-        downloadUrl: arr('downloadUrl'),
-        expectedMd5: arr('expectedMd5'),
-        arch: arr('arch'),
-        extUrl: o.extUrl !== undefined ? arr('extUrl') : undefined,
-        releaseVersion: o.releaseVersion !== undefined ? arr('releaseVersion') : undefined,
-        releaseBatch: o.releaseBatch !== undefined ? arr('releaseBatch') : undefined,
-        moduleName: o.moduleName !== undefined ? arr('moduleName') : undefined,
-        groupSegment: o.groupSegment !== undefined ? arr('groupSegment') : undefined,
-        fileSizeBytes: o.fileSizeBytes !== undefined ? arr('fileSizeBytes') : undefined,
-        extFileSizeBytes: o.extFileSizeBytes !== undefined ? arr('extFileSizeBytes') : undefined,
-        remark: o.remark !== undefined ? arr('remark') : undefined,
-      };
-    } catch (e) {
-      alert(e instanceof Error ? e.message : 'jsonKeyMap JSON 解析失败');
-      return;
-    }
-
-    try {
-      setBomLoading(true);
-      await saveBomScannerSettings({
-        ...bomScanner,
-        jsonKeyMap: parsed,
-      });
-      const next = await fetchBomScannerSettings();
-      setBomScanner(next);
-      setBomKeyMapJson(JSON.stringify(next.jsonKeyMap, null, 2));
-      setBomSaveStatus('success');
-      setTimeout(() => setBomSaveStatus('idle'), 3000);
-    } catch (err: any) {
-      setBomSaveStatus('error');
-      alert('保存 BOM 扫描配置失败: ' + (err.message || '未知错误'));
-      setTimeout(() => setBomSaveStatus('idle'), 3000);
-    } finally {
-      setBomLoading(false);
-    }
-  };
 
   const handleSaveArtifactory = async () => {
     try {
@@ -353,22 +299,10 @@ export const Settings: React.FC = () => {
                   min={5}
                   max={86400}
                   value={bomScanner.scanIntervalSeconds}
-                  onChange={(e) => {
-                    const n = Number(e.target.value);
-                    setBomScanner((s) =>
-                      s
-                        ? {
-                            ...s,
-                            scanIntervalSeconds: Number.isFinite(n)
-                              ? Math.min(86400, Math.max(5, Math.round(n)))
-                              : s.scanIntervalSeconds,
-                          }
-                        : s
-                    );
-                  }}
-                  className="w-full max-w-[11rem] px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
+                  readOnly
+                  className="w-full max-w-[11rem] px-4 py-2 border border-gray-200 rounded-lg bg-slate-50 text-slate-600"
                 />
-                <p className="text-xs text-slate-500 mt-1">保存后由后台服务从数据库读取并按该间隔入队。</p>
+                <p className="text-xs text-slate-500 mt-1">只读展示数据库原始配置；变更请通过 seed.sql 或 SQL 执行。</p>
               </div>
 
               <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-x-4 gap-y-3 text-sm">
@@ -379,8 +313,8 @@ export const Settings: React.FC = () => {
                     min={5000}
                     max={120000}
                     value={bomScanner.workerTuning.heartbeatMs}
-                    onChange={(e) => patchWorkerTuning({ heartbeatMs: Number(e.target.value) })}
-                    className="w-full px-4 py-2 border border-gray-200 rounded-lg font-mono text-xs focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
+                    readOnly
+                    className="w-full px-4 py-2 border border-gray-200 rounded-lg font-mono text-xs bg-slate-50 text-slate-600"
                   />
                   <span className="text-[11px] text-slate-400 leading-snug">心跳 / 进度上报间隔（毫秒）</span>
                 </label>
@@ -390,8 +324,8 @@ export const Settings: React.FC = () => {
                     type="number"
                     min={1000}
                     value={bomScanner.workerTuning.httpTimeoutMs}
-                    onChange={(e) => patchWorkerTuning({ httpTimeoutMs: Number(e.target.value) })}
-                    className="w-full px-4 py-2 border border-gray-200 rounded-lg font-mono text-xs focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
+                    readOnly
+                    className="w-full px-4 py-2 border border-gray-200 rounded-lg font-mono text-xs bg-slate-50 text-slate-600"
                   />
                   <span className="text-[11px] text-slate-400 leading-snug">单次 HTTP 超时（毫秒）</span>
                 </label>
@@ -402,8 +336,8 @@ export const Settings: React.FC = () => {
                     min={0}
                     max={10}
                     value={bomScanner.workerTuning.httpRetries}
-                    onChange={(e) => patchWorkerTuning({ httpRetries: Number(e.target.value) })}
-                    className="w-full max-w-[11rem] px-4 py-2 border border-gray-200 rounded-lg font-mono text-xs focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
+                    readOnly
+                    className="w-full max-w-[11rem] px-4 py-2 border border-gray-200 rounded-lg font-mono text-xs bg-slate-50 text-slate-600"
                   />
                   <span className="block text-[11px] text-slate-400 leading-snug mt-0.5">
                     失败重试次数上限
@@ -424,11 +358,32 @@ export const Settings: React.FC = () => {
                 <div className="space-y-2 pt-1">
                   <textarea
                     value={bomKeyMapJson}
-                    onChange={(e) => setBomKeyMapJson(e.target.value)}
+                    readOnly
                     rows={12}
                     spellCheck={false}
-                    className="w-full px-4 py-3 border border-gray-200 rounded-lg font-mono text-xs focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 text-slate-800 bg-white"
+                    className="w-full px-4 py-3 border border-gray-200 rounded-lg font-mono text-xs text-slate-800 bg-white"
                   />
+                  {bomJsonKeyMapMissingKeys.length > 0 ? (
+                    <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+                      检测到数据库原始 jsonKeyMap 缺少关键键：{bomJsonKeyMapMissingKeys.join('、')}。建议通过
+                      seed.sql 或 SQL 修复。
+                    </div>
+                  ) : null}
+                  {!bomScannerSettingsExists ? (
+                    <div className="rounded-md border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-900">
+                      system_settings 中不存在 <code className="bg-rose-100 px-1 rounded">bom_scanner</code>{' '}
+                      记录，请先执行 seed.sql 初始化。
+                    </div>
+                  ) : null}
+                  <p className="text-xs text-slate-500">
+                    当前显示为数据库原始值（raw），不会默认回填也不可在页面保存。关键键：
+                    {BOM_JSON_KEY_MAP_REQUIRED_KEYS.map((k) => (
+                      <code key={k} className="bg-gray-100 px-1 rounded ml-1">
+                        {k}
+                      </code>
+                    ))}
+                    。
+                  </p>
                   <p className="text-xs text-slate-500">
                     键名：<code className="bg-gray-100 px-1 rounded">downloadUrl</code>、
                     <code className="bg-gray-100 px-1 rounded">expectedMd5</code>、
@@ -444,27 +399,6 @@ export const Settings: React.FC = () => {
                   </p>
                 </div>
               ) : null}
-            </div>
-            <div className="flex justify-end items-center gap-3 pt-2">
-              <button
-                type="button"
-                onClick={handleSaveBomScanner}
-                disabled={bomLoading}
-                className="flex items-center gap-2 px-6 py-2 bg-green-600 text-white font-medium rounded-lg hover:bg-green-700 transition-colors shadow-sm focus:outline-none focus:ring-2 focus:ring-green-500/40 focus:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                {bomLoading ? <Loader2 size={18} className="animate-spin" /> : <Save size={18} />}
-                保存 BOM 扫描配置
-              </button>
-              {bomSaveStatus === 'success' && (
-                <div className="flex items-center gap-1 text-emerald-600 text-sm">
-                  <CheckCircle2 size={16} /> 已保存
-                </div>
-              )}
-              {bomSaveStatus === 'error' && (
-                <div className="flex items-center gap-1 text-red-600 text-sm">
-                  <AlertCircle size={16} /> 保存失败
-                </div>
-              )}
             </div>
           </div>
         )}

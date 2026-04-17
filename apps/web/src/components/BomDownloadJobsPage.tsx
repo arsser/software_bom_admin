@@ -30,6 +30,22 @@ import { fetchBomBatches, type BomBatch } from '../lib/bomBatches';
 
 type StatusFilter = 'all' | BomDownloadJobStatus | BomExtSyncJobStatus | BomFeishuUploadJobStatus;
 
+function formatElapsedLabel(seconds: number): string {
+  const s = Math.max(0, Math.floor(seconds));
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  const sec = s % 60;
+  if (h > 0) return `${h}h${m}m${sec}s`;
+  if (m > 0) return `${m}m${sec}s`;
+  return `${sec}s`;
+}
+
+function parseMsOrNull(iso: string | null | undefined): number | null {
+  if (!iso) return null;
+  const n = Date.parse(iso);
+  return Number.isFinite(n) ? n : null;
+}
+
 export const BomDownloadJobsPage: React.FC = () => {
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
@@ -42,6 +58,7 @@ export const BomDownloadJobsPage: React.FC = () => {
   const [cancelBusy, setCancelBusy] = useState<string | null>(null);
   const [extCancelBusy, setExtCancelBusy] = useState<string | null>(null);
   const [feishuCancelBusy, setFeishuCancelBusy] = useState<string | null>(null);
+  const [nowMs, setNowMs] = useState(() => Date.now());
 
   const batchIdFilter = searchParams.get('batchId') ?? '';
   const statusFilter = (searchParams.get('status') as StatusFilter) || 'all';
@@ -106,6 +123,13 @@ export const BomDownloadJobsPage: React.FC = () => {
       feishuJobs.some((j) => j.status === 'queued' || j.status === 'running'),
     [jobs, extJobs, feishuJobs],
   );
+  const hasRunningJob = useMemo(
+    () =>
+      jobs.some((j) => j.status === 'running') ||
+      extJobs.some((j) => j.status === 'running') ||
+      feishuJobs.some((j) => j.status === 'running'),
+    [jobs, extJobs, feishuJobs],
+  );
 
   const batchLabelById = useMemo(
     () => new Map(batches.map((b) => [b.id, `${b.productName} · ${b.name}`])),
@@ -139,6 +163,12 @@ export const BomDownloadJobsPage: React.FC = () => {
     }, 2000);
     return () => window.clearInterval(id);
   }, [hasActive, batchIdFilter, statusFilter, batchLabelById]);
+
+  useEffect(() => {
+    if (!hasRunningJob) return;
+    const id = window.setInterval(() => setNowMs(Date.now()), 1000);
+    return () => window.clearInterval(id);
+  }, [hasRunningJob]);
 
   const handleCancel = async (jobId: string) => {
     setCancelBusy(jobId);
@@ -284,6 +314,13 @@ export const BomDownloadJobsPage: React.FC = () => {
                 const bytesLine = formatDownloadJobBytesLine(j);
                 const canCancelIt =
                   j.status === 'queued' || j.status === 'running';
+                const startedMs = parseMsOrNull(j.startedAt);
+                const finishedMs = parseMsOrNull(j.finishedAt);
+                const endMs = j.status === 'running' ? nowMs : finishedMs;
+                const elapsedSec =
+                  startedMs != null && endMs != null && endMs >= startedMs
+                    ? Math.round((endMs - startedMs) / 1000)
+                    : null;
                 return (
                   <tr key={j.id} className="hover:bg-slate-50/80">
                     <td className="px-3 py-2 whitespace-nowrap">
@@ -325,7 +362,16 @@ export const BomDownloadJobsPage: React.FC = () => {
                     </td>
                     <td className="px-3 py-2 text-xs text-slate-500 whitespace-nowrap">
                       <div>创建 {new Date(j.createdAt).toLocaleString()}</div>
+                      {j.startedAt ? <div>开始 {new Date(j.startedAt).toLocaleString()}</div> : null}
                       {j.finishedAt ? <div>结束 {new Date(j.finishedAt).toLocaleString()}</div> : null}
+                      <div>
+                        已用时{' '}
+                        {elapsedSec != null
+                          ? formatElapsedLabel(elapsedSec)
+                          : j.status === 'queued'
+                            ? '排队中'
+                            : '—'}
+                      </div>
                     </td>
                     <td className="px-3 py-2 text-right">
                       {canCancelIt ? (
@@ -390,6 +436,13 @@ export const BomDownloadJobsPage: React.FC = () => {
                 const pct = extSyncJobProgressPercent(j);
                 const canCancelExt =
                   j.status === 'queued' || j.status === 'running';
+                const startedMs = parseMsOrNull(j.startedAt);
+                const finishedMs = parseMsOrNull(j.finishedAt);
+                const endMs = j.status === 'running' ? nowMs : finishedMs;
+                const elapsedSec =
+                  startedMs != null && endMs != null && endMs >= startedMs
+                    ? Math.round((endMs - startedMs) / 1000)
+                    : null;
                 return (
                   <tr key={j.id} className="hover:bg-slate-50/80">
                     <td className="px-3 py-2 whitespace-nowrap">
@@ -423,7 +476,16 @@ export const BomDownloadJobsPage: React.FC = () => {
                     </td>
                     <td className="px-3 py-2 text-xs text-slate-500 whitespace-nowrap">
                       <div>创建 {new Date(j.createdAt).toLocaleString()}</div>
+                      {j.startedAt ? <div>开始 {new Date(j.startedAt).toLocaleString()}</div> : null}
                       {j.finishedAt ? <div>结束 {new Date(j.finishedAt).toLocaleString()}</div> : null}
+                      <div>
+                        已用时{' '}
+                        {elapsedSec != null
+                          ? formatElapsedLabel(elapsedSec)
+                          : j.status === 'queued'
+                            ? '排队中'
+                            : '—'}
+                      </div>
                     </td>
                     <td className="px-3 py-2 text-right">
                       {canCancelExt ? (
@@ -488,6 +550,13 @@ export const BomDownloadJobsPage: React.FC = () => {
                 const pct = feishuUploadJobProgressPercent(j);
                 const canCancelFeishu =
                   j.status === 'queued' || j.status === 'running';
+                const startedMs = parseMsOrNull(j.startedAt);
+                const finishedMs = parseMsOrNull(j.finishedAt);
+                const endMs = j.status === 'running' ? nowMs : finishedMs;
+                const elapsedSec =
+                  startedMs != null && endMs != null && endMs >= startedMs
+                    ? Math.round((endMs - startedMs) / 1000)
+                    : null;
                 return (
                   <tr key={j.id} className="hover:bg-slate-50/80">
                     <td className="px-3 py-2 whitespace-nowrap">
@@ -521,7 +590,16 @@ export const BomDownloadJobsPage: React.FC = () => {
                     </td>
                     <td className="px-3 py-2 text-xs text-slate-500 whitespace-nowrap">
                       <div>创建 {new Date(j.createdAt).toLocaleString()}</div>
+                      {j.startedAt ? <div>开始 {new Date(j.startedAt).toLocaleString()}</div> : null}
                       {j.finishedAt ? <div>结束 {new Date(j.finishedAt).toLocaleString()}</div> : null}
+                      <div>
+                        已用时{' '}
+                        {elapsedSec != null
+                          ? formatElapsedLabel(elapsedSec)
+                          : j.status === 'queued'
+                            ? '排队中'
+                            : '—'}
+                      </div>
                     </td>
                     <td className="px-3 py-2 text-right">
                       {canCancelFeishu ? (

@@ -677,14 +677,11 @@ export async function executeFeishuUploadJob(supabase, rootAbs, job, tuning) {
     await reportBomLocalRootRuntime(supabase, rootAbs, { phase: 'busy', busyHint: 'feishu-upload' });
     globalHbTimer = setInterval(() => {
       void reportBomLocalRootRuntime(supabase, rootAbs, { phase: 'busy', busyHint: 'feishu-upload' });
-      const elapsed = Math.round((Date.now() - jobStartMs) / 1000);
-      const mins = Math.floor(elapsed / 60);
-      const secs = elapsed % 60;
-      const timeTag = mins > 0 ? `（已用 ${mins}m${secs}s）` : `（已用 ${secs}s）`;
       void patchFeishuUploadJob(supabase, jobId, {
         heartbeat_at: new Date().toISOString(),
-        last_message: lastJobMessage ? `${lastJobMessage} ${timeTag}`.slice(0, 2000) : `上传中… ${timeTag}`,
+        last_message: lastJobMessage ? String(lastJobMessage).slice(0, 2000) : '上传中…',
       });
+      const elapsed = Math.round((Date.now() - jobStartMs) / 1000);
       hbLogCounter += 1;
       if (hbLogCounter % 2 === 0) {
         log('feishu-upload heartbeat', {

@@ -191,7 +191,7 @@ export function rowEligibleForItPull(
   return true;
 }
 
-/** 阶段 5：校验通过且尚未写入 ext_url，可排队 ext 同步 */
+/** 校验通过且尚未写入 ext_url，可排队 ext 同步 */
 export function rowEligibleForExtSync(row: BomBatchRow, keyMap: BomJsonKeyMap): boolean {
   const ext = extractExtUrlFromRow(row.bom_row, keyMap);
   if (ext && ext.trim()) return false;

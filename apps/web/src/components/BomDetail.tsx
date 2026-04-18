@@ -1874,7 +1874,7 @@ export const BomDetail: React.FC = () => {
                       </th>
                       <th
                         className="px-3 py-2 text-left font-semibold text-slate-700 border-b border-gray-200 whitespace-nowrap min-w-[10rem] max-w-[14rem] w-[12rem]"
-                        title="jsonb 中 ext_url 等别名对应的可下载 URI（阶段 5 同步后写入）"
+                        title="jsonb 中 ext_url 等别名对应的可下载 URI（外部 Artifactory 同步后写入）"
                       >
                         外部 Artifactory 下载链接
                       </th>

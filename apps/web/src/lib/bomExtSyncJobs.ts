@@ -5,6 +5,7 @@ export type BomExtSyncJobStatus = 'queued' | 'running' | 'succeeded' | 'failed' 
 export type BomExtSyncJob = {
   id: string;
   batchId: string;
+  rowIds: string[];
   batchName?: string | null;
   status: BomExtSyncJobStatus;
   progressCurrent: number;
@@ -20,9 +21,12 @@ export type BomExtSyncJob = {
 function mapJob(raw: Record<string, unknown>, batchName?: string | null): BomExtSyncJob {
   const batches = raw.bom_batches as { name?: string } | null | undefined;
   const nameFromJoin = batches && typeof batches.name === 'string' ? batches.name : null;
+  const rowIdsRaw = raw.row_ids;
+  const rowIds = Array.isArray(rowIdsRaw) ? rowIdsRaw.map((x) => String(x)) : [];
   return {
     id: String(raw.id),
     batchId: String(raw.batch_id),
+    rowIds,
     batchName: batchName ?? nameFromJoin,
     status: raw.status as BomExtSyncJobStatus,
     progressCurrent: Number(raw.progress_current ?? 0),
@@ -37,7 +41,7 @@ function mapJob(raw: Record<string, unknown>, batchName?: string | null): BomExt
 }
 
 const JOB_SELECT =
-  'id,batch_id,status,progress_current,progress_total,last_message,created_at,finished_at,started_at,heartbeat_at,running_row_id';
+  'id,batch_id,row_ids,status,progress_current,progress_total,last_message,created_at,finished_at,started_at,heartbeat_at,running_row_id';
 
 /** 创建 ext 同步任务：p_row_ids 为空表示当前版本全部 eligible 行 */
 export async function requestBomExtSync(batchId: string, rowIds?: string[] | null): Promise<string> {

@@ -1,6 +1,17 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { ArrowLeft, HardDriveDownload, Loader2, RefreshCcw, Upload, UploadCloud, XCircle } from 'lucide-react';
+import {
+  ArrowLeft,
+  ChevronDown,
+  ChevronRight,
+  HardDriveDownload,
+  ListTree,
+  Loader2,
+  RefreshCcw,
+  Upload,
+  UploadCloud,
+  XCircle,
+} from 'lucide-react';
 import {
   BOM_DOWNLOAD_JOB_STATUS_LABEL,
   cancelBomDownloadJob,
@@ -27,6 +38,13 @@ import {
   type BomFeishuUploadJobStatus,
 } from '../lib/bomFeishuUploadJobs';
 import { fetchBomBatches, type BomBatch } from '../lib/bomBatches';
+import {
+  fetchBomJobRowDetails,
+  type BomJobDetailKind,
+  type BomJobRowDetailLine,
+} from '../lib/bomJobRowSnapshots';
+
+const PAGE_STEP = 20;
 
 type StatusFilter = 'all' | BomDownloadJobStatus | BomExtSyncJobStatus | BomFeishuUploadJobStatus;
 
@@ -62,10 +80,33 @@ export const BomDownloadJobsPage: React.FC = () => {
   const [expandedMessageKeys, setExpandedMessageKeys] = useState<Record<string, boolean>>({});
   const [copiedMessageKey, setCopiedMessageKey] = useState<string | null>(null);
 
+  const [sectionItOpen, setSectionItOpen] = useState(true);
+  const [sectionExtOpen, setSectionExtOpen] = useState(false);
+  const [sectionFeishuOpen, setSectionFeishuOpen] = useState(false);
+
+  const [itLimit, setItLimit] = useState(PAGE_STEP);
+  const [extLimit, setExtLimit] = useState(PAGE_STEP);
+  const [feishuLimit, setFeishuLimit] = useState(PAGE_STEP);
+  const [itHasMore, setItHasMore] = useState(false);
+  const [extHasMore, setExtHasMore] = useState(false);
+  const [feishuHasMore, setFeishuHasMore] = useState(false);
+  const skipLoadingOnceRef = useRef(false);
+
+  const [detailOpen, setDetailOpen] = useState(false);
+  const [detailTitle, setDetailTitle] = useState('');
+  const [detailSubtitle, setDetailSubtitle] = useState('');
+  const [detailLines, setDetailLines] = useState<BomJobRowDetailLine[]>([]);
+  const [detailLoading, setDetailLoading] = useState(false);
+  const [detailError, setDetailError] = useState<string | null>(null);
+  const [listRefreshNonce, setListRefreshNonce] = useState(0);
+
   const batchIdFilter = searchParams.get('batchId') ?? '';
   const statusFilter = (searchParams.get('status') as StatusFilter) || 'all';
 
   const setBatchFilter = (id: string) => {
+    setItLimit(PAGE_STEP);
+    setExtLimit(PAGE_STEP);
+    setFeishuLimit(PAGE_STEP);
     const next = new URLSearchParams(searchParams);
     if (id.trim()) next.set('batchId', id.trim());
     else next.delete('batchId');
@@ -73,32 +114,40 @@ export const BomDownloadJobsPage: React.FC = () => {
   };
 
   const setStatusParam = (s: StatusFilter) => {
+    setItLimit(PAGE_STEP);
+    setExtLimit(PAGE_STEP);
+    setFeishuLimit(PAGE_STEP);
     const next = new URLSearchParams(searchParams);
     if (s === 'all') next.delete('status');
     else next.set('status', s);
     setSearchParams(next, { replace: true });
   };
 
-  const load = async () => {
-    setLoading(true);
-    setError(null);
+  const fetchLists = async (quiet: boolean) => {
+    const itL = itLimit;
+    const extL = extLimit;
+    const feiL = feishuLimit;
+    if (!quiet) {
+      setLoading(true);
+      setError(null);
+    }
     try {
       const [bs, js, ej, fj] = await Promise.all([
         fetchBomBatches(),
         fetchBomDownloadJobsForUser({
           batchId: batchIdFilter || null,
           status: statusFilter,
-          limit: 100,
+          limit: itL,
         }),
         fetchBomExtSyncJobsForUser({
           batchId: batchIdFilter || null,
           status: statusFilter,
-          limit: 100,
+          limit: extL,
         }),
         fetchBomFeishuUploadJobsForUser({
           batchId: batchIdFilter || null,
           status: statusFilter,
-          limit: 100,
+          limit: feiL,
         }),
       ]);
       setBatches(bs);
@@ -106,17 +155,22 @@ export const BomDownloadJobsPage: React.FC = () => {
       setJobs(js.map((j) => ({ ...j, batchName: j.batchName ?? idToLabel.get(j.batchId) ?? null })));
       setExtJobs(ej.map((j) => ({ ...j, batchName: j.batchName ?? idToLabel.get(j.batchId) ?? null })));
       setFeishuJobs(fj.map((j) => ({ ...j, batchName: j.batchName ?? idToLabel.get(j.batchId) ?? null })));
+      setItHasMore(js.length === itL);
+      setExtHasMore(ej.length === extL);
+      setFeishuHasMore(fj.length === feiL);
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      if (!quiet) setError(e instanceof Error ? e.message : String(e));
     } finally {
-      setLoading(false);
+      if (!quiet) setLoading(false);
     }
   };
 
   useEffect(() => {
-    void load();
+    const quiet = skipLoadingOnceRef.current;
+    skipLoadingOnceRef.current = false;
+    void fetchLists(quiet);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [batchIdFilter, statusFilter]);
+  }, [batchIdFilter, statusFilter, itLimit, extLimit, feishuLimit, listRefreshNonce]);
 
   const hasActive = useMemo(
     () =>
@@ -141,30 +195,11 @@ export const BomDownloadJobsPage: React.FC = () => {
   useEffect(() => {
     if (!hasActive) return;
     const id = window.setInterval(() => {
-      void Promise.all([
-        fetchBomDownloadJobsForUser({
-          batchId: batchIdFilter || null,
-          status: statusFilter,
-          limit: 100,
-        }),
-        fetchBomExtSyncJobsForUser({
-          batchId: batchIdFilter || null,
-          status: statusFilter,
-          limit: 100,
-        }),
-        fetchBomFeishuUploadJobsForUser({
-          batchId: batchIdFilter || null,
-          status: statusFilter,
-          limit: 100,
-        }),
-      ]).then(([js, ej, fj]) => {
-        setJobs(js.map((j) => ({ ...j, batchName: j.batchName ?? batchLabelById.get(j.batchId) ?? null })));
-        setExtJobs(ej.map((j) => ({ ...j, batchName: j.batchName ?? batchLabelById.get(j.batchId) ?? null })));
-        setFeishuJobs(fj.map((j) => ({ ...j, batchName: j.batchName ?? batchLabelById.get(j.batchId) ?? null })));
-      });
+      void fetchLists(true);
     }, 2000);
     return () => window.clearInterval(id);
-  }, [hasActive, batchIdFilter, statusFilter, batchLabelById]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hasActive, batchIdFilter, statusFilter, batchLabelById, itLimit, extLimit, feishuLimit]);
 
   useEffect(() => {
     if (!hasRunningJob) return;
@@ -177,7 +212,7 @@ export const BomDownloadJobsPage: React.FC = () => {
     try {
       const ok = await cancelBomDownloadJob(jobId);
       if (!ok) alert('无法取消：任务已结束、无权操作，或请刷新后重试。');
-      await load();
+      await fetchLists(false);
     } catch (e) {
       alert(e instanceof Error ? e.message : String(e));
     } finally {
@@ -190,7 +225,7 @@ export const BomDownloadJobsPage: React.FC = () => {
     try {
       const ok = await cancelBomExtSyncJob(jobId);
       if (!ok) alert('无法取消：任务已结束、无权操作，或请刷新后重试。');
-      await load();
+      await fetchLists(false);
     } catch (e) {
       alert(e instanceof Error ? e.message : String(e));
     } finally {
@@ -203,12 +238,62 @@ export const BomDownloadJobsPage: React.FC = () => {
     try {
       const ok = await cancelBomFeishuUploadJob(jobId);
       if (!ok) alert('无法取消：任务已结束、无权操作，或请刷新后重试。');
-      await load();
+      await fetchLists(false);
     } catch (e) {
       alert(e instanceof Error ? e.message : String(e));
     } finally {
       setFeishuCancelBusy(null);
     }
+  };
+
+  const handleRefreshClick = () => {
+    setItLimit(PAGE_STEP);
+    setExtLimit(PAGE_STEP);
+    setFeishuLimit(PAGE_STEP);
+    setListRefreshNonce((n) => n + 1);
+  };
+
+  const handleLoadMoreIt = () => {
+    skipLoadingOnceRef.current = true;
+    setItLimit((n) => n + PAGE_STEP);
+  };
+  const handleLoadMoreExt = () => {
+    skipLoadingOnceRef.current = true;
+    setExtLimit((n) => n + PAGE_STEP);
+  };
+  const handleLoadMoreFeishu = () => {
+    skipLoadingOnceRef.current = true;
+    setFeishuLimit((n) => n + PAGE_STEP);
+  };
+
+  const openJobDetail = async (
+    kind: BomJobDetailKind,
+    jobLabel: string,
+    batchId: string,
+    batchName: string | null | undefined,
+    jobId: string,
+    rowIds: string[],
+  ) => {
+    setDetailOpen(true);
+    setDetailTitle(`${jobLabel} · 行级详情`);
+    setDetailSubtitle(`${batchName ?? batchId} · 任务 ${jobId} · 共 ${rowIds.length} 行（按任务入队顺序）`);
+    setDetailLoading(true);
+    setDetailError(null);
+    setDetailLines([]);
+    try {
+      const lines = await fetchBomJobRowDetails(batchId, rowIds, kind);
+      setDetailLines(lines);
+    } catch (e) {
+      setDetailError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setDetailLoading(false);
+    }
+  };
+
+  const closeJobDetail = () => {
+    setDetailOpen(false);
+    setDetailLines([]);
+    setDetailError(null);
   };
 
   const toggleMessageExpanded = (key: string) => {
@@ -311,7 +396,7 @@ export const BomDownloadJobsPage: React.FC = () => {
         </div>
         <button
           type="button"
-          onClick={() => void load()}
+          onClick={() => void handleRefreshClick()}
           className="inline-flex items-center gap-2 px-3 py-2 rounded-lg border border-slate-300 text-slate-700 hover:bg-slate-50"
         >
           <RefreshCcw size={16} />
@@ -355,17 +440,29 @@ export const BomDownloadJobsPage: React.FC = () => {
           </select>
         </div>
         <p className="text-xs text-slate-500 pb-2">
-          {loading ? '加载中…' : `it 拉取 ${jobs.length} 条 · ext 同步 ${extJobs.length} 条 · 飞书上传 ${feishuJobs.length} 条`}
+          {loading
+            ? '加载中…'
+            : `每类已加载 it ${jobs.length}（上限 ${itLimit}）· ext ${extJobs.length}（${extLimit}）· 飞书 ${feishuJobs.length}（${feishuLimit}）；点折叠区底部「加载更多」可提高上限`}
           {hasActive ? ' · 自动刷新中' : ''}
         </p>
       </div>
 
-      <div className="flex items-center gap-2 text-sm font-medium text-slate-800">
-        <HardDriveDownload size={18} className="text-indigo-600" />
-        内部 Artifactory 拉取
-      </div>
-
       <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
+        <button
+          type="button"
+          onClick={() => setSectionItOpen((v) => !v)}
+          className="flex w-full items-center gap-2 px-4 py-3 text-left hover:bg-slate-50/80 border-b border-slate-100"
+        >
+          {sectionItOpen ? <ChevronDown size={18} className="text-slate-500 shrink-0" /> : <ChevronRight size={18} className="text-slate-500 shrink-0" />}
+          <HardDriveDownload size={18} className="text-indigo-600 shrink-0" />
+          <span className="text-sm font-medium text-slate-800">内部 Artifactory 拉取</span>
+          <span className="text-xs text-slate-500 ml-auto shrink-0">
+            {jobs.length} 条
+            {itHasMore ? ' · 可加载更多' : ''}
+          </span>
+        </button>
+        {sectionItOpen ? (
+        <>
         <div className="overflow-x-auto">
           <table className="min-w-full text-sm">
             <thead className="bg-slate-50 border-b border-slate-200">
@@ -376,13 +473,14 @@ export const BomDownloadJobsPage: React.FC = () => {
                 <th className="px-3 py-2 text-left text-xs font-semibold text-slate-700">字节</th>
                 <th className="px-3 py-2 text-left text-xs font-semibold text-slate-700">说明</th>
                 <th className="px-3 py-2 text-left text-xs font-semibold text-slate-700">时间</th>
+                <th className="px-3 py-2 text-right text-xs font-semibold text-slate-700">详情</th>
                 <th className="px-3 py-2 text-right text-xs font-semibold text-slate-700">操作</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
               {jobs.length === 0 && !loading ? (
                 <tr>
-                  <td colSpan={7} className="px-4 py-10 text-center text-slate-500">
+                  <td colSpan={8} className="px-4 py-10 text-center text-slate-500">
                     暂无任务。请在 BOM 明细页发起「拉取」。
                   </td>
                 </tr>
@@ -449,6 +547,23 @@ export const BomDownloadJobsPage: React.FC = () => {
                             : '—'}
                       </div>
                     </td>
+                    <td className="px-3 py-2 text-right whitespace-nowrap">
+                      {j.rowIds.length > 0 ? (
+                        <button
+                          type="button"
+                          onClick={() =>
+                            void openJobDetail('it_download', '内部拉取', j.batchId, j.batchName, j.id, j.rowIds)
+                          }
+                          className="inline-flex items-center gap-1 px-2 py-1 rounded border border-indigo-200 text-xs text-indigo-800 hover:bg-indigo-50"
+                          title="按任务 row_ids 查看每行文件名、本地索引大小与当前状态"
+                        >
+                          <ListTree size={12} />
+                          详情
+                        </button>
+                      ) : (
+                        <span className="text-slate-300">—</span>
+                      )}
+                    </td>
                     <td className="px-3 py-2 text-right">
                       {canCancelIt ? (
                         <button
@@ -475,19 +590,42 @@ export const BomDownloadJobsPage: React.FC = () => {
             </tbody>
           </table>
         </div>
+        {itHasMore ? (
+          <div className="px-4 py-2 border-t border-slate-100 bg-white flex justify-center">
+            <button
+              type="button"
+              onClick={() => handleLoadMoreIt()}
+              className="text-xs font-medium text-indigo-700 hover:text-indigo-900 underline"
+            >
+              加载更多（每次 +{PAGE_STEP} 条，当前上限 {itLimit}）
+            </button>
+          </div>
+        ) : null}
         {jobs.some((j) => j.status === 'running' || j.status === 'queued') ? (
           <div className="px-4 py-2 border-t border-slate-100 bg-slate-50 text-xs text-slate-500">
             进行中任务会每 2 秒刷新；字节进度依赖响应 Content-Length，无长度时仅显示已下载字节。
           </div>
         ) : null}
-      </div>
-
-      <div className="flex items-center gap-2 text-sm font-medium text-slate-800 pt-2">
-        <Upload size={18} className="text-emerald-600" />
-        外部 Artifactory 同步（阶段 5）
+        </>
+        ) : null}
       </div>
 
       <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
+        <button
+          type="button"
+          onClick={() => setSectionExtOpen((v) => !v)}
+          className="flex w-full items-center gap-2 px-4 py-3 text-left hover:bg-slate-50/80 border-b border-slate-100"
+        >
+          {sectionExtOpen ? <ChevronDown size={18} className="text-slate-500 shrink-0" /> : <ChevronRight size={18} className="text-slate-500 shrink-0" />}
+          <Upload size={18} className="text-emerald-600 shrink-0" />
+          <span className="text-sm font-medium text-slate-800">外部 Artifactory 同步</span>
+          <span className="text-xs text-slate-500 ml-auto shrink-0">
+            {extJobs.length} 条
+            {extHasMore ? ' · 可加载更多' : ''}
+          </span>
+        </button>
+        {sectionExtOpen ? (
+        <>
         <div className="overflow-x-auto">
           <table className="min-w-full text-sm">
             <thead className="bg-slate-50 border-b border-slate-200">
@@ -497,13 +635,14 @@ export const BomDownloadJobsPage: React.FC = () => {
                 <th className="px-3 py-2 text-left text-xs font-semibold text-slate-700">进度</th>
                 <th className="px-3 py-2 text-left text-xs font-semibold text-slate-700">说明</th>
                 <th className="px-3 py-2 text-left text-xs font-semibold text-slate-700">时间</th>
+                <th className="px-3 py-2 text-right text-xs font-semibold text-slate-700">详情</th>
                 <th className="px-3 py-2 text-right text-xs font-semibold text-slate-700">操作</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
               {extJobs.length === 0 && !loading ? (
                 <tr>
-                  <td colSpan={6} className="px-4 py-10 text-center text-slate-500">
+                  <td colSpan={7} className="px-4 py-10 text-center text-slate-500">
                     暂无任务。请在 BOM 明细页发起「同步全部」或单行 ext 同步。
                   </td>
                 </tr>
@@ -561,6 +700,23 @@ export const BomDownloadJobsPage: React.FC = () => {
                             : '—'}
                       </div>
                     </td>
+                    <td className="px-3 py-2 text-right whitespace-nowrap">
+                      {j.rowIds.length > 0 ? (
+                        <button
+                          type="button"
+                          onClick={() =>
+                            void openJobDetail('ext_sync', 'ext 同步', j.batchId, j.batchName, j.id, j.rowIds)
+                          }
+                          className="inline-flex items-center gap-1 px-2 py-1 rounded border border-emerald-200 text-xs text-emerald-900 hover:bg-emerald-50"
+                          title="按任务 row_ids 查看每行文件名、本地索引大小与 ext 状态"
+                        >
+                          <ListTree size={12} />
+                          详情
+                        </button>
+                      ) : (
+                        <span className="text-slate-300">—</span>
+                      )}
+                    </td>
                     <td className="px-3 py-2 text-right">
                       {canCancelExt ? (
                         <button
@@ -587,19 +743,42 @@ export const BomDownloadJobsPage: React.FC = () => {
             </tbody>
           </table>
         </div>
+        {extHasMore ? (
+          <div className="px-4 py-2 border-t border-slate-100 bg-white flex justify-center">
+            <button
+              type="button"
+              onClick={() => handleLoadMoreExt()}
+              className="text-xs font-medium text-emerald-800 hover:text-emerald-950 underline"
+            >
+              加载更多（每次 +{PAGE_STEP} 条，当前上限 {extLimit}）
+            </button>
+          </div>
+        ) : null}
         {extJobs.some((j) => j.status === 'running' || j.status === 'queued') ? (
           <div className="px-4 py-2 border-t border-slate-100 bg-emerald-50/50 text-xs text-slate-600">
             ext 同步任务进行中时每 2 秒刷新。
           </div>
         ) : null}
-      </div>
-
-      <div className="flex items-center gap-2 text-sm font-medium text-slate-800 pt-2">
-        <UploadCloud size={18} className="text-violet-600" />
-        飞书云盘上传
+        </>
+        ) : null}
       </div>
 
       <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
+        <button
+          type="button"
+          onClick={() => setSectionFeishuOpen((v) => !v)}
+          className="flex w-full items-center gap-2 px-4 py-3 text-left hover:bg-slate-50/80 border-b border-slate-100"
+        >
+          {sectionFeishuOpen ? <ChevronDown size={18} className="text-slate-500 shrink-0" /> : <ChevronRight size={18} className="text-slate-500 shrink-0" />}
+          <UploadCloud size={18} className="text-violet-600 shrink-0" />
+          <span className="text-sm font-medium text-slate-800">飞书云盘上传</span>
+          <span className="text-xs text-slate-500 ml-auto shrink-0">
+            {feishuJobs.length} 条
+            {feishuHasMore ? ' · 可加载更多' : ''}
+          </span>
+        </button>
+        {sectionFeishuOpen ? (
+        <>
         <div className="overflow-x-auto">
           <table className="min-w-full text-sm">
             <thead className="bg-slate-50 border-b border-slate-200">
@@ -609,13 +788,14 @@ export const BomDownloadJobsPage: React.FC = () => {
                 <th className="px-3 py-2 text-left text-xs font-semibold text-slate-700">进度</th>
                 <th className="px-3 py-2 text-left text-xs font-semibold text-slate-700">说明</th>
                 <th className="px-3 py-2 text-left text-xs font-semibold text-slate-700">时间</th>
+                <th className="px-3 py-2 text-right text-xs font-semibold text-slate-700">详情</th>
                 <th className="px-3 py-2 text-right text-xs font-semibold text-slate-700">操作</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
               {feishuJobs.length === 0 && !loading ? (
                 <tr>
-                  <td colSpan={6} className="px-4 py-10 text-center text-slate-500">
+                  <td colSpan={7} className="px-4 py-10 text-center text-slate-500">
                     暂无任务。请在 BOM 分发页发起「上传选中到飞书」。
                   </td>
                 </tr>
@@ -673,6 +853,23 @@ export const BomDownloadJobsPage: React.FC = () => {
                             : '—'}
                       </div>
                     </td>
+                    <td className="px-3 py-2 text-right whitespace-nowrap">
+                      {j.rowIds.length > 0 ? (
+                        <button
+                          type="button"
+                          onClick={() =>
+                            void openJobDetail('feishu_upload', '飞书上传', j.batchId, j.batchName, j.id, j.rowIds)
+                          }
+                          className="inline-flex items-center gap-1 px-2 py-1 rounded border border-violet-200 text-xs text-violet-900 hover:bg-violet-50"
+                          title="按任务 row_ids 查看每行文件名、本地索引大小与飞书状态"
+                        >
+                          <ListTree size={12} />
+                          详情
+                        </button>
+                      ) : (
+                        <span className="text-slate-300">—</span>
+                      )}
+                    </td>
                     <td className="px-3 py-2 text-right">
                       {canCancelFeishu ? (
                         <button
@@ -699,12 +896,88 @@ export const BomDownloadJobsPage: React.FC = () => {
             </tbody>
           </table>
         </div>
+        {feishuHasMore ? (
+          <div className="px-4 py-2 border-t border-slate-100 bg-white flex justify-center">
+            <button
+              type="button"
+              onClick={() => handleLoadMoreFeishu()}
+              className="text-xs font-medium text-violet-800 hover:text-violet-950 underline"
+            >
+              加载更多（每次 +{PAGE_STEP} 条，当前上限 {feishuLimit}）
+            </button>
+          </div>
+        ) : null}
         {feishuJobs.some((j) => j.status === 'running' || j.status === 'queued') ? (
           <div className="px-4 py-2 border-t border-slate-100 bg-violet-50/50 text-xs text-slate-600">
             飞书上传任务进行中时每 2 秒刷新；分片进度（&gt;5MB 文件）实时显示在说明列。
           </div>
         ) : null}
+        </>
+        ) : null}
       </div>
+
+      {detailOpen ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+          <div className="w-full max-w-5xl max-h-[88vh] overflow-hidden rounded-xl border border-slate-300 bg-white shadow-2xl flex flex-col">
+            <div className="flex items-center justify-between border-b border-slate-200 px-4 py-2 shrink-0">
+              <div className="min-w-0 pr-2">
+                <div className="text-sm font-medium text-slate-900 truncate" title={detailTitle}>
+                  {detailTitle}
+                </div>
+                <div className="text-[11px] text-slate-500 truncate mt-0.5" title={detailSubtitle}>
+                  {detailSubtitle}
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => closeJobDetail()}
+                className="rounded-md border border-slate-300 px-2 py-1 text-xs text-slate-700 hover:bg-slate-50 shrink-0"
+              >
+                关闭
+              </button>
+            </div>
+            <div className="p-3 overflow-auto flex-1 min-h-0">
+              {detailLoading ? (
+                <div className="flex items-center gap-2 text-sm text-slate-600 py-8 justify-center">
+                  <Loader2 size={18} className="animate-spin" />
+                  加载行明细…
+                </div>
+              ) : detailError ? (
+                <div className="text-sm text-red-700 py-4">{detailError}</div>
+              ) : (
+                <div className="overflow-x-auto rounded-lg border border-slate-200">
+                  <table className="min-w-full text-xs">
+                    <thead className="bg-slate-50 border-b border-slate-200">
+                      <tr>
+                        <th className="px-2 py-2 text-left font-semibold text-slate-700">#</th>
+                        <th className="px-2 py-2 text-left font-semibold text-slate-700">文件名（推断）</th>
+                        <th className="px-2 py-2 text-left font-semibold text-slate-700">期望 MD5</th>
+                        <th className="px-2 py-2 text-left font-semibold text-slate-700">本地索引大小</th>
+                        <th className="px-2 py-2 text-left font-semibold text-slate-700">状态摘要</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100">
+                      {detailLines.map((line, idx) => (
+                        <tr key={`${line.rowId}-${idx}`} className="hover:bg-slate-50/80">
+                          <td className="px-2 py-1.5 text-slate-500 whitespace-nowrap">{idx + 1}</td>
+                          <td className="px-2 py-1.5 text-slate-800 max-w-[14rem] truncate" title={line.displayName}>
+                            {line.displayName}
+                          </td>
+                          <td className="px-2 py-1.5 font-mono text-[11px] text-slate-600">{line.md5 ?? '—'}</td>
+                          <td className="px-2 py-1.5 whitespace-nowrap">{line.localSizeLabel ?? '—'}</td>
+                          <td className="px-2 py-1.5 text-slate-700 max-w-[28rem]">
+                            <div className="whitespace-pre-wrap break-words">{line.statusLine}</div>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 };

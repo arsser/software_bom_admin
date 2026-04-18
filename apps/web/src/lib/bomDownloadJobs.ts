@@ -7,6 +7,8 @@ export type BomDownloadJobStatus = 'queued' | 'running' | 'succeeded' | 'failed'
 export type BomDownloadJob = {
   id: string;
   batchId: string;
+  /** 本任务包含的 BOM 行 id（用于详情按需加载 bom_rows） */
+  rowIds: string[];
   /** 关联版本名称（全局列表查询时填充） */
   batchName?: string | null;
   status: BomDownloadJobStatus;
@@ -47,9 +49,12 @@ function numOrNull(v: unknown): number | null {
 function mapJob(raw: Record<string, unknown>, batchName?: string | null): BomDownloadJob {
   const batches = raw.bom_batches as { name?: string } | null | undefined;
   const nameFromJoin = batches && typeof batches.name === 'string' ? batches.name : null;
+  const rowIdsRaw = raw.row_ids;
+  const rowIds = Array.isArray(rowIdsRaw) ? rowIdsRaw.map((x) => String(x)) : [];
   return {
     id: String(raw.id),
     batchId: String(raw.batch_id),
+    rowIds,
     batchName: batchName ?? nameFromJoin,
     status: raw.status as BomDownloadJobStatus,
     progressCurrent: Number(raw.progress_current ?? 0),
@@ -68,7 +73,7 @@ function mapJob(raw: Record<string, unknown>, batchName?: string | null): BomDow
 }
 
 const JOB_SELECT =
-  'id,batch_id,status,progress_current,progress_total,last_message,created_at,finished_at,started_at,heartbeat_at,running_file_name,running_bytes_downloaded,running_bytes_total,bytes_downloaded_total,bytes_total';
+  'id,batch_id,row_ids,status,progress_current,progress_total,last_message,created_at,finished_at,started_at,heartbeat_at,running_file_name,running_bytes_downloaded,running_bytes_total,bytes_downloaded_total,bytes_total';
 
 function toFriendlyDownloadRequestError(err: unknown, fallback: string): string {
   if (err && typeof err === 'object') {

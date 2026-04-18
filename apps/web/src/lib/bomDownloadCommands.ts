@@ -64,7 +64,7 @@ export function rowHasArtifactoryHttpUrl(row: BomBatchRow, keyMap: BomJsonKeyMap
   return Boolean(url && /artifactory/i.test(url));
 }
 
-/** ext_url 等别名列中的 http(s) Artifactory 链接（阶段 5 写入后可批量复制 curl/wget） */
+/** ext_url 等别名列中的 http(s) Artifactory 链接（外部 Artifactory 写入后可批量复制 curl/wget） */
 export function rowHasExtArtifactoryHttpUrl(row: BomBatchRow, keyMap: BomJsonKeyMap): boolean {
   const raw = extractExtUrlFromRow(row.bom_row, keyMap);
   const url = raw ? extractHttpUrlFromDownloadCell(raw) : null;

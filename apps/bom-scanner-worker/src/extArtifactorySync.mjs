@@ -449,7 +449,7 @@ export async function executeExtSyncJob(supabase, rootAbs, job, tuning) {
 
   const rootUrl = normalizeArtifactoryRootUrl(creds.baseUrl);
 
-  // 阶段 5 目标路径：一级目录用 bom_batches.name；二级目录用 bom_row["分组"]
+  // 目标路径：一级目录用 bom_batches.name；二级目录用 bom_row["分组"]
   const batchNameRaw = batchProdCfg.batchName;
   const batchNameFallback = `batch-${String(job.batch_id).replace(/-/g, '').slice(0, 8)}`;
   const batchName = batchNameRaw || batchNameFallback;

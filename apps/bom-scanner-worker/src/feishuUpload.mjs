@@ -48,6 +48,47 @@ function extractErrorDetail(err) {
   return chain;
 }
 
+/**
+ * 飞书 Open API 失败时 `msg` 常为泛化英文（如 field validation failed），补充 code / error / data / 原始片段便于排查。
+ * @param {string} op 步骤名（日志用）
+ * @param {number} httpStatus
+ * @param {Record<string, unknown>} parsed
+ * @param {string} [rawText] 原始响应体
+ */
+function feishuApiFailDetail(op, httpStatus, parsed, rawText) {
+  const p =
+    parsed && typeof parsed === 'object' && parsed !== null
+      ? /** @type {Record<string, unknown>} */ (parsed)
+      : /** @type {Record<string, unknown>} */ ({});
+  const code = 'code' in p ? p.code : undefined;
+  const msg = typeof p.msg === 'string' ? p.msg : '';
+  const pieces = [String(op), `HTTP ${httpStatus}`];
+  if (code !== undefined && code !== null && code !== '') pieces.push(`飞书code=${String(code)}`);
+  if (msg) pieces.push(`msg=${msg}`);
+  const errObj = p.error;
+  if (errObj != null && typeof errObj === 'object') {
+    try {
+      const s = JSON.stringify(errObj);
+      if (s && s !== '{}' && s !== 'null') pieces.push(`error=${s.slice(0, 700)}`);
+    } catch {
+      pieces.push('error=(无法序列化)');
+    }
+  }
+  const data = p.data;
+  if (data != null && typeof data === 'object') {
+    try {
+      const s = JSON.stringify(data);
+      if (s && s !== '{}' && s !== 'null') pieces.push(`data=${s.slice(0, 500)}`);
+    } catch {
+      /* ignore */
+    }
+  }
+  if (rawText && (!msg || /^field validation failed$/i.test(msg.trim()))) {
+    pieces.push(`raw=${String(rawText).slice(0, 600)}`);
+  }
+  return pieces.join(' · ');
+}
+
 const FEISHU_UPLOAD_ALL_MAX_BYTES = 5 * 1024 * 1024;
 const FEISHU_UPLOAD_ID_TTL_MS = 23 * 60 * 60 * 1000;
 const FEISHU_PART_RETRY_MAX = 2;
@@ -144,7 +185,7 @@ async function feishuTenantToken(appId, appSecret) {
     throw new Error(`飞书 token 响应非 JSON：${text.slice(0, 200)}`);
   }
   if (!res.ok || body.code !== 0 || !body.tenant_access_token) {
-    throw new Error(body.msg || `获取 tenant_access_token 失败 HTTP ${res.status}`);
+    throw new Error(feishuApiFailDetail('tenant_access_token', res.status, body, text));
   }
   const expireSec = Number.isFinite(body.expire) && body.expire > 0 ? Number(body.expire) : 7200;
   return { token: String(body.tenant_access_token), expireSec };
@@ -202,7 +243,7 @@ async function listFolderPage(accessToken, folderToken, pageToken) {
     throw new Error(`列出文件夹响应非 JSON：${text.slice(0, 200)}`);
   }
   if (!res.ok || body.code !== 0) {
-    throw new Error(body.msg || `列出文件夹失败 HTTP ${res.status}`);
+    throw new Error(feishuApiFailDetail('list_folder', res.status, body, text));
   }
   const files = Array.isArray(body.data?.files) ? body.data.files : [];
   return {
@@ -265,10 +306,7 @@ async function createDriveChildFolder(accessToken, parentFolderToken, name) {
     throw new Error(`创建文件夹响应非 JSON：${text.slice(0, 200)}`);
   }
   if (!res.ok || parsed.code !== 0) {
-    const base = parsed.msg || `创建文件夹失败 HTTP ${res.status}`;
-    const parts = [base];
-    if (typeof parsed.code === 'number') parts.push(`飞书错误码 ${parsed.code}`);
-    throw new Error(parts.join(' · '));
+    throw new Error(feishuApiFailDetail('create_folder', res.status, parsed, text));
   }
   const token = parsed.data?.token;
   if (typeof token !== 'string' || !token.trim()) {
@@ -316,7 +354,7 @@ async function deleteDriveFile(accessToken, fileToken) {
     throw new Error(`删除文件响应非 JSON：${text.slice(0, 200)}`);
   }
   if (!res.ok || parsed.code !== 0) {
-    throw new Error(parsed.msg || `删除飞书文件失败 HTTP ${res.status}`);
+    throw new Error(feishuApiFailDetail('delete_file', res.status, parsed, text));
   }
 }
 
@@ -375,7 +413,7 @@ async function uploadAllUnderFolder(accessToken, parentFolderToken, localAbsPath
     throw new Error(`upload_all 响应非 JSON：${text.slice(0, 300)}`);
   }
   if (!res.ok || parsed.code !== 0) {
-    throw new Error(parsed.msg || `upload_all 失败 HTTP ${res.status}`);
+    throw new Error(feishuApiFailDetail('upload_all', res.status, parsed, text));
   }
   const fileToken = parsed.data?.file_token;
   if (typeof fileToken !== 'string' || !fileToken.trim()) {
@@ -524,7 +562,7 @@ async function uploadPrepare(accessToken, parentFolderToken, fileName, fileSize)
     throw new Error(`upload_prepare 响应非 JSON：${text.slice(0, 300)}`);
   }
   if (!res.ok || parsed.code !== 0) {
-    throw new Error(parsed.msg || `upload_prepare 失败 HTTP ${res.status} code=${parsed.code}`);
+    throw new Error(feishuApiFailDetail('upload_prepare', res.status, parsed, text));
   }
   return {
     uploadId: String(parsed.data.upload_id),
@@ -558,7 +596,7 @@ async function uploadPart(accessToken, uploadId, seq, chunkBuffer) {
     throw new Error(`upload_part seq=${seq} 响应非 JSON：${text.slice(0, 300)}`);
   }
   if (!res.ok || parsed.code !== 0) {
-    throw new Error(parsed.msg || `upload_part seq=${seq} 失败 HTTP ${res.status} code=${parsed.code}`);
+    throw new Error(feishuApiFailDetail(`upload_part seq=${seq}`, res.status, parsed, text));
   }
 }
 
@@ -584,7 +622,7 @@ async function uploadFinish(accessToken, uploadId, blockNum) {
     throw new Error(`upload_finish 响应非 JSON：${text.slice(0, 300)}`);
   }
   if (!res.ok || parsed.code !== 0) {
-    throw new Error(parsed.msg || `upload_finish 失败 HTTP ${res.status} code=${parsed.code}`);
+    throw new Error(feishuApiFailDetail('upload_finish', res.status, parsed, text));
   }
   const fileToken = parsed.data?.file_token;
   if (typeof fileToken !== 'string' || !fileToken.trim()) {

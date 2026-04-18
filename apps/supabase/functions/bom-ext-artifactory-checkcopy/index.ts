@@ -408,7 +408,7 @@ serve(async (req) => {
       })
     }
 
-    // 5) 计算目标路径（与你们简化后的阶段 5 规则一致）
+    // 5) 计算目标路径
     const moduleNameKeys: string[] = Array.isArray(jsonKeyMap.moduleName) && jsonKeyMap.moduleName.length
       ? jsonKeyMap.moduleName
       : ['模块', 'module', '组件', 'moduleName']

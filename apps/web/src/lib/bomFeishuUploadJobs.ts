@@ -5,6 +5,7 @@ export type BomFeishuUploadJobStatus = 'queued' | 'running' | 'succeeded' | 'fai
 export type BomFeishuUploadJob = {
   id: string;
   batchId: string;
+  rowIds: string[];
   batchName?: string | null;
   status: BomFeishuUploadJobStatus;
   progressCurrent: number;
@@ -20,9 +21,12 @@ export type BomFeishuUploadJob = {
 function mapJob(raw: Record<string, unknown>, batchName?: string | null): BomFeishuUploadJob {
   const batches = raw.bom_batches as { name?: string } | null | undefined;
   const nameFromJoin = batches && typeof batches.name === 'string' ? batches.name : null;
+  const rowIdsRaw = raw.row_ids;
+  const rowIds = Array.isArray(rowIdsRaw) ? rowIdsRaw.map((x) => String(x)) : [];
   return {
     id: String(raw.id),
     batchId: String(raw.batch_id),
+    rowIds,
     batchName: batchName ?? nameFromJoin,
     status: raw.status as BomFeishuUploadJobStatus,
     progressCurrent: Number(raw.progress_current ?? 0),
@@ -37,7 +41,7 @@ function mapJob(raw: Record<string, unknown>, batchName?: string | null): BomFei
 }
 
 const JOB_SELECT =
-  'id,batch_id,status,progress_current,progress_total,last_message,created_at,finished_at,started_at,heartbeat_at,running_row_id';
+  'id,batch_id,row_ids,status,progress_current,progress_total,last_message,created_at,finished_at,started_at,heartbeat_at,running_row_id';
 
 /** 创建飞书上传任务：p_row_ids 为空表示当前版本全部 eligible 行（本地 verified_ok 且飞书 absent|error） */
 export async function requestBomFeishuUpload(batchId: string, rowIds?: string[] | null): Promise<string> {

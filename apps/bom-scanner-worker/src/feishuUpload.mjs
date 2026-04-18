@@ -337,12 +337,29 @@ async function ensureFolderPath(accessToken, rootFolderToken, segmentNames) {
   return cur;
 }
 
+/** 飞书 DELETE /drive/v1/files/:file_token 必填 query「type」，缺省会返回 99992402 field validation failed */
+const FEISHU_DELETE_NODE_TYPES = new Set([
+  'file',
+  'docx',
+  'bitable',
+  'folder',
+  'doc',
+  'sheet',
+  'mindnote',
+  'shortcut',
+  'slides',
+]);
+
 /**
  * @param {string} accessToken
  * @param {string} fileToken
+ * @param {string} [nodeType] 与列表接口返回的 type 一致；缺省为 file（覆盖上传前删同名节点）
  */
-async function deleteDriveFile(accessToken, fileToken) {
-  const res = await fetch(`https://open.feishu.cn/open-apis/drive/v1/files/${encodeURIComponent(fileToken)}`, {
+async function deleteDriveFile(accessToken, fileToken, nodeType = 'file') {
+  const t = FEISHU_DELETE_NODE_TYPES.has(nodeType) ? nodeType : 'file';
+  const u = new URL(`https://open.feishu.cn/open-apis/drive/v1/files/${encodeURIComponent(fileToken)}`);
+  u.searchParams.set('type', t);
+  const res = await fetch(u.toString(), {
     method: 'DELETE',
     headers: { Authorization: `Bearer ${accessToken}` },
   });
@@ -371,7 +388,8 @@ async function removeSameNameFileIfAny(accessToken, parentToken, wantFileName) {
     if (safeTrim(it.type) !== 'file') continue;
     const n = safeFlatFilename(safeTrim(it.name)).normalize('NFKC');
     if (n === want && it.token) {
-      await deleteDriveFile(accessToken, safeTrim(it.token));
+      const nodeType = safeTrim(it.type) || 'file';
+      await deleteDriveFile(accessToken, safeTrim(it.token), nodeType);
       log('feishu-upload removed existing file', wantFileName);
       break;
     }
@@ -389,7 +407,7 @@ async function uploadAllUnderFolder(accessToken, parentFolderToken, localAbsPath
   if (buf.length === 0) throw new Error('空文件不可上传飞书');
   if (buf.length > FEISHU_UPLOAD_ALL_MAX_BYTES) {
     throw new Error(
-      `文件 ${buf.length} B 超过飞书 upload_all 上限 ${FEISHU_UPLOAD_ALL_MAX_BYTES} B（20MB），请改分片上传或缩小文件`,
+      `文件 ${buf.length} B 超过飞书 upload_all 上限 ${FEISHU_UPLOAD_ALL_MAX_BYTES} B，请改分片上传或缩小文件`,
     );
   }
   const blob = new Blob([buf]);

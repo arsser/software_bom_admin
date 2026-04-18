@@ -230,7 +230,8 @@ async function isFeishuUploadJobCancelRequested(supabase, jobId) {
 async function listFolderPage(accessToken, folderToken, pageToken) {
   const u = new URL('https://open.feishu.cn/open-apis/drive/v1/files');
   u.searchParams.set('folder_token', folderToken);
-  u.searchParams.set('page_size', '200');
+  /** 飞书 list folder 单页 page_size 上限 50，超出返回 40009 */
+  u.searchParams.set('page_size', '50');
   if (pageToken) u.searchParams.set('page_token', pageToken);
   const res = await fetch(u.toString(), {
     headers: { Authorization: `Bearer ${accessToken}` },

@@ -53,6 +53,23 @@ const FEISHU_UPLOAD_ID_TTL_MS = 23 * 60 * 60 * 1000;
 const FEISHU_PART_RETRY_MAX = 2;
 const FEISHU_PART_DELAY_MS = 220;
 const FEISHU_TOKEN_REFRESH_MS = 100 * 60 * 1000;
+const FEISHU_TOKEN_SAFETY_BUFFER_MS = 10 * 60 * 1000;
+
+/**
+ * 飞书常见 token 失效英文提示（如 code 99991663 / 99991668 等对应 msg）。
+ * @param {string} message
+ */
+function isFeishuInvalidAccessTokenMessage(message) {
+  const m = String(message ?? '').toLowerCase();
+  if (!m) return false;
+  return (
+    m.includes('invalid access token') ||
+    m.includes('token attached') ||
+    m.includes('access token invalid') ||
+    m.includes('99991663') ||
+    m.includes('99991668')
+  );
+}
 
 function safeTrim(s) {
   return String(s ?? '').trim();
@@ -110,6 +127,9 @@ async function loadFeishuAppCreds(supabase) {
   };
 }
 
+/**
+ * @returns {Promise<{ token: string, expireSec: number }>}
+ */
 async function feishuTenantToken(appId, appSecret) {
   const res = await fetch('https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal', {
     method: 'POST',
@@ -126,7 +146,8 @@ async function feishuTenantToken(appId, appSecret) {
   if (!res.ok || body.code !== 0 || !body.tenant_access_token) {
     throw new Error(body.msg || `获取 tenant_access_token 失败 HTTP ${res.status}`);
   }
-  return body.tenant_access_token;
+  const expireSec = Number.isFinite(body.expire) && body.expire > 0 ? Number(body.expire) : 7200;
+  return { token: String(body.tenant_access_token), expireSec };
 }
 
 /**
@@ -384,22 +405,94 @@ function formatEtaSeconds(seconds) {
   return remMin > 0 ? `${hour}时${remMin}分` : `${hour}时`;
 }
 
+/**
+ * tenant_access_token 管理器。
+ * - 按飞书服务端返回的 `expire` 字段动态决定下一次刷新时机（留 10 分钟安全余量，且不超过 100 分钟）。
+ * - 并发下去重刷新（single-flight）。
+ * - 暴露 stats()，便于外部在每一行上传前打诊断日志。
+ *
+ * @returns {{
+ *   getAccessToken: () => Promise<string>,
+ *   invalidate: (reason?: string) => void,
+ *   stats: () => { hasToken: boolean, ageSec: number|null, remainingSec: number|null, refreshCount: number },
+ * }}
+ */
 function createFeishuTokenManager(appId, appSecret) {
+  /** @type {string | null} */
   let token = null;
   let obtainedAt = 0;
-  return async function getAccessToken() {
-    if (!token || Date.now() - obtainedAt > FEISHU_TOKEN_REFRESH_MS) {
-      const isRefresh = Boolean(token);
-      const prevAgeSec = token ? Math.round((Date.now() - obtainedAt) / 1000) : null;
-      token = await feishuTenantToken(appId, appSecret);
-      obtainedAt = Date.now();
-      log('feishu token obtained', {
-        kind: isRefresh ? 'refresh' : 'initial',
-        prevAgeSec,
-        refreshAfterSec: Math.round(FEISHU_TOKEN_REFRESH_MS / 1000),
-      });
-    }
-    return token;
+  /** token 的服务端有效期（毫秒） */
+  let expireMs = 0;
+  let refreshCount = 0;
+  /** @type {Promise<string> | null} */
+  let refreshInFlight = null;
+
+  function computeRefreshAfterMs() {
+    const ttl = Math.max(0, expireMs - FEISHU_TOKEN_SAFETY_BUFFER_MS);
+    return Math.min(ttl, FEISHU_TOKEN_REFRESH_MS);
+  }
+
+  function isStale() {
+    if (!token) return true;
+    const age = Date.now() - obtainedAt;
+    return age >= computeRefreshAfterMs();
+  }
+
+  async function refreshLocked() {
+    const isRefresh = Boolean(token);
+    const prevAgeSec = token ? Math.round((Date.now() - obtainedAt) / 1000) : null;
+    const prevRemainingSec = token ? Math.round((obtainedAt + expireMs - Date.now()) / 1000) : null;
+    const { token: newToken, expireSec } = await feishuTenantToken(appId, appSecret);
+    token = newToken;
+    obtainedAt = Date.now();
+    expireMs = expireSec * 1000;
+    refreshCount += 1;
+    log('feishu token obtained', {
+      kind: isRefresh ? 'refresh' : 'initial',
+      refreshCount,
+      prevAgeSec,
+      prevRemainingSec,
+      expireSec,
+      refreshAfterSec: Math.round(computeRefreshAfterMs() / 1000),
+      tokenTail: newToken.slice(-6),
+    });
+    return newToken;
+  }
+
+  return {
+    async getAccessToken() {
+      if (isStale()) {
+        if (!refreshInFlight) {
+          refreshInFlight = refreshLocked().finally(() => {
+            refreshInFlight = null;
+          });
+        }
+        await refreshInFlight;
+      }
+      return /** @type {string} */ (token);
+    },
+    invalidate(reason) {
+      if (token) {
+        log('feishu token invalidated', {
+          reason: reason || 'unspecified',
+          ageSec: Math.round((Date.now() - obtainedAt) / 1000),
+          remainingSec: Math.round((obtainedAt + expireMs - Date.now()) / 1000),
+          tokenTail: token.slice(-6),
+        });
+      }
+      token = null;
+      obtainedAt = 0;
+      expireMs = 0;
+    },
+    stats() {
+      const now = Date.now();
+      return {
+        hasToken: Boolean(token),
+        ageSec: token ? Math.round((now - obtainedAt) / 1000) : null,
+        remainingSec: token ? Math.round((obtainedAt + expireMs - now) / 1000) : null,
+        refreshCount,
+      };
+    },
   };
 }
 
@@ -506,6 +599,7 @@ async function uploadFinish(accessToken, uploadId, blockNum) {
  * @param {object} p
  * @param {import('@supabase/supabase-js').SupabaseClient} p.supabase
  * @param {() => Promise<string>} p.getToken
+ * @param {() => void} [p.invalidateToken] 分片重试前作废缓存 tenant token（飞书返回 invalid access token 时）
  * @param {string} p.parentFolderToken
  * @param {string} p.localAbsPath
  * @param {string} p.fileName
@@ -517,7 +611,7 @@ async function uploadFinish(accessToken, uploadId, blockNum) {
  */
 async function uploadFileMultipart(p) {
   const {
-    supabase, getToken, parentFolderToken, localAbsPath,
+    supabase, getToken, invalidateToken, parentFolderToken, localAbsPath,
     fileName, fileSize, rowId, rowStatus, signal, onChunkDone,
   } = p;
 
@@ -589,11 +683,15 @@ async function uploadFileMultipart(p) {
           break;
         } catch (e) {
           lastErr = e;
+          const em = e instanceof Error ? e.message : String(e);
+          if (invalidateToken && isFeishuInvalidAccessTokenMessage(em)) {
+            invalidateToken();
+          }
           if (attempt < FEISHU_PART_RETRY_MAX) {
             const wait = FEISHU_PART_DELAY_MS * (attempt + 2);
             log('feishu-upload part retry', {
               rowId, seq, attempt: attempt + 1, wait,
-              err: e instanceof Error ? e.message : String(e),
+              err: em,
             });
             await new Promise((r) => setTimeout(r, wait));
           }
@@ -711,7 +809,8 @@ export async function executeFeishuUploadJob(supabase, rootAbs, job, tuning) {
       })();
     }, hbMs);
 
-    const getToken = createFeishuTokenManager(appId, appSecret);
+    const feishuToken = createFeishuTokenManager(appId, appSecret);
+    const getToken = () => feishuToken.getAccessToken();
 
     let completed = 0;
     let nOk = 0;
@@ -811,7 +910,14 @@ export async function executeFeishuUploadJob(supabase, rootAbs, job, tuning) {
       const middleDir = resolveMiddleDirFromRow(bomRow, keyMap);
       const pathSegments = middleDir ? [batchDir, middleDir] : [batchDir];
 
-      log('feishu-upload row start', { jobId, rowId, md5: md5Lower, fileName, pathSegments });
+      log('feishu-upload row start', {
+        jobId,
+        rowId,
+        md5: md5Lower,
+        fileName,
+        pathSegments,
+        tokenStats: feishuToken.stats(),
+      });
 
       lastJobMessage = `${completed + 1}/${total} 上传中…（分片 1/1） 文件：${fileName}`;
       await patchFeishuUploadJob(supabase, jobId, {
@@ -820,110 +926,126 @@ export async function executeFeishuUploadJob(supabase, rootAbs, job, tuning) {
         last_message: lastJobMessage,
       });
 
-      currentRowAbort = new AbortController();
-      try {
-        let fileStat;
+      rowFeishuTry: for (let feishuTokenAttempt = 0; feishuTokenAttempt < 2; feishuTokenAttempt += 1) {
+        currentRowAbort = new AbortController();
         try {
-          fileStat = await fs.stat(diskAbs);
-        } catch {
-          throw new Error(`本地文件不存在：${diskAbs}`);
-        }
-        if (!fileStat.isFile()) throw new Error('本地路径不是文件');
-        const rowUploadStartedAt = Date.now();
+          let fileStat;
+          try {
+            fileStat = await fs.stat(diskAbs);
+          } catch {
+            throw new Error(`本地文件不存在：${diskAbs}`);
+          }
+          if (!fileStat.isFile()) throw new Error('本地路径不是文件');
+          const rowUploadStartedAt = Date.now();
 
-        const token = await getToken();
-        const parentToken = await ensureFolderPath(token, rootFolder, pathSegments);
-        await removeSameNameFileIfAny(token, parentToken, fileName);
+          const token = await getToken();
+          const parentToken = await ensureFolderPath(token, rootFolder, pathSegments);
+          await removeSameNameFileIfAny(token, parentToken, fileName);
 
-        let fileToken, sizeBytes;
-        if (fileStat.size <= FEISHU_UPLOAD_ALL_MAX_BYTES) {
-          const r = await uploadAllUnderFolder(token, parentToken, diskAbs, fileName);
-          fileToken = r.fileToken;
-          sizeBytes = r.sizeBytes;
-        } else {
-          log('feishu-upload multipart needed', {
-            rowId, fileName,
-            size: formatBytes(fileStat.size),
-            sizeRaw: fileStat.size,
-          });
-          const r = await uploadFileMultipart({
-            supabase,
-            getToken,
-            parentFolderToken: parentToken,
-            localAbsPath: diskAbs,
-            fileName,
-            fileSize: fileStat.size,
-            rowId,
-            rowStatus: rowRec.status,
-            signal: currentRowAbort.signal,
-            onChunkDone: ({ seq, blockNum, bytesUploaded }) => {
-              const elapsedMs = Date.now() - rowUploadStartedAt;
-              let etaText = '预计剩余 --';
-              if (bytesUploaded >= fileStat.size) {
-                etaText = '预计剩余 0秒';
-              } else if (bytesUploaded > 0 && elapsedMs >= 1500) {
-                const speedBytesPerSec = bytesUploaded / (elapsedMs / 1000);
-                if (speedBytesPerSec > 0) {
-                  const etaSeconds = (fileStat.size - bytesUploaded) / speedBytesPerSec;
-                  etaText = `预计剩余 ${formatEtaSeconds(etaSeconds)}`;
+          let fileToken, sizeBytes;
+          if (fileStat.size <= FEISHU_UPLOAD_ALL_MAX_BYTES) {
+            const r = await uploadAllUnderFolder(token, parentToken, diskAbs, fileName);
+            fileToken = r.fileToken;
+            sizeBytes = r.sizeBytes;
+          } else {
+            log('feishu-upload multipart needed', {
+              rowId, fileName,
+              size: formatBytes(fileStat.size),
+              sizeRaw: fileStat.size,
+            });
+            const r = await uploadFileMultipart({
+              supabase,
+              getToken,
+              invalidateToken: () => feishuToken.invalidate('upload_part invalid-access-token'),
+              parentFolderToken: parentToken,
+              localAbsPath: diskAbs,
+              fileName,
+              fileSize: fileStat.size,
+              rowId,
+              rowStatus: rowRec.status,
+              signal: currentRowAbort.signal,
+              onChunkDone: ({ seq, blockNum, bytesUploaded }) => {
+                const elapsedMs = Date.now() - rowUploadStartedAt;
+                let etaText = '预计剩余 --';
+                if (bytesUploaded >= fileStat.size) {
+                  etaText = '预计剩余 0秒';
+                } else if (bytesUploaded > 0 && elapsedMs >= 1500) {
+                  const speedBytesPerSec = bytesUploaded / (elapsedMs / 1000);
+                  if (speedBytesPerSec > 0) {
+                    const etaSeconds = (fileStat.size - bytesUploaded) / speedBytesPerSec;
+                    etaText = `预计剩余 ${formatEtaSeconds(etaSeconds)}`;
+                  }
                 }
-              }
-              lastJobMessage = `${completed + 1}/${total} 上传中…（分片 ${seq + 1}/${blockNum}，${formatBytes(bytesUploaded)}/${formatBytes(fileStat.size)}，${etaText}） 文件：${fileName}`;
-              void patchFeishuUploadJob(supabase, jobId, {
-                heartbeat_at: new Date().toISOString(),
-                last_message: lastJobMessage,
-              });
-            },
+                lastJobMessage = `${completed + 1}/${total} 上传中…（分片 ${seq + 1}/${blockNum}，${formatBytes(bytesUploaded)}/${formatBytes(fileStat.size)}，${etaText}） 文件：${fileName}`;
+                void patchFeishuUploadJob(supabase, jobId, {
+                  heartbeat_at: new Date().toISOString(),
+                  last_message: lastJobMessage,
+                });
+              },
+            });
+            fileToken = r.fileToken;
+            sizeBytes = r.sizeBytes;
+          }
+
+          await patchBomRowFeishuAfterUpload(supabase, rowId, {
+            fileToken,
+            fileName,
+            sizeBytes,
           });
-          fileToken = r.fileToken;
-          sizeBytes = r.sizeBytes;
-        }
 
-        await patchBomRowFeishuAfterUpload(supabase, rowId, {
-          fileToken,
-          fileName,
-          sizeBytes,
-        });
-
-        nOk += 1;
-        completed += 1;
-        lastJobMessage = `${completed}/${total} OK（${formatBytes(sizeBytes)}） 文件：${fileName}`;
-        await patchFeishuUploadJob(supabase, jobId, {
-          progress_current: completed,
-          running_row_id: null,
-          heartbeat_at: new Date().toISOString(),
-          last_message: lastJobMessage,
-        });
-      } catch (e) {
-        const aborted =
-          currentRowAbort.signal.aborted ||
-          (e instanceof Error && (e.name === 'AbortError' || e.message === '用户取消'));
-        if (aborted) {
-          userCancelled = true;
-          log('feishu-upload row aborted', { jobId, rowId });
-          break;
+          nOk += 1;
+          completed += 1;
+          lastJobMessage = `${completed}/${total} OK（${formatBytes(sizeBytes)}） 文件：${fileName}`;
+          await patchFeishuUploadJob(supabase, jobId, {
+            progress_current: completed,
+            running_row_id: null,
+            heartbeat_at: new Date().toISOString(),
+            last_message: lastJobMessage,
+          });
+          break rowFeishuTry;
+        } catch (e) {
+          const aborted =
+            currentRowAbort.signal.aborted ||
+            (e instanceof Error && (e.name === 'AbortError' || e.message === '用户取消'));
+          if (aborted) {
+            userCancelled = true;
+            log('feishu-upload row aborted', { jobId, rowId });
+            break rowFeishuTry;
+          }
+          const msg = (e instanceof Error ? e.message : String(e)).slice(0, 1000);
+          if (feishuTokenAttempt === 0 && isFeishuInvalidAccessTokenMessage(msg)) {
+            feishuToken.invalidate('row-level invalid-access-token');
+            log('feishu-upload row retry after invalid access token', {
+              jobId,
+              rowId,
+              tokenStats: feishuToken.stats(),
+            });
+            continue rowFeishuTry;
+          }
+          nFail += 1;
+          completed += 1;
+          rememberFailSample(msg);
+          log('feishu-upload row failed', {
+            jobId,
+            rowId,
+            error: msg,
+            detail: extractErrorDetail(e),
+          });
+          await patchBomRowFeishuUploadError(supabase, rowId, `飞书上传失败：${msg}`);
+          lastJobMessage = `${completed}/${total} 失败（${msg}） 文件：${fileName}`.slice(0, 2000);
+          await patchFeishuUploadJob(supabase, jobId, {
+            progress_current: completed,
+            running_row_id: null,
+            heartbeat_at: new Date().toISOString(),
+            last_message: lastJobMessage,
+          });
+          break rowFeishuTry;
+        } finally {
+          currentRowAbort = null;
         }
-        const msg = (e instanceof Error ? e.message : String(e)).slice(0, 1000);
-        nFail += 1;
-        completed += 1;
-        rememberFailSample(msg);
-        log('feishu-upload row failed', {
-          jobId,
-          rowId,
-          error: msg,
-          detail: extractErrorDetail(e),
-        });
-        await patchBomRowFeishuUploadError(supabase, rowId, `飞书上传失败：${msg}`);
-        lastJobMessage = `${completed}/${total} 失败（${msg}） 文件：${fileName}`.slice(0, 2000);
-        await patchFeishuUploadJob(supabase, jobId, {
-          progress_current: completed,
-          running_row_id: null,
-          heartbeat_at: new Date().toISOString(),
-          last_message: lastJobMessage,
-        });
-      } finally {
-        currentRowAbort = null;
       }
+
+      if (userCancelled) break;
     }
 
     if (userCancelled) {

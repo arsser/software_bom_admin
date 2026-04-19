@@ -89,6 +89,9 @@ function feishuApiFailDetail(op, httpStatus, parsed, rawText) {
   return pieces.join(' · ');
 }
 
+/** 飞书 GET /drive/v1/files 的 page_size 上限；超出返回 40009 */
+const FEISHU_LIST_FOLDER_PAGE_SIZE = 50;
+
 const FEISHU_UPLOAD_ALL_MAX_BYTES = 5 * 1024 * 1024;
 const FEISHU_UPLOAD_ID_TTL_MS = 23 * 60 * 60 * 1000;
 const FEISHU_PART_RETRY_MAX = 2;
@@ -230,8 +233,7 @@ async function isFeishuUploadJobCancelRequested(supabase, jobId) {
 async function listFolderPage(accessToken, folderToken, pageToken) {
   const u = new URL('https://open.feishu.cn/open-apis/drive/v1/files');
   u.searchParams.set('folder_token', folderToken);
-  /** 飞书 list folder 单页 page_size 上限 50，超出返回 40009 */
-  u.searchParams.set('page_size', '50');
+  u.searchParams.set('page_size', String(FEISHU_LIST_FOLDER_PAGE_SIZE));
   if (pageToken) u.searchParams.set('page_token', pageToken);
   const res = await fetch(u.toString(), {
     headers: { Authorization: `Bearer ${accessToken}` },
@@ -244,6 +246,12 @@ async function listFolderPage(accessToken, folderToken, pageToken) {
     throw new Error(`列出文件夹响应非 JSON：${text.slice(0, 200)}`);
   }
   if (!res.ok || body.code !== 0) {
+    log('WARN feishu list_folder failed', {
+      page_size_sent: u.searchParams.get('page_size'),
+      httpStatus: res.status,
+      feishuCode: body?.code,
+      msg: body?.msg,
+    });
     throw new Error(feishuApiFailDetail('list_folder', res.status, body, text));
   }
   const files = Array.isArray(body.data?.files) ? body.data.files : [];

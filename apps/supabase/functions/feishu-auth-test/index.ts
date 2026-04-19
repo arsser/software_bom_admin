@@ -1,6 +1,9 @@
 import { serve } from 'https://deno.land/std@0.168.0/http/server.ts'
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 
+/** 飞书 list folder 单页 page_size 上限 */
+const FEISHU_LIST_FOLDER_PAGE_SIZE = 50
+
 const corsHeaders: Record<string, string> = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
@@ -104,8 +107,7 @@ async function listDriveFolderFirstPage(
 }> {
   const u = new URL('https://open.feishu.cn/open-apis/drive/v1/files')
   u.searchParams.set('folder_token', folderToken)
-  /** 飞书单页 page_size 上限 50 */
-  u.searchParams.set('page_size', '50')
+  u.searchParams.set('page_size', String(FEISHU_LIST_FOLDER_PAGE_SIZE))
   const res = await fetch(u.toString(), {
     headers: { Authorization: `Bearer ${accessToken}` },
   })

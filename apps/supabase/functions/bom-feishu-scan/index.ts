@@ -6,6 +6,21 @@ const corsHeaders: Record<string, string> = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 }
 
+/** 飞书 GET /drive/v1/files 的 page_size 上限；超出返回 40009（与官方文档一致） */
+const FEISHU_LIST_FOLDER_PAGE_SIZE = 50
+
+/** 日志用：脱敏 folder_token，保留 page_size / page_token 便于核对请求 */
+function redactListFolderUrlForLog(u: URL): string {
+  const q = new URLSearchParams(u.search)
+  const ft = q.get('folder_token')
+  if (ft && ft.length > 14) {
+    q.set('folder_token', `${ft.slice(0, 6)}…${ft.slice(-4)}`)
+  } else if (ft) {
+    q.set('folder_token', '(redacted)')
+  }
+  return `${u.pathname}?${q.toString()}`
+}
+
 type BomJsonKeyMap = {
   downloadUrl?: string[]
   expectedMd5?: string[]
@@ -250,8 +265,7 @@ async function listFolderPage(
 ): Promise<{ files: FeishuListFile[]; has_more?: boolean; page_token?: string }> {
   const u = new URL('https://open.feishu.cn/open-apis/drive/v1/files')
   u.searchParams.set('folder_token', folderToken)
-  /** 飞书单页 page_size 上限 50，超出返回 40009 */
-  u.searchParams.set('page_size', '50')
+  u.searchParams.set('page_size', String(FEISHU_LIST_FOLDER_PAGE_SIZE))
   if (pageToken) u.searchParams.set('page_token', pageToken)
   const res = await fetch(u.toString(), {
     headers: { Authorization: `Bearer ${accessToken}` },
@@ -264,6 +278,13 @@ async function listFolderPage(
     throw new Error(`列出文件夹响应非 JSON：${text.slice(0, 200)}`)
   }
   if (!res.ok || body.code !== 0) {
+    console.error('[bom-feishu-scan] list_folder failed', {
+      page_size_sent: u.searchParams.get('page_size'),
+      httpStatus: res.status,
+      feishuCode: body.code,
+      msg: body.msg,
+      request: redactListFolderUrlForLog(u),
+    })
     throw new Error(body.msg || `列出文件夹失败 HTTP ${res.status}`)
   }
   const files = Array.isArray(body.data?.files) ? body.data!.files! : []

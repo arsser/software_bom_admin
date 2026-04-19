@@ -16,6 +16,7 @@ import {
   XCircle,
 } from 'lucide-react';
 import { defaultBomScannerConfig, fetchBomScannerSettings, type BomScannerConfig } from '../lib/bomScannerSettings';
+import { copyTextToClipboard } from '../lib/clipboardCopy';
 import {
   buildBomWarnings,
   copyBomBatchRowsToClipboard,
@@ -329,10 +330,7 @@ export const BomDetail: React.FC = () => {
           alert('当前没有可复制的 BOM 清单');
           return;
         }
-        if (!globalThis.navigator?.clipboard?.writeText) {
-          throw new Error('当前环境不支持访问剪贴板（需 HTTPS 或 localhost）');
-        }
-        await globalThis.navigator.clipboard.writeText(text);
+        await copyTextToClipboard(text);
       }
     } catch (e) {
       alert(e instanceof Error ? e.message : String(e));

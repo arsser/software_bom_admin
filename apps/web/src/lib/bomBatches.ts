@@ -1,3 +1,4 @@
+import { copyTextToClipboard } from './clipboardCopy';
 import { supabase } from './supabase';
 import {
   buildBomWarnings,
@@ -173,10 +174,7 @@ export async function copyBomBatchRowsToClipboard(batchId: string): Promise<void
     batch.headerOrder,
     rowsData.map((x) => x.bom_row),
   );
-  if (!globalThis.navigator?.clipboard?.writeText) {
-    throw new Error('当前环境不支持访问剪贴板（需 HTTPS 或 localhost）');
-  }
-  await globalThis.navigator.clipboard.writeText(text);
+  await copyTextToClipboard(text);
 }
 
 /** 从现有版本复制出的新版本的默认名称（与源同产品、新 id） */

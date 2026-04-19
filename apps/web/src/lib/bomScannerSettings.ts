@@ -98,6 +98,7 @@ const defaultJsonKeyMap: BomJsonKeyMap = {
   downloadUrl: ['下载路径', 'url', 'download_url', '下载地址'],
   expectedMd5: ['MD5', 'md5', 'checksum'],
   arch: ['硬件平台', 'arch', 'platform', '架构'],
+  /** 读：任一键；ext 查写/Edge 写回：仅规范键 ext_url、ext_size_bytes（见 bom-ext-artifactory-checkcopy） */
   extUrl: ['ext_url', 'extUrl', '转存地址'],
   releaseVersion: ['版本', 'version', 'releaseVersion', '产品版本'],
   releaseBatch: ['批次', 'batch', 'releaseBatch', '发布批次'],

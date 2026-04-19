@@ -51,6 +51,34 @@ function firstNonEmptyByKeys(obj: Record<string, unknown> | null | undefined, ke
   return null
 }
 
+/** 与默认 jsonKeyMap 一致；写回仅存规范键，读侧仍可用 jsonKeyMap 别名匹配 */
+const CANONICAL_EXT_URL_KEY = 'ext_url'
+const CANONICAL_EXT_SIZE_KEY = 'ext_size_bytes'
+const KNOWN_EXT_URL_ALIASES = ['ext_url', 'extUrl', '转存地址'] as const
+const KNOWN_EXT_SIZE_ALIASES = ['ext_size_bytes', 'ext文件大小', 'extSize', 'ext大小'] as const
+
+/** 删除所有 ext 链接/大小别名列后返回新对象（不修改入参） */
+function stripExtUrlAndSizeAliases(
+  bomRow: Record<string, unknown>,
+  extUrlKeysFromMap: string[],
+  extFileSizeKeysFromMap: string[],
+): Record<string, unknown> {
+  const strip = new Set<string>()
+  for (const k of KNOWN_EXT_URL_ALIASES) strip.add(k)
+  for (const k of KNOWN_EXT_SIZE_ALIASES) strip.add(k)
+  for (const k of extUrlKeysFromMap) {
+    if (k) strip.add(k)
+  }
+  for (const k of extFileSizeKeysFromMap) {
+    if (k) strip.add(k)
+  }
+  const next: Record<string, unknown> = { ...bomRow }
+  for (const k of strip) {
+    delete next[k]
+  }
+  return next
+}
+
 function normalizeBomKeyForMatch(s: string): string {
   return String(s)
     .normalize('NFKC')
@@ -360,15 +388,7 @@ serve(async (req) => {
       // 命中不存在：ext 侧可能从未上传，也可能“曾存在但已被删除”
       // 如果本行已有 ext_url（历史写回），这里要把 ext_url 清掉并回退状态，避免 UI 误以为仍存在。
       const prevExt = firstNonEmptyByKeys(bomRow, extUrlKeys)
-      const nextBom: Record<string, unknown> = { ...bomRow }
-      for (const k of extUrlKeys) {
-        if (!k) continue
-        nextBom[k] = null
-      }
-      for (const k of extFileSizeKeys) {
-        if (!k) continue
-        nextBom[k] = null
-      }
+      const nextBom = stripExtUrlAndSizeAliases(bomRow, extUrlKeys, extFileSizeKeys)
       delete (nextBom as any).ext_sync_kind
 
       const msg = prevExt
@@ -456,22 +476,16 @@ serve(async (req) => {
       }
     }
 
-    // 7) 写回 bom_row（只写 jsonb 的 ext_url 等别名键）
-    const nextBom: Record<string, unknown> = { ...bomRow }
-    for (const k of extUrlKeys) {
-      if (!k) continue
-      nextBom[k] = targetDl
-    }
-    nextBom.ext_sync_kind = 'copied'
+    // 7) 写回 bom_row：仅规范键 ext_url / ext_size_bytes（别名字段在读路径解析）
+    const nextBom = stripExtUrlAndSizeAliases(bomRow, extUrlKeys, extFileSizeKeys)
+    nextBom[CANONICAL_EXT_URL_KEY] = targetDl
+    nextBom['ext_sync_kind'] = 'copied'
 
     const storageUrl = toStorageApiUrl(targetDl)
     if (storageUrl) {
       const extSz = await fetchArtifactSizeFromStorageUrl(storageUrl, headers)
       if (extSz != null) {
-        for (const k of extFileSizeKeys) {
-          if (!k) continue
-          nextBom[k] = String(extSz)
-        }
+        nextBom[CANONICAL_EXT_SIZE_KEY] = String(extSz)
       }
     }
 

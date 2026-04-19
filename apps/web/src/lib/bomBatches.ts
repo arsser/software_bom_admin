@@ -129,6 +129,79 @@ export async function fetchBomRows(batchId: string): Promise<BomBatchRow[]> {
   }));
 }
 
+function resolveClipboardExportHeaders(headerOrder: string[], rows: BomRowRecord[]): string[] {
+  const ordered = headerOrder.map((h) => h.trim()).filter((h) => h.length > 0);
+  const seen = new Set(ordered);
+  const out = [...ordered];
+  for (const r of rows) {
+    for (const k of Object.keys(r)) {
+      const t = k.trim();
+      if (!t || seen.has(t)) continue;
+      seen.add(t);
+      out.push(t);
+    }
+  }
+  return out.slice(0, 64);
+}
+
+function escapeTsvCell(value: string): string {
+  const v = String(value ?? '');
+  if (/[\t\n\r"]/.test(v)) {
+    return `"${v.replace(/"/g, '""')}"`;
+  }
+  return v;
+}
+
+/**
+ * 将 BOM 行导出为制表符分隔文本（首行表头），与网页「粘贴解析」逻辑兼容；
+ * 列顺序以版本 header_order 为主，再追加各行上出现但未列入顺序的键。
+ */
+export function formatBomRowsAsTsvForClipboard(headerOrder: string[], rows: BomRowRecord[]): string {
+  const headers = resolveClipboardExportHeaders(headerOrder, rows);
+  if (headers.length === 0) return '';
+  const headerLine = headers.map(escapeTsvCell).join('\t');
+  if (rows.length === 0) return headerLine;
+  const dataLines = rows.map((r) => headers.map((h) => escapeTsvCell(r[h] ?? '')).join('\t'));
+  return [headerLine, ...dataLines].join('\n');
+}
+
+/** 拉取该版本全部行并写入系统剪贴板（TSV 文本） */
+export async function copyBomBatchRowsToClipboard(batchId: string): Promise<void> {
+  const [batch, rowsData] = await Promise.all([fetchBomBatchById(batchId), fetchBomRows(batchId)]);
+  if (!batch) throw new Error('未找到版本');
+  const text = formatBomRowsAsTsvForClipboard(
+    batch.headerOrder,
+    rowsData.map((x) => x.bom_row),
+  );
+  if (!globalThis.navigator?.clipboard?.writeText) {
+    throw new Error('当前环境不支持访问剪贴板（需 HTTPS 或 localhost）');
+  }
+  await globalThis.navigator.clipboard.writeText(text);
+}
+
+/** 从现有版本复制出的新版本的默认名称（与源同产品、新 id） */
+function suggestedCopyBatchName(sourceName: string): string {
+  const base = sourceName.trim() || '未命名版本';
+  return `${base} 副本`;
+}
+
+/**
+ * 复制 BOM 版本：同一产品下新建批次，复制表头顺序、原始 BOM 链接与各行的 bom_row；
+ * 行状态使用库表默认值（local=pending、ext=not_started），不复制下载/同步/飞书任务。
+ */
+export async function copyBomBatch(sourceBatchId: string): Promise<string> {
+  const batch = await fetchBomBatchById(sourceBatchId);
+  if (!batch) throw new Error('未找到源版本');
+  const rows = await fetchBomRows(sourceBatchId);
+  return createBatchWithRows({
+    name: suggestedCopyBatchName(batch.name),
+    productId: batch.productId,
+    originalBomUrl: batch.originalBomUrl,
+    headerOrder: batch.headerOrder,
+    rows: rows.map((r) => r.bom_row),
+  });
+}
+
 export async function createBatchWithRows(payload: {
   name: string;
   productId: string;

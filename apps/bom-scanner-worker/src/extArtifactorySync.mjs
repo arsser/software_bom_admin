@@ -126,11 +126,33 @@ const DEFAULT_KEY_MAP = {
   expectedMd5: ['MD5', 'md5', 'checksum'],
   arch: ['硬件平台', 'arch', 'platform', '架构'],
   extUrl: ['ext_url', 'extUrl', '转存地址'],
+  extFileSizeBytes: ['ext_size_bytes', 'ext文件大小', 'extSize', 'ext大小'],
   releaseVersion: ['版本', 'version', 'releaseVersion', '产品版本'],
   releaseBatch: ['批次', 'batch', 'releaseBatch', '发布批次'],
   moduleName: ['模块', 'module', '组件', 'moduleName'],
   groupSegment: ['分组', 'group', 'groupName', '组别'],
 };
+
+const CANONICAL_EXT_URL_KEY = 'ext_url';
+const KNOWN_EXT_URL_ALIASES = ['ext_url', 'extUrl', '转存地址'];
+const KNOWN_EXT_SIZE_ALIASES = ['ext_size_bytes', 'ext文件大小', 'extSize', 'ext大小'];
+
+/**
+ * @param {Record<string, unknown>} bomRow
+ * @param {string[]} extUrlKeysFromMap
+ * @param {string[]} extFileSizeKeysFromMap
+ */
+function stripExtUrlAndSizeAliases(bomRow, extUrlKeysFromMap, extFileSizeKeysFromMap) {
+  const strip = new Set([
+    ...KNOWN_EXT_URL_ALIASES,
+    ...KNOWN_EXT_SIZE_ALIASES,
+    ...(extUrlKeysFromMap || []).filter(Boolean),
+    ...(extFileSizeKeysFromMap || []).filter(Boolean),
+  ]);
+  const next = { ...bomRow };
+  for (const k of strip) delete next[k];
+  return next;
+}
 
 /**
  * @param {Record<string, unknown>} scannerValue
@@ -148,6 +170,7 @@ export function mergeKeyMap(scannerValue) {
     expectedMd5: arr('expectedMd5', DEFAULT_KEY_MAP.expectedMd5),
     arch: arr('arch', DEFAULT_KEY_MAP.arch),
     extUrl: arr('extUrl', DEFAULT_KEY_MAP.extUrl),
+    extFileSizeBytes: arr('extFileSizeBytes', DEFAULT_KEY_MAP.extFileSizeBytes),
     releaseVersion: arr('releaseVersion', DEFAULT_KEY_MAP.releaseVersion),
     releaseBatch: arr('releaseBatch', DEFAULT_KEY_MAP.releaseBatch),
     moduleName: arr('moduleName', DEFAULT_KEY_MAP.moduleName),
@@ -629,11 +652,9 @@ export async function executeExtSyncJob(supabase, rootAbs, job, tuning) {
         syncKind = 'uploaded';
       }
 
-      const extAliases = keyMap.extUrl.length ? keyMap.extUrl : ['ext_url'];
-      const nextBom = { ...bomRow, ext_sync_kind: syncKind };
-      for (const k of extAliases) {
-        if (k) nextBom[k] = targetDl;
-      }
+      const nextBom = stripExtUrlAndSizeAliases(bomRow, keyMap.extUrl, keyMap.extFileSizeBytes);
+      nextBom[CANONICAL_EXT_URL_KEY] = targetDl;
+      nextBom.ext_sync_kind = syncKind;
 
       const { data: stRow, error: stErr } = await supabase.from('bom_rows').select('status').eq('id', rowId).maybeSingle();
       if (stErr) throw stErr;

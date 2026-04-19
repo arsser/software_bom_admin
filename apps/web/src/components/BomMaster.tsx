@@ -3,6 +3,8 @@ import { useNavigate } from 'react-router-dom';
 import {
   ArrowDown,
   ArrowUp,
+  ClipboardCopy,
+  Copy,
   Package,
   Pencil,
   Plus,
@@ -10,7 +12,13 @@ import {
   Share2,
   Trash2,
 } from 'lucide-react';
-import { deleteBomBatch, fetchBomBatches, type BomBatch } from '../lib/bomBatches';
+import {
+  copyBomBatch,
+  copyBomBatchRowsToClipboard,
+  deleteBomBatch,
+  fetchBomBatches,
+  type BomBatch,
+} from '../lib/bomBatches';
 import {
   deleteProduct,
   fetchProducts,
@@ -31,6 +39,8 @@ export const BomMaster: React.FC = () => {
   const [products, setProducts] = useState<Product[]>([]);
   const [batches, setBatches] = useState<BomBatch[]>([]);
   const [deletingBatchId, setDeletingBatchId] = useState<string | null>(null);
+  const [copyingBatchId, setCopyingBatchId] = useState<string | null>(null);
+  const [clipboardListBatchId, setClipboardListBatchId] = useState<string | null>(null);
   const [productBusyId, setProductBusyId] = useState<string | null>(null);
 
   const [editorOpen, setEditorOpen] = useState(false);
@@ -76,6 +86,30 @@ export const BomMaster: React.FC = () => {
     setEditorMode('edit');
     setEditorProduct(product);
     setEditorOpen(true);
+  };
+
+  const handleCopyBatch = async (batch: BomBatch) => {
+    setCopyingBatchId(batch.id);
+    try {
+      const newId = await copyBomBatch(batch.id);
+      await load();
+      navigate(`/bom/${newId}`);
+    } catch (e) {
+      alert(e instanceof Error ? e.message : String(e));
+    } finally {
+      setCopyingBatchId(null);
+    }
+  };
+
+  const handleCopyBomListToClipboard = async (batch: BomBatch) => {
+    setClipboardListBatchId(batch.id);
+    try {
+      await copyBomBatchRowsToClipboard(batch.id);
+    } catch (e) {
+      alert(e instanceof Error ? e.message : String(e));
+    } finally {
+      setClipboardListBatchId(null);
+    }
   };
 
   const handleDeleteBatch = async (batch: BomBatch) => {
@@ -378,6 +412,30 @@ export const BomMaster: React.FC = () => {
                                   原始BOM
                                 </span>
                               )}
+                              <button
+                                type="button"
+                                onClick={() => void handleCopyBomListToClipboard(b)}
+                                disabled={
+                                  clipboardListBatchId === b.id ||
+                                  copyingBatchId === b.id ||
+                                  deletingBatchId === b.id
+                                }
+                                className="inline-flex items-center gap-1 text-slate-600 hover:text-slate-900 text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed"
+                                title="将本版本 BOM 表（表头+全部数据行）复制为制表符分隔文本，可粘贴到 Excel 或本应用「粘贴」"
+                              >
+                                <ClipboardCopy size={14} />
+                                {clipboardListBatchId === b.id ? '复制中…' : '复制清单'}
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => void handleCopyBatch(b)}
+                                disabled={copyingBatchId === b.id || deletingBatchId === b.id}
+                                className="inline-flex items-center gap-1 text-slate-600 hover:text-slate-900 text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed"
+                                title="在同一产品下复制为新版本（表数据一致，行状态重置为待处理；不含任务记录）"
+                              >
+                                <Copy size={14} />
+                                {copyingBatchId === b.id ? '复制中…' : '复制版本'}
+                              </button>
                               <button
                                 type="button"
                                 onClick={() => handleDeleteBatch(b)}

@@ -18,11 +18,13 @@ import {
 import { defaultBomScannerConfig, fetchBomScannerSettings, type BomScannerConfig } from '../lib/bomScannerSettings';
 import {
   buildBomWarnings,
+  copyBomBatchRowsToClipboard,
   createBatchWithRows,
   updateBomBatchMeta,
   fetchBomBatchById,
   fetchBomRows,
   fetchLocalFileInfoByMd5,
+  formatBomRowsAsTsvForClipboard,
   refreshBomRowStatusesForBatch,
   type LocalFileIndexInfo,
   mergeHeaderOrder,
@@ -58,6 +60,7 @@ import {
   requestBomExtSync,
   type BomExtSyncJob,
 } from '../lib/bomExtSyncJobs';
+import { activeDownloadJobRowIdSet, activeExtSyncJobRowIdSet } from '../lib/bomJobActiveRowIds';
 import { checkCopyExtForBomRow, type BomExtCheckCopyResult } from '../lib/bomExtArtifactoryCheckCopy';
 import {
   buildCopyCommandsForExtRows,
@@ -124,6 +127,7 @@ export const BomDetail: React.FC = () => {
   const [previewHeaders, setPreviewHeaders] = useState<string[]>([]);
   const [showRawInput, setShowRawInput] = useState(false);
   const [previewHeaderError, setPreviewHeaderError] = useState<string>('');
+  const [clipboardListBusy, setClipboardListBusy] = useState(false);
   const [artifactoryConfig, setArtifactoryConfig] = useState<ArtifactoryConfig | null>(null);
   const [localInfoByMd5, setLocalInfoByMd5] = useState<Map<string, LocalFileIndexInfo>>(() => new Map());
   /** local_file 按 MD5 查询完成后为 true，避免加载中空窗期误判「文件不存在」 */
@@ -311,6 +315,32 @@ export const BomDetail: React.FC = () => {
     if (el) el.textContent = PASTE_AREA_HINT;
   };
 
+  const canCopyBomListToClipboard =
+    (!isNew && Boolean(batchId)) || previewHeaders.length > 0 || previewRows.length > 0;
+
+  const handleCopyBomListToClipboard = async () => {
+    setClipboardListBusy(true);
+    try {
+      if (!isNew && batchId) {
+        await copyBomBatchRowsToClipboard(batchId);
+      } else {
+        const text = formatBomRowsAsTsvForClipboard(previewHeaders, previewRows);
+        if (!text.trim()) {
+          alert('当前没有可复制的 BOM 清单');
+          return;
+        }
+        if (!globalThis.navigator?.clipboard?.writeText) {
+          throw new Error('当前环境不支持访问剪贴板（需 HTTPS 或 localhost）');
+        }
+        await globalThis.navigator.clipboard.writeText(text);
+      }
+    } catch (e) {
+      alert(e instanceof Error ? e.message : String(e));
+    } finally {
+      setClipboardListBusy(false);
+    }
+  };
+
   const load = async () => {
     setLoading(true);
     setError(null);
@@ -464,6 +494,42 @@ export const BomDetail: React.FC = () => {
     if (!config) return 0;
     return loadedBomRows.filter((lr) => rowEligibleForExtSync(lr, tableKeyMap)).length;
   }, [loadedBomRows, config, tableKeyMap]);
+
+  const eligiblePullRowIds = useMemo(() => {
+    if (!config) return [] as string[];
+    return loadedBomRows
+      .filter((lr) => rowEligibleForItPull(lr, tableKeyMap, localInfoByMd5))
+      .map((lr) => lr.id);
+  }, [loadedBomRows, config, tableKeyMap, localInfoByMd5]);
+
+  const eligibleExtSyncRowIds = useMemo(() => {
+    if (!config) return [] as string[];
+    return loadedBomRows.filter((lr) => rowEligibleForExtSync(lr, tableKeyMap)).map((lr) => lr.id);
+  }, [loadedBomRows, config, tableKeyMap]);
+
+  const activeDownloadRowIds = useMemo(
+    () => activeDownloadJobRowIdSet(downloadJobs),
+    [downloadJobs],
+  );
+
+  const activeExtSyncRowIds = useMemo(
+    () => activeExtSyncJobRowIdSet(extSyncJobs),
+    [extSyncJobs],
+  );
+
+  const allEligiblePullsCoveredByActiveDownloadJobs = useMemo(
+    () =>
+      eligiblePullRowIds.length > 0 &&
+      eligiblePullRowIds.every((id) => activeDownloadRowIds.has(id)),
+    [eligiblePullRowIds, activeDownloadRowIds],
+  );
+
+  const allEligibleExtSyncsCoveredByActiveJobs = useMemo(
+    () =>
+      eligibleExtSyncRowIds.length > 0 &&
+      eligibleExtSyncRowIds.every((id) => activeExtSyncRowIds.has(id)),
+    [eligibleExtSyncRowIds, activeExtSyncRowIds],
+  );
 
   const missingMd5Count = useMemo(() => {
     if (!config) return 0;
@@ -1374,15 +1440,31 @@ export const BomDetail: React.FC = () => {
         <div>
           <div className="flex items-center justify-between gap-3 mb-1">
             <label className="text-sm font-medium text-slate-700 shrink-0">导入预览（全部）</label>
-            <button
-              type="button"
-              onClick={handleClearImportPreview}
-              disabled={!pastedText.trim() && previewRows.length === 0}
-              className="inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium rounded-md border border-slate-300 text-slate-600 hover:bg-slate-100 disabled:opacity-40 disabled:pointer-events-none"
-            >
-              <Trash2 size={14} className="shrink-0" />
-              清空
-            </button>
+            <div className="flex items-center gap-2 shrink-0">
+              <button
+                type="button"
+                onClick={() => void handleCopyBomListToClipboard()}
+                disabled={!canCopyBomListToClipboard || clipboardListBusy}
+                className="inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium rounded-md border border-slate-300 text-slate-600 hover:bg-slate-100 disabled:opacity-40 disabled:pointer-events-none"
+                title={
+                  !isNew && batchId
+                    ? '将已保存的 BOM 表复制为制表符分隔文本（与 BOM 管理「复制清单」一致）'
+                    : '将当前导入预览中的清单复制为制表符分隔文本'
+                }
+              >
+                <ClipboardCopy size={14} className="shrink-0" />
+                {clipboardListBusy ? '复制中…' : '复制清单'}
+              </button>
+              <button
+                type="button"
+                onClick={handleClearImportPreview}
+                disabled={!pastedText.trim() && previewRows.length === 0}
+                className="inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium rounded-md border border-slate-300 text-slate-600 hover:bg-slate-100 disabled:opacity-40 disabled:pointer-events-none"
+              >
+                <Trash2 size={14} className="shrink-0" />
+                清空
+              </button>
+            </div>
           </div>
           {previewHeaderError ? (
             <div className="mb-2 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">
@@ -1523,7 +1605,11 @@ export const BomDetail: React.FC = () => {
                     ) : null}
                     <button
                       type="button"
-                      disabled={eligiblePullCount === 0 || downloadBusy !== null || hasActiveDownloadJob}
+                      disabled={
+                        eligiblePullCount === 0 ||
+                        downloadBusy !== null ||
+                        allEligiblePullsCoveredByActiveDownloadJobs
+                      }
                       onClick={() => void handleDownloadAllIt()}
                       className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg border border-indigo-300 bg-white text-indigo-900 text-sm font-medium hover:bg-indigo-100 disabled:opacity-50 disabled:cursor-not-allowed"
                     >
@@ -1660,7 +1746,7 @@ export const BomDetail: React.FC = () => {
                       disabled={
                         eligibleExtSyncCount === 0 ||
                         extSyncBusy !== null ||
-                        hasActiveExtSyncJob ||
+                        allEligibleExtSyncsCoveredByActiveJobs ||
                         !productExtArtifactoryRepo.trim()
                       }
                       onClick={() => void handleExtSyncAll()}
@@ -2001,7 +2087,11 @@ export const BomDetail: React.FC = () => {
                             {canPullThis ? (
                               <button
                                 type="button"
-                                disabled={downloadBusy !== null || hasActiveDownloadJob}
+                                disabled={
+                                  downloadBusy === 'all' ||
+                                  downloadBusy === lr.id ||
+                                  activeDownloadRowIds.has(lr.id)
+                                }
                                 onClick={() => void handleDownloadOneIt(lr.id)}
                                 title="拉取本行 内部 Artifactory 制品"
                                 className="inline-flex items-center justify-center p-1 rounded-md border border-indigo-200 bg-indigo-50 text-indigo-800 hover:bg-indigo-100 disabled:opacity-45 disabled:cursor-not-allowed"
@@ -2021,8 +2111,9 @@ export const BomDetail: React.FC = () => {
                               <button
                                 type="button"
                                 disabled={
-                                  extSyncBusy !== null ||
-                                  hasActiveExtSyncJob ||
+                                  extSyncBusy === 'all' ||
+                                  extSyncBusy === lr.id ||
+                                  activeExtSyncRowIds.has(lr.id) ||
                                   !productExtArtifactoryRepo.trim()
                                 }
                                 onClick={() => void handleExtSyncOne(lr.id)}

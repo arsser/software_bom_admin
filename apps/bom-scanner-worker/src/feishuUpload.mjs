@@ -55,7 +55,7 @@ function extractErrorDetail(err) {
  * @param {Record<string, unknown>} parsed
  * @param {string} [rawText] 原始响应体
  */
-function feishuApiFailDetail(op, httpStatus, parsed, rawText) {
+export function feishuApiFailDetail(op, httpStatus, parsed, rawText) {
   const p =
     parsed && typeof parsed === 'object' && parsed !== null
       ? /** @type {Record<string, unknown>} */ (parsed)

@@ -44,6 +44,7 @@ import {
 import { formatBytesHuman } from '../lib/bytesFormat';
 import { requestBomDistributeExtPull } from '../lib/bomDownloadJobs';
 import { requestBomFeishuScan } from '../lib/bomFeishuScan';
+import { fetchBomFeishuScanJobsForBatch, type BomFeishuScanJob } from '../lib/bomFeishuScanJobs';
 import { requestBomFeishuUpload, fetchBomFeishuUploadJobsForBatch, type BomFeishuUploadJob } from '../lib/bomFeishuUploadJobs';
 import { BomDataTableCell, headerIsDownloadColumn, headerIsMd5Column } from '../lib/bomTableCell';
 import { fetchProductDistributionSettings } from '../lib/products';
@@ -110,6 +111,12 @@ export const BomDistributePage: React.FC = () => {
   const [debugDialogTitle, setDebugDialogTitle] = useState('');
   const [activeFeishuJobs, setActiveFeishuJobs] = useState<BomFeishuUploadJob[]>([]);
   const feishuJobActive = activeFeishuJobs.some((j) => j.status === 'queued' || j.status === 'running');
+  const [activeFeishuScanJobs, setActiveFeishuScanJobs] = useState<BomFeishuScanJob[]>([]);
+  const hasActiveFeishuScanJob = useMemo(
+    () => activeFeishuScanJobs.some((j) => j.status === 'queued' || j.status === 'running'),
+    [activeFeishuScanJobs],
+  );
+  const prevHadActiveFeishuScanRef = useRef(false);
   /** 扫描时若飞书根下无版本名文件夹，是否自动 create_folder（与 Edge batchDir 规则一致） */
   const [feishuAutoCreateVersionFolder, setFeishuAutoCreateVersionFolder] = useState(false);
   const uploadSelectAllHeaderRef = useRef<HTMLInputElement>(null);
@@ -268,12 +275,14 @@ export const BomDistributePage: React.FC = () => {
         console.warn('WARN refreshBomRowStatusesForBatch', e instanceof Error ? e.message : String(e));
       }
 
-      const [rows, fJobs] = await Promise.all([
+      const [rows, fJobs, fScanJobs] = await Promise.all([
         fetchBomRows(batchId),
         fetchBomFeishuUploadJobsForBatch(batchId, 20),
+        fetchBomFeishuScanJobsForBatch(batchId, 20),
       ]);
       setLoadedBomRows(rows);
       setActiveFeishuJobs(fJobs);
+      setActiveFeishuScanJobs(fScanJobs);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -300,6 +309,23 @@ export const BomDistributePage: React.FC = () => {
     }, 3000);
     return () => window.clearInterval(id);
   }, [feishuJobActive, batchId]);
+
+  useEffect(() => {
+    if (!hasActiveFeishuScanJob || !batchId) return;
+    const id = window.setInterval(() => {
+      void fetchBomFeishuScanJobsForBatch(batchId, 20).then(setActiveFeishuScanJobs);
+    }, 1500);
+    return () => window.clearInterval(id);
+  }, [hasActiveFeishuScanJob, batchId]);
+
+  useEffect(() => {
+    const had = prevHadActiveFeishuScanRef.current;
+    prevHadActiveFeishuScanRef.current = hasActiveFeishuScanJob;
+    if (had && !hasActiveFeishuScanJob && batchId) {
+      void load();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hasActiveFeishuScanJob, batchId]);
 
   useEffect(() => {
     const byId = new Map(loadedBomRows.map((lr) => [lr.id, lr] as const));
@@ -487,11 +513,19 @@ export const BomDistributePage: React.FC = () => {
         alert(r.error);
         return;
       }
-      alert(
-        r.message ??
-          `扫描完成：与飞书一致 ${r.rows_present}，待上传或不一致 ${r.rows_absent}，无法对账 ${r.rows_error}（见表格「飞书扫描错误」）`,
-      );
-      await load();
+      if ('async' in r && r.async === true) {
+        alert(r.message ?? '已排队飞书扫描，由 bom-scanner-worker 执行；下方显示进度，完成后表格将自动刷新。');
+        const jobs = await fetchBomFeishuScanJobsForBatch(batchId, 20);
+        setActiveFeishuScanJobs(jobs);
+        return;
+      }
+      if (r.ok && 'rows_present' in r) {
+        alert(
+          r.message ??
+            `扫描完成：与飞书一致 ${r.rows_present}，待上传或不一致 ${r.rows_absent}，无法对账 ${r.rows_error}（见表格「飞书扫描错误」）`,
+        );
+        await load();
+      }
     } finally {
       setFeishuScanBusy(false);
     }
@@ -636,8 +670,9 @@ export const BomDistributePage: React.FC = () => {
           <div className="text-sm font-medium text-violet-950">飞书网盘 · 扫描 / 上传</div>
           <p className="text-xs text-violet-900/90">
             扫描：在飞书根目录下按版本名文件夹 +（组件或分组）+ 本地文件名 查找文件，读取飞书字节数，与{' '}
-            <code className="bg-violet-100/80 px-1 rounded text-[10px]">local_file</code> 索引比对文件名与大小；不经
-            worker、不用 MD5。上传：入队后由 worker 使用 upload_all（≤5MB）写入飞书，并自动创建版本/分组目录。
+            <code className="bg-violet-100/80 px-1 rounded text-[10px]">local_file</code> 索引比对文件名与大小；入队后由
+            bom-scanner-worker 执行（不用 BOM 行内 MD5 参与飞书路径计算，但需 MD5 对账本地索引）。上传：入队后由 worker 使用
+            upload_all（≤5MB）写入飞书，并自动创建版本/分组目录。
           </p>
           <div className="flex flex-wrap items-center gap-2 gap-x-3">
             <button
@@ -646,6 +681,7 @@ export const BomDistributePage: React.FC = () => {
                 !batchId ||
                 loadedBomRows.length === 0 ||
                 feishuScanBusy ||
+                hasActiveFeishuScanJob ||
                 !productFeishuRootFolderToken.trim()
               }
               onClick={() => void handleFeishuScan()}
@@ -659,7 +695,7 @@ export const BomDistributePage: React.FC = () => {
                 type="checkbox"
                 checked={feishuAutoCreateVersionFolder}
                 onChange={(e) => setFeishuAutoCreateVersionFolder(e.target.checked)}
-                disabled={feishuScanBusy || !productFeishuRootFolderToken.trim()}
+                disabled={feishuScanBusy || hasActiveFeishuScanJob || !productFeishuRootFolderToken.trim()}
                 className="rounded border-violet-400 text-violet-700 focus:ring-violet-500"
               />
               <span title="在配置的飞书根目录下，若无与当前版本名一致的文件夹，则先创建再扫描（文件夹名与扫描规则中的版本目录一致）">
@@ -712,6 +748,27 @@ export const BomDistributePage: React.FC = () => {
                 后台任务页
               </button>
               查看详情或取消。
+            </p>
+          ) : null}
+          {hasActiveFeishuScanJob ? (
+            <p className="text-xs text-amber-900 font-medium">
+              飞书扫描任务进行中（
+              {activeFeishuScanJobs
+                .filter((j) => j.status === 'queued' || j.status === 'running')
+                .map((j) => {
+                  const msg = j.message?.trim();
+                  const tail =
+                    j.status === 'running' && msg
+                      ? msg.length > 80
+                        ? `${msg.slice(0, 80)}…`
+                        : msg
+                      : j.status === 'running'
+                        ? '对账中…'
+                        : '排队中';
+                  return tail;
+                })
+                .join('；')}
+              ）；完成后本页将自动刷新 BOM 行状态。
             </p>
           ) : null}
           {!productFeishuRootFolderToken.trim() ? (

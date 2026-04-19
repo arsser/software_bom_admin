@@ -12,6 +12,32 @@ function log(...args) {
 
 const FEISHU_LIST_FOLDER_PAGE_SIZE = 50;
 
+/** 相邻两次「下载 URL 取大小」之间的间隔，降低 99991400 触发概率 */
+const FEISHU_SIZE_FETCH_GAP_MS = 280;
+
+/** 单次 HEAD/GET 遇频率限制时的退避（毫秒） */
+const FEISHU_SIZE_BACKOFF_MS = [700, 1400, 2800];
+
+function sleep(ms) {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
+/**
+ * @param {Response} res
+ * @param {string} bodyText
+ */
+function feishuResponseIsRateLimited(res, bodyText) {
+  if (res.status === 429) return true;
+  const t = String(bodyText ?? '');
+  if (t.includes('99991400') || t.includes('frequency limit') || t.includes('触发频率')) return true;
+  try {
+    const j = JSON.parse(t);
+    return j.code === 99991400 || j.code === 99991463;
+  } catch {
+    return false;
+  }
+}
+
 function safeTrim(s) {
   return String(s ?? '').trim();
 }
@@ -239,70 +265,79 @@ async function buildFileIndexUnder(accessToken, folderToken, prefix, index) {
  */
 async function fetchDriveBinaryFileSize(accessToken, fileToken) {
   const url = `https://open.feishu.cn/open-apis/drive/v1/files/${encodeURIComponent(fileToken)}/download`;
-  try {
-    const headRes = await fetch(url, {
-      method: 'HEAD',
-      headers: { Authorization: `Bearer ${accessToken}` },
-    });
-    if (headRes.ok) {
-      const cl = headRes.headers.get('content-length');
-      if (cl) {
-        const n = parseInt(cl, 10);
-        if (Number.isFinite(n) && n > 0) return n;
+  const auth = { Authorization: `Bearer ${accessToken}` };
+
+  for (let attempt = 0; attempt < FEISHU_SIZE_BACKOFF_MS.length; attempt++) {
+    try {
+      const headRes = await fetch(url, { method: 'HEAD', headers: auth });
+      const headText = headRes.ok ? '' : await headRes.text().catch(() => '');
+      if (feishuResponseIsRateLimited(headRes, headText)) {
+        const wait = FEISHU_SIZE_BACKOFF_MS[attempt] ?? 1000;
+        log('WARN feishu-scan file size HEAD rate limited, backoff ms=', wait, 'token=', String(fileToken).slice(0, 8));
+        await sleep(wait);
+        continue;
       }
-    }
-  } catch {
-    /* ignore */
-  }
-  try {
-    const res = await fetch(url, {
-      method: 'GET',
-      headers: {
-        Authorization: `Bearer ${accessToken}`,
-        Range: 'bytes=0-0',
-      },
-    });
-    const cr = res.headers.get('content-range');
-    if (cr) {
-      const m = cr.match(/\/(\d+)\s*$/);
-      if (m) {
-        const n = Number(m[1]);
-        if (Number.isFinite(n) && n >= 0) return n;
+      if (headRes.ok) {
+        const cl = headRes.headers.get('content-length');
+        if (cl) {
+          const n = parseInt(cl, 10);
+          if (Number.isFinite(n) && n > 0) return n;
+        }
       }
+    } catch {
+      /* ignore */
     }
-    if (res.ok) {
-      const cl = res.headers.get('content-length');
-      if (cl) {
-        const n = parseInt(cl, 10);
-        if (Number.isFinite(n) && n > 0) return n;
+
+    await sleep(120);
+
+    try {
+      const res = await fetch(url, {
+        method: 'GET',
+        headers: { ...auth, Range: 'bytes=0-0' },
+      });
+      const bodyText = res.ok ? '' : await res.text().catch(() => '');
+      if (feishuResponseIsRateLimited(res, bodyText)) {
+        const wait = FEISHU_SIZE_BACKOFF_MS[attempt] ?? 1000;
+        log('WARN feishu-scan file size GET rate limited, backoff ms=', wait, 'token=', String(fileToken).slice(0, 8));
+        await sleep(wait);
+        continue;
       }
+      const cr = res.headers.get('content-range');
+      if (cr) {
+        const m = cr.match(/\/(\d+)\s*$/);
+        if (m) {
+          const n = Number(m[1]);
+          if (Number.isFinite(n) && n >= 0) return n;
+        }
+      }
+      if (res.ok) {
+        const cl = res.headers.get('content-length');
+        if (cl) {
+          const n = parseInt(cl, 10);
+          if (Number.isFinite(n) && n > 0) return n;
+        }
+      }
+    } catch {
+      /* ignore */
     }
-  } catch {
-    /* ignore */
   }
   return null;
 }
 
 /**
+ * 串行 + 间隔拉取大小，避免并发 HEAD/GET download 触发飞书 99991400。
  * @param {string} accessToken
  * @param {string[]} tokens
- * @param {number} concurrency
  */
-async function fetchSizesForFileTokens(accessToken, tokens, concurrency) {
+async function fetchSizesForFileTokens(accessToken, tokens) {
   const uniq = [...new Set(tokens.map((t) => safeTrim(t)).filter(Boolean))];
   const out = new Map();
-  let idx = 0;
-  const workers = Math.min(Math.max(1, concurrency), uniq.length || 1);
-  const run = async () => {
-    for (;;) {
-      const i = idx++;
-      if (i >= uniq.length) return;
-      const tok = uniq[i];
-      const sz = await fetchDriveBinaryFileSize(accessToken, tok);
-      if (sz != null) out.set(tok, sz);
-    }
-  };
-  await Promise.all(new Array(workers).fill(0).map(() => run()));
+  for (let i = 0; i < uniq.length; i++) {
+    const tok = uniq[i];
+    const sz = await fetchDriveBinaryFileSize(accessToken, tok);
+    if (sz != null) out.set(tok, sz);
+    if (i < uniq.length - 1) await sleep(FEISHU_SIZE_FETCH_GAP_MS);
+  }
   return out;
 }
 
@@ -507,7 +542,7 @@ export async function executeFeishuScanJob(supabase, job) {
           }
 
           const tokensForSize = [...index.values()].map((h) => h.token).filter(Boolean);
-          const sizeByToken = await fetchSizesForFileTokens(accessToken, tokensForSize, 10);
+          const sizeByToken = await fetchSizesForFileTokens(accessToken, tokensForSize);
 
           let rowIdx = 0;
           for (const r of rows) {

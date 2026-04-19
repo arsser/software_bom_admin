@@ -104,7 +104,7 @@ const defaultJsonKeyMap: BomJsonKeyMap = {
   releaseBatch: ['批次', 'batch', 'releaseBatch', '发布批次'],
   moduleName: ['模块', 'module', '组件', 'moduleName'],
   groupSegment: ['分组', 'group', 'groupName', '组别'],
-  /** 读：任一键；数据治理迁移：仅保留首键「文件大小」为规范列（见 migration 20260419150000） */
+  /** 读：任一键；DB 同步/迁移：仅保留首键为规范列（见 migrations 20260419170000、20260419180000） */
   fileSizeBytes: ['文件大小', 'size_bytes', '远端大小'],
   extFileSizeBytes: ['ext_size_bytes', 'ext文件大小', 'extSize', 'ext大小'],
   remark: ['备注', 'note', 'remark'],

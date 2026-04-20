@@ -4,6 +4,7 @@ import {
   ArrowLeft,
   Download,
   FolderSearch,
+  Hourglass,
   Loader2,
   Package,
   RefreshCcw,
@@ -80,8 +81,8 @@ function rowGroupSegmentRaw(row: BomBatchRow['bom_row'], keyMap: BomJsonKeyMap):
  * 拉取 / 上传 按钮显示逻辑（分发页）：
  * - 表头「全部拉取」：至少一行可拉取时可点；文案为全表总行数、待拉取（本地非 verified_ok）、可拉取（待拉取且含有效 ext 链接）。
  * - 行内「拉取」：仅当本地非「校验通过」且存在有效 ext http(s) 链接时显示按钮；本地已通过则始终「—」。
- * - 行内「上传」：仅当 feishuRowEligibleForUploadStub 为真时显示按钮；本地已通过但飞书未扫描显示「…」；否则「—」。
- * - 「上传选中到飞书」：作用域 = 当前表格筛选后的行 ∩ 复选框勾选的行；仅对满足 feishuRowEligibleForUploadStub 的行入队 bom_feishu_upload_jobs。
+ * - 行内「上传」：仅当 feishuRowEligibleForUploadStub 为真时显示按钮；本地已通过但飞书未扫描显示「…」；否则「—」。若该行已在 bom_feishu_upload_jobs 的 queued/running 任务中，按钮 disabled（与 DB 一致，刷新不丢）。
+ * - 「上传选中到飞书」：作用域 = 当前表格筛选后的行 ∩ 复选框勾选的行；仅对满足条件且未被上述任务占用的行入队。
  */
 
 /** BOM 分发页：只读表格 + 本地/外部状态查看；拉取（外部 AF）；飞书上传经队列由 worker 执行 */
@@ -111,6 +112,15 @@ export const BomDistributePage: React.FC = () => {
   const [debugDialogTitle, setDebugDialogTitle] = useState('');
   const [activeFeishuJobs, setActiveFeishuJobs] = useState<BomFeishuUploadJob[]>([]);
   const feishuJobActive = activeFeishuJobs.some((j) => j.status === 'queued' || j.status === 'running');
+  /** 已在飞书上传任务中（queued/running）的行：来自 DB，刷新页面后仍有效；仅锁这些行，不整页禁用 */
+  const feishuUploadLockedRowIds = useMemo(() => {
+    const s = new Set<string>();
+    for (const j of activeFeishuJobs) {
+      if (j.status !== 'queued' && j.status !== 'running') continue;
+      for (const id of j.rowIds) s.add(id);
+    }
+    return s;
+  }, [activeFeishuJobs]);
   const [activeFeishuScanJobs, setActiveFeishuScanJobs] = useState<BomFeishuScanJob[]>([]);
   const hasActiveFeishuScanJob = useMemo(
     () => activeFeishuScanJobs.some((j) => j.status === 'queued' || j.status === 'running'),
@@ -211,21 +221,30 @@ export const BomDistributePage: React.FC = () => {
       ).length,
     [loadedBomRows, tableKeyMap, localInfoByMd5, localIndexReady],
   );
-  /** 全表：已本地校验通过且飞书扫描结论为「待上传/异常」的行数 */
+  /** 全表：状态上可上传且当前未被飞书上传任务占用的行数 */
   const feishuUploadStubCount = useMemo(
-    () => loadedBomRows.filter((lr) => feishuRowEligibleForUploadStub(lr.status)).length,
-    [loadedBomRows],
+    () =>
+      loadedBomRows.filter(
+        (lr) => feishuRowEligibleForUploadStub(lr.status) && !feishuUploadLockedRowIds.has(lr.id),
+      ).length,
+    [loadedBomRows, feishuUploadLockedRowIds],
   );
-  /** 当前筛选列表内、满足行内「上传」条件的行数 */
+  /** 当前筛选列表内、同上 */
   const feishuUploadStubCountFiltered = useMemo(
-    () => filteredStoredBomRows.filter((lr) => feishuRowEligibleForUploadStub(lr.status)).length,
-    [filteredStoredBomRows],
+    () =>
+      filteredStoredBomRows.filter(
+        (lr) => feishuRowEligibleForUploadStub(lr.status) && !feishuUploadLockedRowIds.has(lr.id),
+      ).length,
+    [filteredStoredBomRows, feishuUploadLockedRowIds],
   );
 
-  /** 当前筛选下列内上传按钮会显示的行（与复选框可勾选范围一致） */
+  /** 当前筛选下列内上传按钮会显示的行（与复选框可勾选范围一致；不含已在队列/执行中的行） */
   const uploadSelectableFilteredRows = useMemo(
-    () => filteredStoredBomRows.filter((lr) => feishuRowEligibleForUploadStub(lr.status)),
-    [filteredStoredBomRows],
+    () =>
+      filteredStoredBomRows.filter(
+        (lr) => feishuRowEligibleForUploadStub(lr.status) && !feishuUploadLockedRowIds.has(lr.id),
+      ),
+    [filteredStoredBomRows, feishuUploadLockedRowIds],
   );
 
   const uploadScopeRows = useMemo(
@@ -235,6 +254,11 @@ export const BomDistributePage: React.FC = () => {
   const uploadScopeEligibleRows = useMemo(
     () => uploadScopeRows.filter((lr) => feishuRowEligibleForUploadStub(lr.status)),
     [uploadScopeRows],
+  );
+  /** 选中范围内、状态可上传且尚未被后台任务占用的行（用于「上传选中」是否可点） */
+  const uploadScopeEligibleUnlockedRows = useMemo(
+    () => uploadScopeEligibleRows.filter((lr) => !feishuUploadLockedRowIds.has(lr.id)),
+    [uploadScopeEligibleRows, feishuUploadLockedRowIds],
   );
 
   const selectedUploadableInFilterCount = useMemo(
@@ -333,7 +357,7 @@ export const BomDistributePage: React.FC = () => {
       const next = new Set<string>();
       for (const id of prev) {
         const lr = byId.get(id);
-        if (lr && feishuRowEligibleForUploadStub(lr.status)) next.add(id);
+        if (lr && feishuRowEligibleForUploadStub(lr.status) && !feishuUploadLockedRowIds.has(id)) next.add(id);
       }
       if (next.size === prev.size) {
         let same = true;
@@ -347,7 +371,7 @@ export const BomDistributePage: React.FC = () => {
       }
       return next;
     });
-  }, [loadedBomRows]);
+  }, [loadedBomRows, feishuUploadLockedRowIds]);
 
   useEffect(() => {
     if (groupSegmentFilter === GROUP_FILTER_ALL) return;
@@ -437,7 +461,7 @@ export const BomDistributePage: React.FC = () => {
 
   const toggleSelectAllFilteredForUpload = () => {
     setSelectedUploadRowIds((prev) => {
-      const selectable = filteredStoredBomRows.filter((lr) => feishuRowEligibleForUploadStub(lr.status));
+      const selectable = uploadSelectableFilteredRows;
       if (selectable.length === 0) return prev;
       const allOn = selectable.every((lr) => prev.has(lr.id));
       const next = new Set(prev);
@@ -451,8 +475,7 @@ export const BomDistributePage: React.FC = () => {
   };
 
   const selectEligibleInFilteredView = () => {
-    const ids = filteredStoredBomRows.filter((lr) => feishuRowEligibleForUploadStub(lr.status)).map((lr) => lr.id);
-    setSelectedUploadRowIds(new Set(ids));
+    setSelectedUploadRowIds(new Set(uploadSelectableFilteredRows.map((lr) => lr.id)));
   };
 
   const clearUploadSelection = () => setSelectedUploadRowIds(new Set());
@@ -538,11 +561,16 @@ export const BomDistributePage: React.FC = () => {
       alert('所选行中没有满足上传条件的行（需本地校验通过且飞书为 absent/error）。');
       return;
     }
+    const unlocked = eligible.filter((lr) => !feishuUploadLockedRowIds.has(lr.id));
+    if (unlocked.length === 0) {
+      alert('所选行均已处于飞书上传队列或执行中，请稍候或点击「刷新」后再试。');
+      return;
+    }
     setFeishuUploadBusy(true);
     try {
       const jobId = await requestBomFeishuUpload(
         batchId,
-        eligible.map((r) => r.id),
+        unlocked.map((r) => r.id),
       );
       alert(
         `已创建飞书上传任务（排队由 bom-scanner-worker 执行）。任务 ID：${jobId}\n将自动创建版本目录/分组子目录（与扫描规则一致）；≤5MB 整文件上传，>5MB 自动分片上传（支持断点续传）。`,
@@ -707,20 +735,34 @@ export const BomDistributePage: React.FC = () => {
               disabled={
                 feishuUploadBusy ||
                 !productFeishuRootFolderToken.trim() ||
-                uploadScopeRows.length === 0
+                uploadScopeRows.length === 0 ||
+                uploadScopeEligibleUnlockedRows.length === 0
               }
               title={
                 uploadScopeRows.length === 0
                   ? '请先在表格中勾选要上传的行（须为当前筛选后的列表内）'
                   : uploadScopeEligibleRows.length === 0
                     ? '所选行中暂无满足上传条件的行（需本地校验通过且飞书已扫描为待上传或扫描异常）'
-                    : '上传范围：当前筛选 ∩ 勾选；仅实际上传满足条件的行（worker 按队列顺序执行，可与其它任务并行排队）'
+                    : uploadScopeEligibleUnlockedRows.length === 0
+                      ? '所选可上传行均已处于飞书上传队列或执行中，请稍候'
+                      : '上传范围：当前筛选 ∩ 勾选；仅实际上传满足条件的行（worker 按队列顺序执行，可与其它任务并行排队）'
               }
               onClick={() => void handleFeishuUploadRows(uploadScopeRows)}
               className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg border border-violet-300 bg-white text-violet-950 text-sm font-medium hover:bg-violet-100 disabled:opacity-50"
             >
-              {feishuUploadBusy ? <Loader2 size={16} className="animate-spin" /> : <UploadCloud size={16} />}
-              上传选中到飞书（可执行 {uploadScopeEligibleRows.length} / 已选 {uploadScopeRows.length}）
+              {feishuUploadBusy ||
+              !productFeishuRootFolderToken.trim() ||
+              uploadScopeRows.length === 0 ||
+              uploadScopeEligibleUnlockedRows.length === 0 ? (
+                <Hourglass
+                  size={16}
+                  className={feishuUploadBusy ? 'animate-pulse text-violet-800' : 'text-violet-800'}
+                  aria-hidden
+                />
+              ) : (
+                <UploadCloud size={16} aria-hidden />
+              )}
+              上传选中到飞书（可执行 {uploadScopeEligibleUnlockedRows.length} / 已选 {uploadScopeRows.length}）
             </button>
           </div>
           {loadedBomRows.length > 0 ? (
@@ -974,6 +1016,11 @@ export const BomDistributePage: React.FC = () => {
                           .filter(Boolean)
                           .join('\n') || undefined;
                       const canFeishuStubRow = feishuRowEligibleForUploadStub(lr.status);
+                      const rowFeishuUploadLocked = feishuUploadLockedRowIds.has(lr.id);
+                      const rowUploadDisabled =
+                        feishuUploadBusy ||
+                        !productFeishuRootFolderToken.trim() ||
+                        rowFeishuUploadLocked;
                       const localVerifiedOk = lr.status.local === 'verified_ok';
                       const canExternalPullRow = rowEligibleForDistributeExternalPull(
                         lr,
@@ -1004,15 +1051,19 @@ export const BomDistributePage: React.FC = () => {
                           <td className="px-3 py-2 align-middle w-10 text-center">
                             <input
                               type="checkbox"
-                              disabled={!canFeishuStubRow}
-                              checked={canFeishuStubRow && selectedUploadRowIds.has(lr.id)}
+                              disabled={!canFeishuStubRow || rowFeishuUploadLocked}
+                              checked={
+                                canFeishuStubRow && !rowFeishuUploadLocked && selectedUploadRowIds.has(lr.id)
+                              }
                               onChange={() => {
-                                if (canFeishuStubRow) toggleUploadRowSelected(lr.id);
+                                if (canFeishuStubRow && !rowFeishuUploadLocked) toggleUploadRowSelected(lr.id);
                               }}
                               title={
-                                canFeishuStubRow
-                                  ? '纳入「上传选中到飞书」范围'
-                                  : '与本列上传按钮一致：仅本地校验通过且飞书已扫为待上传或扫描异常时可勾选'
+                                !canFeishuStubRow
+                                  ? '与本列上传按钮一致：仅本地校验通过且飞书已扫为待上传或扫描异常时可勾选'
+                                  : rowFeishuUploadLocked
+                                    ? '该行已在飞书上传队列或执行中'
+                                    : '纳入「上传选中到飞书」范围'
                               }
                               className="h-3.5 w-3.5 rounded border-slate-400 text-indigo-600 focus:ring-indigo-500 disabled:opacity-40 disabled:cursor-not-allowed"
                               aria-label={`选择第 ${i + 1} 行`}
@@ -1048,12 +1099,28 @@ export const BomDistributePage: React.FC = () => {
                             {canFeishuStubRow ? (
                               <button
                                 type="button"
-                                disabled={feishuUploadBusy}
+                                disabled={rowUploadDisabled}
                                 onClick={() => void handleFeishuUploadRows([lr])}
-                                title="上传到飞书网盘（排队由 worker 按顺序执行）；需先扫描且飞书侧非已对齐"
+                                title={
+                                  rowFeishuUploadLocked
+                                    ? '该行已在飞书上传队列或执行中，刷新页面后仍保持禁用'
+                                    : !productFeishuRootFolderToken.trim()
+                                      ? '请先在产品分发配置中配置飞书云盘根目录 folder_token'
+                                      : '上传到飞书网盘（排队由 worker 按顺序执行）；需先扫描且飞书侧非已对齐'
+                                }
                                 className="inline-flex items-center justify-center p-1 rounded-md border border-violet-200 bg-violet-50 text-violet-900 hover:bg-violet-100 disabled:opacity-50"
                               >
-                                <UploadCloud size={14} />
+                                {rowUploadDisabled ? (
+                                  <Hourglass
+                                    size={14}
+                                    className={
+                                      feishuUploadBusy ? 'animate-pulse text-violet-800' : 'text-violet-800'
+                                    }
+                                    aria-hidden
+                                  />
+                                ) : (
+                                  <UploadCloud size={14} aria-hidden />
+                                )}
                               </button>
                             ) : lr.status.local === 'verified_ok' &&
                               (lr.status.feishu == null || lr.status.feishu === 'not_scanned') ? (

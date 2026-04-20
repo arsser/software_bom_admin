@@ -5,6 +5,7 @@ import {
   ArrowLeft,
   ClipboardCopy,
   Hash,
+  Hourglass,
   Search,
   Upload,
   Download,
@@ -1611,7 +1612,19 @@ export const BomDetail: React.FC = () => {
                       onClick={() => void handleDownloadAllIt()}
                       className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg border border-indigo-300 bg-white text-indigo-900 text-sm font-medium hover:bg-indigo-100 disabled:opacity-50 disabled:cursor-not-allowed"
                     >
-                      {downloadBusy === 'all' ? <Loader2 size={16} className="animate-spin" /> : <Download size={16} />}
+                      {eligiblePullCount === 0 ||
+                      downloadBusy !== null ||
+                      allEligiblePullsCoveredByActiveDownloadJobs ? (
+                        <Hourglass
+                          size={16}
+                          className={
+                            downloadBusy !== null ? 'animate-pulse text-indigo-800' : 'text-indigo-800'
+                          }
+                          aria-hidden
+                        />
+                      ) : (
+                        <Download size={16} aria-hidden />
+                      )}
                       拉取（{eligiblePullCount}）
                     </button>
                   </div>
@@ -1750,10 +1763,19 @@ export const BomDetail: React.FC = () => {
                       onClick={() => void handleExtSyncAll()}
                       className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg border border-emerald-300 bg-white text-emerald-900 text-sm font-medium hover:bg-emerald-100 disabled:opacity-50 disabled:cursor-not-allowed"
                     >
-                      {extSyncBusy === 'all' ? (
-                        <Loader2 size={16} className="animate-spin" />
+                      {eligibleExtSyncCount === 0 ||
+                      extSyncBusy !== null ||
+                      allEligibleExtSyncsCoveredByActiveJobs ||
+                      !productExtArtifactoryRepo.trim() ? (
+                        <Hourglass
+                          size={16}
+                          className={
+                            extSyncBusy !== null ? 'animate-pulse text-emerald-900' : 'text-emerald-900'
+                          }
+                          aria-hidden
+                        />
                       ) : (
-                        <Upload size={16} />
+                        <Upload size={16} aria-hidden />
                       )}
                       上传（{eligibleExtSyncCount}）
                     </button>
@@ -2050,6 +2072,17 @@ export const BomDetail: React.FC = () => {
                         ]
                           .filter(Boolean)
                           .join('\n') || undefined;
+                      const rowPullDisabled =
+                        downloadBusy === 'all' ||
+                        downloadBusy === lr.id ||
+                        activeDownloadRowIds.has(lr.id);
+                      const rowPullClientBusy = downloadBusy === 'all' || downloadBusy === lr.id;
+                      const rowExtDisabled =
+                        extSyncBusy === 'all' ||
+                        extSyncBusy === lr.id ||
+                        activeExtSyncRowIds.has(lr.id) ||
+                        !productExtArtifactoryRepo.trim();
+                      const rowExtClientBusy = extSyncBusy === 'all' || extSyncBusy === lr.id;
                       return (
                         <tr key={lr.id} className="border-b last:border-b-0">
                           <td className="px-3 py-2 text-slate-500 whitespace-nowrap align-middle w-12">{i + 1}</td>
@@ -2085,19 +2118,23 @@ export const BomDetail: React.FC = () => {
                             {canPullThis ? (
                               <button
                                 type="button"
-                                disabled={
-                                  downloadBusy === 'all' ||
-                                  downloadBusy === lr.id ||
-                                  activeDownloadRowIds.has(lr.id)
-                                }
+                                disabled={rowPullDisabled}
                                 onClick={() => void handleDownloadOneIt(lr.id)}
                                 title="拉取本行 内部 Artifactory 制品"
                                 className="inline-flex items-center justify-center p-1 rounded-md border border-indigo-200 bg-indigo-50 text-indigo-800 hover:bg-indigo-100 disabled:opacity-45 disabled:cursor-not-allowed"
                               >
-                                {downloadBusy === lr.id ? (
-                                  <Loader2 size={14} className="animate-spin" />
+                                {rowPullDisabled ? (
+                                  <Hourglass
+                                    size={14}
+                                    className={
+                                      rowPullClientBusy
+                                        ? 'animate-pulse text-indigo-800'
+                                        : 'text-indigo-800'
+                                    }
+                                    aria-hidden
+                                  />
                                 ) : (
-                                  <Download size={14} />
+                                  <Download size={14} aria-hidden />
                                 )}
                               </button>
                             ) : (
@@ -2108,20 +2145,23 @@ export const BomDetail: React.FC = () => {
                             {canExtSyncThisRow ? (
                               <button
                                 type="button"
-                                disabled={
-                                  extSyncBusy === 'all' ||
-                                  extSyncBusy === lr.id ||
-                                  activeExtSyncRowIds.has(lr.id) ||
-                                  !productExtArtifactoryRepo.trim()
-                                }
+                                disabled={rowExtDisabled}
                                 onClick={() => void handleExtSyncOne(lr.id)}
                                 title="本地已有文件：查重并 Copy 到 ext 版本目录（必要时排队 PUT）；无本地文件请用顶部「外部 Artifactory 全部检查」"
                                 className="inline-flex items-center justify-center p-1 rounded-md border border-emerald-200 bg-emerald-50 text-emerald-900 hover:bg-emerald-100 disabled:opacity-45 disabled:cursor-not-allowed"
                               >
-                                {extSyncBusy === lr.id ? (
-                                  <Loader2 size={14} className="animate-spin" />
+                                {rowExtDisabled ? (
+                                  <Hourglass
+                                    size={14}
+                                    className={
+                                      rowExtClientBusy
+                                        ? 'animate-pulse text-emerald-900'
+                                        : 'text-emerald-900'
+                                    }
+                                    aria-hidden
+                                  />
                                 ) : (
-                                  <Upload size={14} />
+                                  <Upload size={14} aria-hidden />
                                 )}
                               </button>
                             ) : (

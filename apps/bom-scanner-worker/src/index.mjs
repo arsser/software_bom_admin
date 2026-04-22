@@ -323,6 +323,28 @@ function safeFlatFilename(name) {
   return cleaned.slice(0, 200) || 'download.bin';
 }
 
+/** @param {number} bytes */
+function formatBytes(bytes) {
+  const n = Number(bytes);
+  if (!Number.isFinite(n) || n < 0) return '0B';
+  if (n < 1024) return `${Math.floor(n)}B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)}KB`;
+  if (n < 1024 * 1024 * 1024) return `${(n / (1024 * 1024)).toFixed(1)}MB`;
+  return `${(n / (1024 * 1024 * 1024)).toFixed(2)}GB`;
+}
+
+/** @param {number} seconds */
+function formatEtaSeconds(seconds) {
+  const sec = Math.max(0, Math.ceil(seconds));
+  if (sec < 60) return `${sec}秒`;
+  const min = Math.floor(sec / 60);
+  const remSec = sec % 60;
+  if (min < 60) return remSec > 0 ? `${min}分${remSec}秒` : `${min}分`;
+  const hour = Math.floor(min / 60);
+  const remMin = min % 60;
+  return remMin > 0 ? `${hour}时${remMin}分` : `${hour}时`;
+}
+
 /** 日志用：不输出完整密钥 */
 function apiKeyLogHint(key) {
   const k = String(key ?? '').trim();
@@ -814,6 +836,7 @@ async function executeDownloadJob(supabase, rootAbs, job, tuning) {
 
       const destNameGuess = safeFlatFilename(urlPathBasename(url));
       let lastFlush = 0;
+      const rowDownloadStartedAt = Date.now();
       await patchDownloadJob(supabase, jobId, {
         running_row_id: rowId,
         running_file_name: destNameGuess,
@@ -852,10 +875,21 @@ async function executeDownloadJob(supabase, rootAbs, job, tuning) {
           const now = Date.now();
           if (now - lastFlush < heartbeatMs) return;
           lastFlush = now;
+          const elapsedMs = now - rowDownloadStartedAt;
+          let etaText = '预计剩余 --';
+          if (runningTotal != null && runningDownloaded >= runningTotal) {
+            etaText = '预计剩余 0秒';
+          } else if (runningTotal != null && runningDownloaded > 0 && elapsedMs >= 1500) {
+            const speedBytesPerSec = runningDownloaded / (elapsedMs / 1000);
+            if (speedBytesPerSec > 0) {
+              const etaSec = (runningTotal - runningDownloaded) / speedBytesPerSec;
+              etaText = `预计剩余 ${formatEtaSeconds(etaSec)}`;
+            }
+          }
           const msg =
             runningTotal != null
-              ? `${completed + 1}/${total} 下载中 ${fileName} ${runningDownloaded}/${runningTotal} B`
-              : `${completed + 1}/${total} 下载中 ${fileName} ${runningDownloaded} B`;
+              ? `${completed + 1}/${total} 下载中…（${formatBytes(runningDownloaded)}/${formatBytes(runningTotal)}，${etaText}） 文件：${fileName}`
+              : `${completed + 1}/${total} 下载中…（${formatBytes(runningDownloaded)}） 文件：${fileName}`;
           void patchDownloadJob(supabase, jobId, {
             running_bytes_downloaded: runningDownloaded,
             running_bytes_total: runningTotal,

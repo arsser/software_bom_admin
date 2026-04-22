@@ -881,6 +881,7 @@ export async function executeFeishuUploadJob(supabase, rootAbs, job, tuning) {
     let nOk = 0;
     let nFail = 0;
     let nSkip = 0;
+    let bytesDoneTotal = 0;
     /** @type {string[]} */
     const failSamples = [];
     const rememberFailSample = (msg) => {
@@ -907,7 +908,10 @@ export async function executeFeishuUploadJob(supabase, rootAbs, job, tuning) {
         lastJobMessage = `${completed}/${total} 跳过（状态已变或非上传目标）`;
         await patchFeishuUploadJob(supabase, jobId, {
           progress_current: completed,
+          bytes_downloaded_total: bytesDoneTotal,
           running_row_id: null,
+          running_bytes_downloaded: 0,
+          running_bytes_total: null,
           heartbeat_at: new Date().toISOString(),
           last_message: lastJobMessage,
         });
@@ -927,7 +931,10 @@ export async function executeFeishuUploadJob(supabase, rootAbs, job, tuning) {
         lastJobMessage = `${completed}/${total} ${reason}`;
         await patchFeishuUploadJob(supabase, jobId, {
           progress_current: completed,
+          bytes_downloaded_total: bytesDoneTotal,
           running_row_id: null,
+          running_bytes_downloaded: 0,
+          running_bytes_total: null,
           heartbeat_at: new Date().toISOString(),
           last_message: lastJobMessage,
         });
@@ -946,7 +953,10 @@ export async function executeFeishuUploadJob(supabase, rootAbs, job, tuning) {
         lastJobMessage = `${completed}/${total} 缺少 MD5`;
         await patchFeishuUploadJob(supabase, jobId, {
           progress_current: completed,
+          bytes_downloaded_total: bytesDoneTotal,
           running_row_id: null,
+          running_bytes_downloaded: 0,
+          running_bytes_total: null,
           heartbeat_at: new Date().toISOString(),
           last_message: lastJobMessage,
         });
@@ -963,7 +973,10 @@ export async function executeFeishuUploadJob(supabase, rootAbs, job, tuning) {
         lastJobMessage = `${completed}/${total} 本地无文件`;
         await patchFeishuUploadJob(supabase, jobId, {
           progress_current: completed,
+          bytes_downloaded_total: bytesDoneTotal,
           running_row_id: null,
+          running_bytes_downloaded: 0,
+          running_bytes_total: null,
           heartbeat_at: new Date().toISOString(),
           last_message: lastJobMessage,
         });
@@ -971,6 +984,47 @@ export async function executeFeishuUploadJob(supabase, rootAbs, job, tuning) {
       }
 
       const diskAbs = path.join(rootAbs, relPathDisk.split('/').join(path.sep));
+      let fileStat;
+      try {
+        fileStat = await fs.stat(diskAbs);
+      } catch {
+        nFail += 1;
+        completed += 1;
+        const reason = `本地文件不存在：${diskAbs}`;
+        rememberFailSample(reason);
+        await patchBomRowFeishuUploadError(supabase, rowId, reason);
+        lastJobMessage = `${completed}/${total} 本地无文件`;
+        await patchFeishuUploadJob(supabase, jobId, {
+          progress_current: completed,
+          bytes_downloaded_total: bytesDoneTotal,
+          running_row_id: null,
+          running_bytes_downloaded: 0,
+          running_bytes_total: null,
+          heartbeat_at: new Date().toISOString(),
+          last_message: lastJobMessage,
+        });
+        continue;
+      }
+      if (!fileStat.isFile()) {
+        nFail += 1;
+        completed += 1;
+        const reason = '本地路径不是文件';
+        rememberFailSample(reason);
+        await patchBomRowFeishuUploadError(supabase, rowId, reason);
+        lastJobMessage = `${completed}/${total} 本地路径不是文件`;
+        await patchFeishuUploadJob(supabase, jobId, {
+          progress_current: completed,
+          bytes_downloaded_total: bytesDoneTotal,
+          running_row_id: null,
+          running_bytes_downloaded: 0,
+          running_bytes_total: null,
+          heartbeat_at: new Date().toISOString(),
+          last_message: lastJobMessage,
+        });
+        continue;
+      }
+      const rowTotalBytes = Math.max(0, Number(fileStat.size) || 0);
+
       const fileName = safeFlatFilename(path.basename(diskAbs));
       const middleDir = resolveMiddleDirFromRow(bomRow, keyMap);
       const pathSegments = middleDir ? [batchDir, middleDir] : [batchDir];
@@ -984,9 +1038,12 @@ export async function executeFeishuUploadJob(supabase, rootAbs, job, tuning) {
         tokenStats: feishuToken.stats(),
       });
 
-      lastJobMessage = `${completed + 1}/${total} 上传中…（分片 1/1） 文件：${fileName}`;
+      lastJobMessage = `${completed + 1}/${total} 上传中…（分片 1/1，${formatBytes(0)}/${formatBytes(rowTotalBytes)}，预计剩余 --） 文件：${fileName}`;
       await patchFeishuUploadJob(supabase, jobId, {
         running_row_id: rowId,
+        running_bytes_downloaded: 0,
+        running_bytes_total: rowTotalBytes,
+        bytes_downloaded_total: bytesDoneTotal,
         heartbeat_at: new Date().toISOString(),
         last_message: lastJobMessage,
       });
@@ -994,13 +1051,6 @@ export async function executeFeishuUploadJob(supabase, rootAbs, job, tuning) {
       rowFeishuTry: for (let feishuTokenAttempt = 0; feishuTokenAttempt < 2; feishuTokenAttempt += 1) {
         currentRowAbort = new AbortController();
         try {
-          let fileStat;
-          try {
-            fileStat = await fs.stat(diskAbs);
-          } catch {
-            throw new Error(`本地文件不存在：${diskAbs}`);
-          }
-          if (!fileStat.isFile()) throw new Error('本地路径不是文件');
           const rowUploadStartedAt = Date.now();
 
           const token = await getToken();
@@ -1043,6 +1093,9 @@ export async function executeFeishuUploadJob(supabase, rootAbs, job, tuning) {
                 }
                 lastJobMessage = `${completed + 1}/${total} 上传中…（分片 ${seq + 1}/${blockNum}，${formatBytes(bytesUploaded)}/${formatBytes(fileStat.size)}，${etaText}） 文件：${fileName}`;
                 void patchFeishuUploadJob(supabase, jobId, {
+                  running_bytes_downloaded: bytesUploaded,
+                  running_bytes_total: fileStat.size,
+                  bytes_downloaded_total: bytesDoneTotal + bytesUploaded,
                   heartbeat_at: new Date().toISOString(),
                   last_message: lastJobMessage,
                 });
@@ -1060,10 +1113,14 @@ export async function executeFeishuUploadJob(supabase, rootAbs, job, tuning) {
 
           nOk += 1;
           completed += 1;
+          bytesDoneTotal += sizeBytes;
           lastJobMessage = `${completed}/${total} OK（${formatBytes(sizeBytes)}） 文件：${fileName}`;
           await patchFeishuUploadJob(supabase, jobId, {
             progress_current: completed,
+            bytes_downloaded_total: bytesDoneTotal,
             running_row_id: null,
+            running_bytes_downloaded: 0,
+            running_bytes_total: null,
             heartbeat_at: new Date().toISOString(),
             last_message: lastJobMessage,
           });
@@ -1100,7 +1157,10 @@ export async function executeFeishuUploadJob(supabase, rootAbs, job, tuning) {
           lastJobMessage = `${completed}/${total} 失败（${msg}） 文件：${fileName}`.slice(0, 2000);
           await patchFeishuUploadJob(supabase, jobId, {
             progress_current: completed,
+            bytes_downloaded_total: bytesDoneTotal,
             running_row_id: null,
+            running_bytes_downloaded: 0,
+            running_bytes_total: null,
             heartbeat_at: new Date().toISOString(),
             last_message: lastJobMessage,
           });
@@ -1120,6 +1180,10 @@ export async function executeFeishuUploadJob(supabase, rootAbs, job, tuning) {
         last_message: `用户取消（已完成 ${completed}/${total}）`.slice(0, 2000),
         cancel_requested: false,
         running_row_id: null,
+        running_bytes_downloaded: 0,
+        running_bytes_total: null,
+        bytes_downloaded_total: bytesDoneTotal,
+        progress_current: completed,
       });
       log('feishu-upload-job cancelled', jobId);
       return;
@@ -1142,6 +1206,9 @@ export async function executeFeishuUploadJob(supabase, rootAbs, job, tuning) {
       finished_at: new Date().toISOString(),
       last_message: summary.slice(0, 2000),
       running_row_id: null,
+      running_bytes_downloaded: 0,
+      running_bytes_total: null,
+      bytes_downloaded_total: bytesDoneTotal,
       cancel_requested: false,
     });
     log('feishu-upload-job done', jobId, { status: finalStatus, summary });

@@ -25,6 +25,7 @@ import {
   BOM_EXT_SYNC_JOB_STATUS_LABEL,
   cancelBomExtSyncJob,
   extSyncJobProgressPercent,
+  formatExtSyncJobBytesLine,
   fetchBomExtSyncJobsForUser,
   type BomExtSyncJob,
   type BomExtSyncJobStatus,
@@ -33,6 +34,7 @@ import {
   BOM_FEISHU_UPLOAD_JOB_STATUS_LABEL,
   cancelBomFeishuUploadJob,
   feishuUploadJobProgressPercent,
+  formatFeishuUploadJobBytesLine,
   fetchBomFeishuUploadJobsForUser,
   type BomFeishuUploadJob,
   type BomFeishuUploadJobStatus,
@@ -633,6 +635,7 @@ export const BomDownloadJobsPage: React.FC = () => {
                 <th className="px-3 py-2 text-left text-xs font-semibold text-slate-700">状态</th>
                 <th className="px-3 py-2 text-left text-xs font-semibold text-slate-700">版本</th>
                 <th className="px-3 py-2 text-left text-xs font-semibold text-slate-700">进度</th>
+                <th className="px-3 py-2 text-left text-xs font-semibold text-slate-700">字节</th>
                 <th className="px-3 py-2 text-left text-xs font-semibold text-slate-700">说明</th>
                 <th className="px-3 py-2 text-left text-xs font-semibold text-slate-700">时间</th>
                 <th className="px-3 py-2 text-right text-xs font-semibold text-slate-700">详情</th>
@@ -642,13 +645,14 @@ export const BomDownloadJobsPage: React.FC = () => {
             <tbody className="divide-y divide-slate-100">
               {extJobs.length === 0 && !loading ? (
                 <tr>
-                  <td colSpan={7} className="px-4 py-10 text-center text-slate-500">
+                  <td colSpan={8} className="px-4 py-10 text-center text-slate-500">
                     暂无任务。请在 BOM 明细页发起「同步全部」或单行 ext 同步。
                   </td>
                 </tr>
               ) : null}
               {extJobs.map((j) => {
                 const pct = extSyncJobProgressPercent(j);
+                const bytesLine = formatExtSyncJobBytesLine(j);
                 const canCancelExt =
                   j.status === 'queued' || j.status === 'running';
                 const startedMs = parseMsOrNull(j.startedAt);
@@ -683,6 +687,9 @@ export const BomDownloadJobsPage: React.FC = () => {
                           />
                         </div>
                       ) : null}
+                    </td>
+                    <td className="px-3 py-2 text-xs text-slate-600 max-w-[14rem]">
+                      {bytesLine ?? '—'}
                     </td>
                     <td className="px-3 py-2 text-xs text-slate-600 max-w-[20rem]">
                       {renderMessageCell(`ext-${j.id}`, j.lastMessage)}
@@ -786,6 +793,7 @@ export const BomDownloadJobsPage: React.FC = () => {
                 <th className="px-3 py-2 text-left text-xs font-semibold text-slate-700">状态</th>
                 <th className="px-3 py-2 text-left text-xs font-semibold text-slate-700">版本</th>
                 <th className="px-3 py-2 text-left text-xs font-semibold text-slate-700">进度</th>
+                <th className="px-3 py-2 text-left text-xs font-semibold text-slate-700">字节</th>
                 <th className="px-3 py-2 text-left text-xs font-semibold text-slate-700">说明</th>
                 <th className="px-3 py-2 text-left text-xs font-semibold text-slate-700">时间</th>
                 <th className="px-3 py-2 text-right text-xs font-semibold text-slate-700">详情</th>
@@ -795,13 +803,14 @@ export const BomDownloadJobsPage: React.FC = () => {
             <tbody className="divide-y divide-slate-100">
               {feishuJobs.length === 0 && !loading ? (
                 <tr>
-                  <td colSpan={7} className="px-4 py-10 text-center text-slate-500">
+                  <td colSpan={8} className="px-4 py-10 text-center text-slate-500">
                     暂无任务。请在 BOM 分发页发起「上传选中到飞书」。
                   </td>
                 </tr>
               ) : null}
               {feishuJobs.map((j) => {
                 const pct = feishuUploadJobProgressPercent(j);
+                const bytesLine = formatFeishuUploadJobBytesLine(j);
                 const canCancelFeishu =
                   j.status === 'queued' || j.status === 'running';
                 const startedMs = parseMsOrNull(j.startedAt);
@@ -836,6 +845,9 @@ export const BomDownloadJobsPage: React.FC = () => {
                           />
                         </div>
                       ) : null}
+                    </td>
+                    <td className="px-3 py-2 text-xs text-slate-600 max-w-[14rem]">
+                      {bytesLine ?? '—'}
                     </td>
                     <td className="px-3 py-2 text-xs text-slate-600 max-w-[20rem]">
                       {renderMessageCell(`feishu-${j.id}`, j.lastMessage)}

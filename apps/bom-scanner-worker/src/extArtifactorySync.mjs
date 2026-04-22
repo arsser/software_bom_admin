@@ -1,4 +1,5 @@
 import { createReadStream } from 'node:fs';
+import fs from 'node:fs/promises';
 import path from 'node:path';
 import { patchBomRowExtStatus, withExt } from './bomRowStatusJson.mjs';
 import { reportBomLocalRootRuntime } from './workerRuntimeReport.mjs';
@@ -9,6 +10,35 @@ function log(...args) {
 
 function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));
+}
+
+function formatBytes(bytes) {
+  const n = Number(bytes);
+  if (!Number.isFinite(n) || n < 0) return '0B';
+  if (n < 1024) return `${Math.floor(n)}B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)}KB`;
+  if (n < 1024 * 1024 * 1024) return `${(n / (1024 * 1024)).toFixed(1)}MB`;
+  return `${(n / (1024 * 1024 * 1024)).toFixed(2)}GB`;
+}
+
+function formatEtaSeconds(seconds) {
+  const sec = Math.max(0, Math.ceil(seconds));
+  if (sec < 60) return `${sec}秒`;
+  const min = Math.floor(sec / 60);
+  const remSec = sec % 60;
+  if (min < 60) return remSec > 0 ? `${min}分${remSec}秒` : `${min}分`;
+  const hour = Math.floor(min / 60);
+  const remMin = min % 60;
+  return remMin > 0 ? `${hour}时${remMin}分` : `${hour}时`;
+}
+
+function estimateEtaText(completed, total, elapsedMs) {
+  if (total <= 0 || completed <= 0 || elapsedMs < 1500) return '预计剩余 --';
+  const speed = completed / (elapsedMs / 1000);
+  if (!Number.isFinite(speed) || speed <= 0) return '预计剩余 --';
+  const etaSeconds = (total - completed) / speed;
+  if (etaSeconds <= 0) return '预计剩余 0秒';
+  return `预计剩余 ${formatEtaSeconds(etaSeconds)}`;
 }
 
 const MAX_HTTP_RETRIES = 2;
@@ -497,7 +527,9 @@ export async function executeExtSyncJob(supabase, rootAbs, job, tuning) {
   let nFail = 0;
   let nSkip = 0;
   let nRetries = 0;
+  let bytesDoneTotal = 0;
   let userCancelled = false;
+  const jobStartMs = Date.now();
 
   for (const rowId of rowIds) {
     if (await isExtSyncJobCancelRequested(supabase, jobId)) {
@@ -512,7 +544,10 @@ export async function executeExtSyncJob(supabase, rootAbs, job, tuning) {
       completed += 1;
       await patchExtSyncJob(supabase, jobId, {
         progress_current: completed,
+        bytes_downloaded_total: bytesDoneTotal,
         running_row_id: null,
+        running_bytes_downloaded: 0,
+        running_bytes_total: null,
         heartbeat_at: new Date().toISOString(),
         last_message: `${completed}/${total} 跳过（已非校验通过或已有 ext_url）`,
       });
@@ -525,7 +560,10 @@ export async function executeExtSyncJob(supabase, rootAbs, job, tuning) {
       completed += 1;
       await patchExtSyncJob(supabase, jobId, {
         progress_current: completed,
+        bytes_downloaded_total: bytesDoneTotal,
         running_row_id: null,
+        running_bytes_downloaded: 0,
+        running_bytes_total: null,
         heartbeat_at: new Date().toISOString(),
         last_message: `${completed}/${total} 行不存在`,
       });
@@ -541,7 +579,10 @@ export async function executeExtSyncJob(supabase, rootAbs, job, tuning) {
       await patchBomRowExtStatus(supabase, rowId, 'error', 'ext 同步：缺少合法期望 MD5');
       await patchExtSyncJob(supabase, jobId, {
         progress_current: completed,
+        bytes_downloaded_total: bytesDoneTotal,
         running_row_id: null,
+        running_bytes_downloaded: 0,
+        running_bytes_total: null,
         heartbeat_at: new Date().toISOString(),
         last_message: `${completed}/${total} 缺少 MD5`,
       });
@@ -555,12 +596,6 @@ export async function executeExtSyncJob(supabase, rootAbs, job, tuning) {
       extRepo,
     });
 
-    await patchExtSyncJob(supabase, jobId, {
-      running_row_id: rowId,
-      heartbeat_at: new Date().toISOString(),
-      last_message: `${completed + 1}/${total} 同步中…`,
-    });
-
     currentRowAbort = new AbortController();
     const rowSignal = AbortSignal.any([currentRowAbort.signal, AbortSignal.timeout(tuning.httpTimeoutMs)]);
     try {
@@ -569,7 +604,20 @@ export async function executeExtSyncJob(supabase, rootAbs, job, tuning) {
         throw new Error('本地索引中无该 MD5 对应文件（请先扫描暂存目录）');
       }
       const diskAbs = path.join(rootAbs, relPathDisk.split('/').join(path.sep));
+      const fileStat = await fs.stat(diskAbs);
+      if (!fileStat.isFile()) throw new Error('本地路径不是文件');
+      const rowSize = Math.max(0, Number(fileStat.size) || 0);
       const fileName = safeFlatFilename(path.basename(diskAbs));
+      const etaText = estimateEtaText(completed, total, Date.now() - jobStartMs);
+
+      await patchExtSyncJob(supabase, jobId, {
+        running_row_id: rowId,
+        running_bytes_downloaded: 0,
+        running_bytes_total: rowSize,
+        bytes_downloaded_total: bytesDoneTotal,
+        heartbeat_at: new Date().toISOString(),
+        last_message: `${completed + 1}/${total} 同步中…（${formatBytes(0)}/${formatBytes(rowSize)}，${etaText}） 文件：${fileName}`.slice(0, 2000),
+      });
 
       const modRaw = firstNonEmptyByKeysRelaxed(bomRow, keyMap.moduleName);
       const groupRaw = firstNonEmptyByKeysRelaxed(bomRow, keyMap.groupSegment);
@@ -671,6 +719,7 @@ export async function executeExtSyncJob(supabase, rootAbs, job, tuning) {
 
       nOk += 1;
       completed += 1;
+      bytesDoneTotal += rowSize;
       log('ext-sync row ok', {
         jobId,
         rowId,
@@ -681,9 +730,12 @@ export async function executeExtSyncJob(supabase, rootAbs, job, tuning) {
       const rowRetryTag = rowRetries ? ` (重试${rowRetries})` : '';
       await patchExtSyncJob(supabase, jobId, {
         progress_current: completed,
+        bytes_downloaded_total: bytesDoneTotal,
         running_row_id: null,
+        running_bytes_downloaded: 0,
+        running_bytes_total: null,
         heartbeat_at: new Date().toISOString(),
-        last_message: `${completed}/${total} OK ${syncKind} ${fileName}${rowRetryTag}`.slice(0, 2000),
+        last_message: `${completed}/${total} OK ${syncKind}（${formatBytes(rowSize)}） ${fileName}${rowRetryTag}`.slice(0, 2000),
       });
     } catch (e) {
       const aborted =
@@ -707,7 +759,10 @@ export async function executeExtSyncJob(supabase, rootAbs, job, tuning) {
       await patchBomRowExtStatus(supabase, rowId, 'error', msg);
       await patchExtSyncJob(supabase, jobId, {
         progress_current: completed,
+        bytes_downloaded_total: bytesDoneTotal,
         running_row_id: null,
+        running_bytes_downloaded: 0,
+        running_bytes_total: null,
         heartbeat_at: new Date().toISOString(),
         last_message: `${completed}/${total} 失败 ${msg}`.slice(0, 2000),
       });
@@ -723,6 +778,10 @@ export async function executeExtSyncJob(supabase, rootAbs, job, tuning) {
       last_message: `用户取消（已完成 ${completed}/${total}）`.slice(0, 2000),
       cancel_requested: false,
       running_row_id: null,
+      running_bytes_downloaded: 0,
+      running_bytes_total: null,
+      bytes_downloaded_total: bytesDoneTotal,
+      progress_current: completed,
     });
     log('ext-sync-job cancelled', jobId);
     return;
@@ -739,6 +798,9 @@ export async function executeExtSyncJob(supabase, rootAbs, job, tuning) {
     finished_at: new Date().toISOString(),
     last_message: summary.slice(0, 2000),
     running_row_id: null,
+    running_bytes_downloaded: 0,
+    running_bytes_total: null,
+    bytes_downloaded_total: bytesDoneTotal,
     cancel_requested: false,
   });
   log('ext-sync-job done', jobId, summary);

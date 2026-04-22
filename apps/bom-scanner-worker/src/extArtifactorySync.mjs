@@ -1,6 +1,7 @@
 import { createReadStream } from 'node:fs';
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { Readable } from 'node:stream';
 import { patchBomRowExtStatus, withExt } from './bomRowStatusJson.mjs';
 import { reportBomLocalRootRuntime } from './workerRuntimeReport.mjs';
 
@@ -379,17 +380,36 @@ async function copyArtifact(rootUrl, srcRepo, srcPath, dstRepo, dstPath, apiKey,
 
 /**
  * @param {AbortSignal} [signal]
+ * @param {object} [opts]
+ * @param {(p: { uploadedBytes: number, totalBytes: number | null, fileName: string }) => void} [opts.onProgress]
+ * @param {number | null} [opts.totalBytes]
+ * @param {string} [opts.fileName]
  */
-async function deployFileFixed(rootUrl, repo, relPath, fileAbs, apiKey, signal) {
+async function deployFileFixed(rootUrl, repo, relPath, fileAbs, apiKey, signal, opts = {}) {
   const base = rootUrl.replace(/\/+$/, '');
   const putUrl = `${base}/${repo}/${relPath.replace(/^\/+/, '')}`;
   const st = artifactoryHeaders(apiKey);
-  const body = createReadStream(fileAbs);
+  const source = createReadStream(fileAbs);
+  const totalBytes = typeof opts.totalBytes === 'number' && Number.isFinite(opts.totalBytes) ? opts.totalBytes : null;
+  const fileName = opts.fileName ? String(opts.fileName) : path.basename(fileAbs);
+  let uploadedBytes = 0;
+  const body = Readable.from(
+    (async function* streamWithProgress() {
+      for await (const chunk of source) {
+        uploadedBytes += chunk.length;
+        if (opts.onProgress) {
+          opts.onProgress({ uploadedBytes, totalBytes, fileName });
+        }
+        yield chunk;
+      }
+    })(),
+  );
   if (signal) {
     signal.addEventListener(
       'abort',
       () => {
         try {
+          source.destroy();
           body.destroy();
         } catch {
           /* ignore */
@@ -618,6 +638,8 @@ export async function executeExtSyncJob(supabase, rootAbs, job, tuning) {
         heartbeat_at: new Date().toISOString(),
         last_message: `${completed + 1}/${total} 同步中…（${formatBytes(0)}/${formatBytes(rowSize)}，${etaText}） 文件：${fileName}`.slice(0, 2000),
       });
+      const rowStartedAtMs = Date.now();
+      let lastProgressFlushMs = 0;
 
       const modRaw = firstNonEmptyByKeysRelaxed(bomRow, keyMap.moduleName);
       const groupRaw = firstNonEmptyByKeysRelaxed(bomRow, keyMap.groupSegment);
@@ -692,7 +714,35 @@ export async function executeExtSyncJob(supabase, rootAbs, job, tuning) {
           localAbs: diskAbs,
         });
         const { retries: r3 } = await withRetry(
-          () => deployFileFixed(rootUrl, extRepo, targetRel, diskAbs, creds.apiKey, rowSignal),
+          () =>
+            deployFileFixed(rootUrl, extRepo, targetRel, diskAbs, creds.apiKey, rowSignal, {
+              totalBytes: rowSize,
+              fileName,
+              onProgress: ({ uploadedBytes, totalBytes }) => {
+                const now = Date.now();
+                if (!totalBytes) return;
+                if (now - lastProgressFlushMs < hbMs) return;
+                lastProgressFlushMs = now;
+                const elapsedMs = now - rowStartedAtMs;
+                let etaText = '预计剩余 --';
+                if (uploadedBytes >= totalBytes) {
+                  etaText = '预计剩余 0秒';
+                } else if (uploadedBytes > 0 && elapsedMs >= 1500) {
+                  const speedBytesPerSec = uploadedBytes / (elapsedMs / 1000);
+                  if (speedBytesPerSec > 0) {
+                    const etaSec = (totalBytes - uploadedBytes) / speedBytesPerSec;
+                    etaText = `预计剩余 ${formatEtaSeconds(etaSec)}`;
+                  }
+                }
+                const progressMsg = `${completed + 1}/${total} 同步中…（${formatBytes(uploadedBytes)}/${formatBytes(totalBytes)}，${etaText}） 文件：${fileName}`.slice(0, 2000);
+                void patchExtSyncJob(supabase, jobId, {
+                  running_bytes_downloaded: uploadedBytes,
+                  running_bytes_total: totalBytes,
+                  heartbeat_at: new Date().toISOString(),
+                  last_message: progressMsg,
+                });
+              },
+            }),
           { signal: rowSignal, label: `deploy ${rowId}`, maxRetries: tuning.httpRetries },
         );
         rowRetries += r3;

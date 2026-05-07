@@ -25,7 +25,7 @@ function normalizeHost(base: string): string | null {
 }
 
 /**
- * 按下载 URL 主机与系统设置中的 Base URL 匹配内部/外部 Artifactory API Key（与 worker 的 host 校验语义一致）。
+ * 按下载 URL 主机与系统设置中的 Base URL 匹配 Artifactory / Artifactory-ext API Key（与 worker 的 host 校验语义一致）。
  */
 export function pickArtifactoryApiKeyForUrl(
   downloadUrl: string,
@@ -64,7 +64,7 @@ export function rowHasArtifactoryHttpUrl(row: BomBatchRow, keyMap: BomJsonKeyMap
   return Boolean(url && /artifactory/i.test(url));
 }
 
-/** ext_url 等别名列中的 http(s) Artifactory 链接（外部 Artifactory 写入后可批量复制 curl/wget） */
+/** ext_url 等别名列中的 http(s) Artifactory 链接（Artifactory-ext 写入后可批量复制 curl/wget） */
 export function rowHasExtArtifactoryHttpUrl(row: BomBatchRow, keyMap: BomJsonKeyMap): boolean {
   const raw = extractExtUrlFromRow(row.bom_row, keyMap);
   const url = raw ? extractHttpUrlFromDownloadCell(raw) : null;
@@ -107,7 +107,7 @@ export function buildCopyCommandsForRows(
     const raw = extractDownloadUrlRaw(lr.bom_row, keyMap);
     const url = raw ? extractHttpUrlFromDownloadCell(raw) : null;
     if (!url || !/artifactory/i.test(url)) {
-      errors.push(`第 ${displayLine} 行：无有效内部 Artifactory http(s) 链接`);
+      errors.push(`第 ${displayLine} 行：无有效 Artifactory http(s) 链接`);
       continue;
     }
     const picked = pickArtifactoryApiKeyForUrl(url, cfg);
@@ -142,7 +142,7 @@ export function buildCopyCommandsForExtRows(
     const raw = extractExtUrlFromRow(lr.bom_row, keyMap);
     const url = raw ? extractHttpUrlFromDownloadCell(raw) : null;
     if (!url || !/artifactory/i.test(url)) {
-      errors.push(`第 ${displayLine} 行：无有效外部 Artifactory http(s) 链接（ext_url / 转存地址）`);
+      errors.push(`第 ${displayLine} 行：无有效 Artifactory-ext http(s) 链接（ext_url / 转存地址）`);
       continue;
     }
     const picked = pickArtifactoryApiKeyForUrl(url, cfg);

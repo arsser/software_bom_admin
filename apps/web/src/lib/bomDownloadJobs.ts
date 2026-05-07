@@ -87,7 +87,7 @@ function toFriendlyDownloadRequestError(err: unknown, fallback: string): string 
   return formatSupabaseError(err);
 }
 
-/** 创建拉取任务：p_row_ids 为空表示当前版本全部 eligible 行（仅 BOM「下载路径」列，内部/外部 Artifactory） */
+/** 创建拉取任务：p_row_ids 为空表示当前版本全部 eligible 行（仅 BOM「下载路径」列，Artifactory / Artifactory-ext） */
 export async function requestBomItDownload(batchId: string, rowIds?: string[] | null): Promise<string> {
   const { data, error } = await supabase.rpc('bom_request_download', {
     p_batch_id: batchId,

@@ -99,7 +99,7 @@ export function extractExtUrlFromRow(row: BomRowRecord, keyMap: BomJsonKeyMap): 
 }
 
 /**
- * 分发页「从外部 Artifactory 拉取」前置条件（与 `bom_request_distribute_ext_pull` 一致）：
+ * 分发页「从 Artifactory-ext 拉取」前置条件（与 `bom_request_distribute_ext_pull` 一致）：
  * - 本地状态：pending / error，或 (verified_ok|verified_fail|local_found 且 BOM 中有合法期望 MD5)；
  * - ext 列为可解析的 http(s) 且 URL 含 artifactory；
  * - 若已传入 `localMd5Indexed` 且 `localIndexReady`：期望 MD5 已在本地索引命中时不可再拉取（后端会因「已在 local_file」不入队）。
@@ -148,7 +148,7 @@ export function extractRemoteSizeBytesFromRow(row: BomRowRecord, keyMap: BomJson
   return parseByteSizeFromCell(raw);
 }
 
-/** 外部 Artifactory 写入 jsonb 的大小（字节） */
+/** Artifactory-ext 写入 jsonb 的大小（字节） */
 export function extractExtSizeBytesFromRow(row: BomRowRecord, keyMap: BomJsonKeyMap): number | null {
   const keys = keyMap.extFileSizeBytes ?? [];
   if (!keys.length) return null;
@@ -183,7 +183,7 @@ export function headerMatchesAny(header: string, keys: string[]): boolean {
   return keys.some((k) => norm(k) === n);
 }
 
-/** 与 DB eligible 语义对齐：可网页/worker 从内部 Artifactory 拉取 */
+/** 与 DB eligible 语义对齐：可网页/worker 从 Artifactory 拉取 */
 export function rowEligibleForItPull(
   row: BomBatchRow,
   keyMap: BomJsonKeyMap,
@@ -276,7 +276,7 @@ export function deriveLocalExtStatusLabels(
 }
 
 /**
- * 状态格「内部 Artifactory」行摘要：依据 status.it_fetch_error（补全 MD5 / 检查远程大小等）。
+ * 状态格「Artifactory」行摘要：依据 status.it_fetch_error（补全 MD5 / 检查远程大小等）。
  */
 export function deriveItStatusLabel(status: BomRowStatusJson): string {
   const t = status.it_fetch_error?.trim();

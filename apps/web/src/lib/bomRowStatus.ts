@@ -18,11 +18,11 @@ export type BomRowFeishuStatus = 'not_scanned' | 'absent' | 'present' | 'error';
 export type BomRowStatusJson = {
   local: BomRowLocalStatus;
   ext: BomRowExtStatus;
-  /** worker 内部 Artifactory 拉取、主机不一致等说明（与 status.local 配套；状态说明列「本地」行） */
+  /** worker Artifactory 拉取、主机不一致等说明（与 status.local 配套；状态说明列「本地」行） */
   local_fetch_error?: string | null;
-  /** 网页侧内部 Artifactory 操作（补全 MD5、检查远程大小等；状态说明列「It」行） */
+  /** 网页侧 Artifactory 操作（补全 MD5、检查远程大小等；状态说明列「It」行） */
   it_fetch_error?: string | null;
-  /** 外部 Artifactory 查重/同步等说明（与 status.ext 配套） */
+  /** Artifactory-ext 查重/同步等说明（与 status.ext 配套） */
   ext_fetch_error?: string | null;
   /** 飞书侧是否存在预期路径文件（Edge 扫描写入，不经 MD5） */
   feishu?: BomRowFeishuStatus;
@@ -167,7 +167,7 @@ export function formatBomRowStatusTooltip(s: BomRowStatusJson): string {
     s.feishu != null
       ? `；飞书：${BOM_ROW_FEISHU_STATUS_LABEL[s.feishu]}（${s.feishu}）`
       : '；飞书：未扫描';
-  return `内部 Artifactory：${itSummary}；外部 Artifactory：${BOM_ROW_EXT_STATUS_LABEL[s.ext]}（${s.ext}）；本地：${BOM_ROW_LOCAL_STATUS_LABEL[s.local]}（${s.local}）${feishuPart}`;
+  return `Artifactory：${itSummary}；Artifactory-ext：${BOM_ROW_EXT_STATUS_LABEL[s.ext]}（${s.ext}）；本地：${BOM_ROW_LOCAL_STATUS_LABEL[s.local]}（${s.local}）${feishuPart}`;
 }
 
 /** @deprecated 旧单一枚举，仅用于文档/迁移对照 */
@@ -201,6 +201,6 @@ export const BOM_STATUS_LEGEND_VERIFIED_OK = '本地索引中已存在与期望 
 export const BOM_STATUS_LEGEND_MANUAL =
   '链接不支持自动拉取，请自行下载并放入暂存目录，保存后由扫描更新索引与状态。';
 
-/** 自动拉取或 ext 同步失败等：原因在 status 各说明字段；页面「状态说明」列为 内部 Artifactory / 外部 Artifactory / 本地 分行展示。 */
+/** 自动拉取或 ext 同步失败等：原因在 status 各说明字段；页面「状态说明」列为 Artifactory / Artifactory-ext / 本地 分行展示。 */
 export const BOM_STATUS_LEGEND_ERROR =
-  '自动从内部 Artifactory 拉取失败、外部 Artifactory 同步失败或主机与配置不一致；详见「状态说明」列（对应 JSON：it_fetch_error、ext_fetch_error、local_fetch_error）。';
+  '自动从 Artifactory 拉取失败、Artifactory-ext 同步失败或主机与配置不一致；详见「状态说明」列（对应 JSON：it_fetch_error、ext_fetch_error、local_fetch_error）。';

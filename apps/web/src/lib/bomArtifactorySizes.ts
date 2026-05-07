@@ -74,7 +74,7 @@ export type RemoteArtifactorySizeSummary = {
 };
 
 /**
- * 通过内部 Artifactory Storage API 拉取 size 并写入 fileSizeBytes 别名列；
+ * 通过 Artifactory Storage API 拉取 size 并写入 fileSizeBytes 别名列；
  * 结果写入 status.it_fetch_error（前缀 `[检查·远程大小]`）；不改动 MD5；若已有 `[补全·MD5]` 说明则在失败时追加一行。
  */
 export async function enrichBomRowsRemoteSizeFromArtifactory(

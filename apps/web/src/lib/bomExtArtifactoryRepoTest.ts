@@ -42,7 +42,7 @@ export async function testBomExtArtifactoryRepo(options: {
     options.repoKey,
   );
   if (!url) {
-    return { ok: false, error: '请填写「外部 Artifactory Base URL」（Artifactory 凭证卡片）与仓库 key' };
+    return { ok: false, error: '请填写「Artifactory-ext Base URL」（Artifactory 凭证卡片）与仓库 key' };
   }
   try {
     const results = await getArtifactoryApiInfo({

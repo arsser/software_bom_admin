@@ -16,9 +16,9 @@ export type BomJsonKeyMap = {
   moduleName?: string[];
   /** ext 同步目录：分组子目录（对应 bom_row 中的列名别名） */
   groupSegment?: string[];
-  /** 写入内部 Artifactory 拉取/补全的大小（字节，整数字符串）；规范列名为数组首项（默认「文件大小」） */
+  /** 写入 Artifactory 拉取/补全的大小（字节，整数字符串）；规范列名为数组首项（默认「文件大小」） */
   fileSizeBytes?: string[];
-  /** 外部 Artifactory 侧大小（字节，整数字符串） */
+  /** Artifactory-ext 侧大小（字节，整数字符串） */
   extFileSizeBytes?: string[];
   /** 拉取失败等说明 */
   remark?: string[];

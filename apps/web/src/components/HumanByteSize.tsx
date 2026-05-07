@@ -67,12 +67,12 @@ export function HumanByteSize({ bytes, variantLabel, className = '' }: Props) {
 type TripleProps = {
   localBytes: number | null;
   extBytes: number | null;
-  /** 内部 Artifactory 等写入 fileSizeBytes 列的大小 */
+  /** Artifactory 等写入 fileSizeBytes 列的大小 */
   remoteBytes: number | null;
 };
 
 /**
- * 自上而下与「状态」列一致：内部 Arti → 外部 Arti → 本地。
+ * 自上而下与「状态」列一致：Artifactory → Artifactory-ext → 本地。
  */
 export function BomRowByteSizeCell({ localBytes, extBytes, remoteBytes }: TripleProps) {
   const segments: Array<{ bytes: number; label: string }> = [];

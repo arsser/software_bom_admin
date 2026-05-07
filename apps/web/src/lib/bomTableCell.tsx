@@ -1,6 +1,14 @@
-import { useCallback, useState } from 'react';
+import { Fragment, useCallback, useState } from 'react';
 import { Check, Copy } from 'lucide-react';
 import type { BomJsonKeyMap } from './bomScannerSettings';
+
+/**
+ * 与 BOM 明细页「Artifactory-ext 下载链接」一致：整格 `line-clamp-3` + `break-all` 控制换行与最多行数；
+ * 主色用 indigo（该列为 emerald）。
+ */
+const DOWNLOAD_CELL_BASE =
+  'line-clamp-3 min-w-0 max-w-full text-left text-[11px] leading-snug break-all font-mono text-indigo-900/90';
+const DOWNLOAD_CELL_LINK_DECO = 'underline decoration-indigo-300/80 hover:text-indigo-950';
 
 function normalizeHeaderLabel(h: string): string {
   return h.trim().toLowerCase();
@@ -91,12 +99,14 @@ export type BomDataTableCellProps = {
   header: string;
   value: string;
   keyMap: BomJsonKeyMap;
-  /** 为 true 时下载路径列按行换行展示（含单元格内换行），每行可单独解析链接 */
+  /** 为 true 时单元格内 `\\n` 用 `<br />` 断开，整格与 ext 列相同：`line-clamp-3` + `break-all` */
   multilineDownload?: boolean;
+  /** 为 true 时不显示下载路径列旁的复制按钮（链可由浏览器复制） */
+  hideDownloadCopy?: boolean;
 };
 
-/** 下载路径列：可点击 http(s) 超链接 + 复制；MD5 列：等宽 + 复制 */
-export function BomDataTableCell({ header, value, keyMap, multilineDownload }: BomDataTableCellProps) {
+/** 下载路径列：可点击 http(s) 超链接 + 可选复制；MD5 列：等宽 + 复制 */
+export function BomDataTableCell({ header, value, keyMap, multilineDownload, hideDownloadCopy }: BomDataTableCellProps) {
   const raw = value ?? '';
   const isDl = headerIsDownloadColumn(header, keyMap);
   const isMd5 = headerIsMd5Column(header, keyMap);
@@ -112,49 +122,52 @@ export function BomDataTableCell({ header, value, keyMap, multilineDownload }: B
   if (isDl && multilineDownload) {
     const lines = raw.replace(/\r\n/g, '\n').split('\n');
     const showEmpty = lines.length === 1 && lines[0] === '';
-    return (
-      <div className="flex items-start gap-1 min-w-0 w-full max-w-full">
-        <div className="min-w-0 flex-1 space-y-0.5 text-left">
-          {showEmpty ? (
-            <span className="text-slate-400">—</span>
-          ) : (
-            lines.map((line, idx) => {
-              const lineHref = extractHrefFromDownloadCell(line);
-              if (lineHref) {
+    const showDlCopy = Boolean(copyText) && !hideDownloadCopy;
+    const linesBlock = (
+      <div className={DOWNLOAD_CELL_BASE}>
+        {showEmpty ? (
+          <span className="text-slate-400">—</span>
+        ) : (
+          lines.map((line, idx) => (
+            <Fragment key={idx}>
+              {idx > 0 ? <br /> : null}
+              {line === '' ? null : (() => {
+                const lineHref = extractHrefFromDownloadCell(line);
+                if (lineHref) {
+                  return (
+                    <a
+                      href={lineHref}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className={DOWNLOAD_CELL_LINK_DECO}
+                      title={textToCopyForDownload(line) || lineHref || line}
+                    >
+                      {anchorLabelForDownload(line)}
+                    </a>
+                  );
+                }
                 return (
-                  <a
-                    key={idx}
-                    href={lineHref}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="block break-all text-indigo-600 hover:text-indigo-800 hover:underline text-[11px] leading-snug"
-                    title={textToCopyForDownload(line) || lineHref || line}
-                  >
-                    {anchorLabelForDownload(line)}
-                  </a>
+                  <span title={line}>{line}</span>
                 );
-              }
-              if (line === '') {
-                return <div key={idx} className="min-h-[0.5rem]" aria-hidden />;
-              }
-              return (
-                <span
-                  key={idx}
-                  className="block break-all text-slate-800 text-[11px] leading-snug whitespace-pre-wrap"
-                  title={line}
-                >
-                  {line}
-                </span>
-              );
-            })
-          )}
-        </div>
-        {copyText ? (
-          <CopyIconButton text={copyText} title="复制下载路径" />
-        ) : null}
+              })()}
+            </Fragment>
+          ))
+        )}
       </div>
     );
+    if (showDlCopy) {
+      return (
+        <div className="flex items-start gap-1 min-w-0 w-full max-w-full">
+          {linesBlock}
+          <CopyIconButton text={copyText} title="复制下载路径" />
+        </div>
+      );
+    }
+    return <div className="min-w-0 w-full max-w-full">{linesBlock}</div>;
   }
+
+  const showDlCopy = Boolean(copyText) && isDl && !hideDownloadCopy;
+  const showMd5Copy = Boolean(copyText) && isMd5;
 
   return (
     <div className="flex items-center gap-1 min-w-0 w-full max-w-full">
@@ -164,13 +177,13 @@ export function BomDataTableCell({ header, value, keyMap, multilineDownload }: B
             href={href}
             target="_blank"
             rel="noopener noreferrer"
-            className="block truncate text-indigo-600 hover:text-indigo-800 hover:underline text-left"
+            className={`${DOWNLOAD_CELL_BASE} ${DOWNLOAD_CELL_LINK_DECO}`}
             title={linkTitle}
           >
             {anchorLabelForDownload(raw)}
           </a>
         ) : isDl ? (
-          <span className="block truncate text-slate-800" title={raw}>
+          <span className={DOWNLOAD_CELL_BASE} title={raw}>
             {raw}
           </span>
         ) : isMd5 ? (
@@ -183,7 +196,7 @@ export function BomDataTableCell({ header, value, keyMap, multilineDownload }: B
           </span>
         )}
       </div>
-      {copyText ? (
+      {showMd5Copy || showDlCopy ? (
         <CopyIconButton text={copyText} title={isMd5 ? '复制 MD5' : '复制下载路径'} />
       ) : null}
     </div>

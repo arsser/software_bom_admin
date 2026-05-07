@@ -308,7 +308,7 @@ serve(async (req) => {
       await updateBomRowExtError(
         admin,
         rowId,
-        '未配置 ext 目标仓库：请在产品分发配置中填写外部 Artifactory 仓库 key',
+        '未配置 ext 目标仓库：请在产品分发配置中填写 Artifactory-ext 仓库 key',
         rowData.status,
       )
       return new Response(JSON.stringify({ ok: false, error: 'Missing extArtifactoryRepo' }), {
@@ -335,7 +335,7 @@ serve(async (req) => {
       await updateBomRowExtError(
         admin,
         rowId,
-        '未配置外部 Artifactory：请配置 artifactory_config 的外部 Base URL / API Key',
+        '未配置 Artifactory-ext：请配置 artifactory_config 的 Artifactory-ext Base URL / API Key',
         rowData.status,
       )
       return new Response(JSON.stringify({ ok: false, error: 'Missing ext Artifactory credentials' }), {
@@ -392,8 +392,8 @@ serve(async (req) => {
       delete (nextBom as any).ext_sync_kind
 
       const msg = prevExt
-        ? 'ext 已删除或不存在，需本地下载并校验后再上传外部 Artifactory'
-        : '外部 Artifactory 不存在，需拉取-校验后再上传'
+        ? 'ext 已删除或不存在，需本地下载并校验后再上传 Artifactory-ext'
+        : 'Artifactory-ext 不存在，需拉取-校验后再上传'
 
       const stMiss = expandStatus(rowData.status)
       stMiss.ext = 'not_started'

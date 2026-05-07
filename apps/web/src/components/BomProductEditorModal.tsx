@@ -115,7 +115,7 @@ export const BomProductEditorModal: React.FC<BomProductEditorModalProps> = ({
   const handleTestBomExtRepo = async () => {
     const repoKey = form.extArtifactoryRepo?.trim() ?? '';
     if (!repoKey) {
-      alert('请填写外部 Artifactory 目标仓库 key');
+      alert('请填写 Artifactory-ext 目标仓库 key');
       return;
     }
     if (!artifactory) {
@@ -135,12 +135,12 @@ export const BomProductEditorModal: React.FC<BomProductEditorModalProps> = ({
   const handleOpenExtArtifactoryRepo = () => {
     const repoKey = form.extArtifactoryRepo?.trim() ?? '';
     if (!repoKey) {
-      alert('请先填写外部 Artifactory 目标仓库 key');
+      alert('请先填写 Artifactory-ext 目标仓库 key');
       return;
     }
     const extBase = artifactory?.artifactoryExtBaseUrl?.trim() ?? '';
     if (!extBase) {
-      alert('请先在系统设置中配置「外部 Artifactory Base URL」');
+      alert('请先在系统设置中配置「Artifactory-ext Base URL」');
       return;
     }
     const url = buildExtArtifactoryRepoBrowseUrl(extBase, repoKey);
@@ -217,7 +217,7 @@ export const BomProductEditorModal: React.FC<BomProductEditorModalProps> = ({
       return;
     }
     if (!extRepo) {
-      alert('请填写外部 Artifactory 目标仓库 key');
+      alert('请填写 Artifactory-ext 目标仓库 key');
       return;
     }
     if (!feishuRoot) {
@@ -308,7 +308,7 @@ export const BomProductEditorModal: React.FC<BomProductEditorModalProps> = ({
 
           <div>
             <label className="block text-sm font-medium text-slate-700 mb-1">
-              外部 Artifactory 目标仓库 key
+              Artifactory-ext 目标仓库 key
             </label>
             <input
               type="text"

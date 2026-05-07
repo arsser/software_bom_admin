@@ -416,7 +416,7 @@ export const Settings: React.FC = () => {
         </p>
         <div className="grid gap-4 md:grid-cols-2">
           <div>
-            <label className="block text-sm font-medium text-slate-700 mb-1">内部 Artifactory Base URL</label>
+            <label className="block text-sm font-medium text-slate-700 mb-1">Artifactory Base URL</label>
             <input
               type="url"
               value={artifactory.artifactoryBaseUrl ?? ''}
@@ -426,7 +426,7 @@ export const Settings: React.FC = () => {
             />
           </div>
           <div>
-            <label className="block text-sm font-medium text-slate-700 mb-1">内部 Artifactory API Key</label>
+            <label className="block text-sm font-medium text-slate-700 mb-1">Artifactory API Key</label>
             <div className="relative">
               <input
                 type={showMainApiKey ? 'text' : 'password'}
@@ -447,7 +447,7 @@ export const Settings: React.FC = () => {
             </div>
           </div>
           <div>
-            <label className="block text-sm font-medium text-slate-700 mb-1">外部 Artifactory Base URL</label>
+            <label className="block text-sm font-medium text-slate-700 mb-1">Artifactory-ext Base URL</label>
             <input
               type="url"
               value={artifactory.artifactoryExtBaseUrl ?? ''}
@@ -457,7 +457,7 @@ export const Settings: React.FC = () => {
             />
           </div>
           <div>
-            <label className="block text-sm font-medium text-slate-700 mb-1">外部 Artifactory API Key</label>
+            <label className="block text-sm font-medium text-slate-700 mb-1">Artifactory-ext API Key</label>
             <div className="relative">
               <input
                 type={showExtApiKey ? 'text' : 'password'}

@@ -48,7 +48,7 @@ export async function createProduct(payload: {
   if (!trimmed) throw new Error('产品名称不能为空');
   const extRepo = payload.extArtifactoryRepo.trim();
   const feishuRoot = payload.feishuDriveRootFolderToken.trim();
-  if (!extRepo) throw new Error('请填写外部 Artifactory 目标仓库 key');
+  if (!extRepo) throw new Error('请填写 Artifactory-ext 目标仓库 key');
   if (!feishuRoot) throw new Error('请填写飞书云盘根目录 folder_token');
 
   const { data: authData, error: authError } = await supabase.auth.getUser();

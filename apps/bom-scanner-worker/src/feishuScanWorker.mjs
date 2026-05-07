@@ -60,11 +60,12 @@ function extractExpectedMd5Lower(bomRow, keyMap) {
  * @param {Record<string, unknown>} bomRow
  * @param {ReturnType<typeof mergeKeyMap>} keyMap
  */
+/** 版本目录下的子路径：优先分组，与飞书/Artifactory-ext 目录约定一致（避免组件名如 ubuntu 盖住分组 COMMON） */
 function resolveMiddleDirFromRow(bomRow, keyMap) {
-  const mod = firstNonEmptyByKeysRelaxed(bomRow, keyMap.moduleName);
-  if (mod) return safePathSegment(mod);
   const grp = firstNonEmptyByKeysRelaxed(bomRow, keyMap.groupSegment);
   if (grp) return safePathSegment(grp);
+  const mod = firstNonEmptyByKeysRelaxed(bomRow, keyMap.moduleName);
+  if (mod) return safePathSegment(mod);
   return null;
 }
 
@@ -74,8 +75,30 @@ function basenameFromStoragePath(p) {
   return parts.length ? parts[parts.length - 1] : '';
 }
 
-function expectedRelKey(middleDir, fileName) {
-  return middleDir ? `${middleDir}/${fileName}` : fileName;
+/**
+ * 飞书「版本文件夹」下、与 buildFileIndexUnder 键一致的相对路径（正斜杠、无首尾 /）。
+ * - BOM 有分组/组件：与 feishuUpload 一致，为 {middleDir}/{文件名}（middleDir 优先分组）。
+ * - 无 middleDir 但 local_file.path 带子路径（如扫描得到的 COMMON/xxx.iso）：用该相对路径对账，
+ *   避免只取 basename 时与云盘子文件夹不一致。
+ */
+function feishuIndexRelKeyForRow(localRelPath, bomRow, keyMap) {
+  const lp = String(localRelPath ?? '')
+    .trim()
+    .replace(/\\/g, '/')
+    .replace(/^\/+/, '');
+  const segs = lp.split('/').filter(Boolean);
+  const rawBase = segs.length ? segs[segs.length - 1] : basenameFromStoragePath(lp);
+  const base = safeFlatFilename(rawBase);
+  const dirPrefix = segs.length > 1 ? segs.slice(0, -1).join('/') : '';
+
+  const middleDir = resolveMiddleDirFromRow(bomRow, keyMap);
+  if (middleDir) {
+    return `${middleDir}/${base}`;
+  }
+  if (dirPrefix) {
+    return `${dirPrefix}/${base}`;
+  }
+  return base;
 }
 
 /**
@@ -208,9 +231,12 @@ async function createDriveChildFolder(accessToken, parentFolderToken, name) {
  * @param {string} folderName
  */
 function findChildFolderToken(items, folderName) {
+  const want = safeTrim(folderName).normalize('NFKC');
+  if (!want) return null;
   for (const it of items) {
     if (safeTrim(it?.type) !== 'folder') continue;
-    if (safeTrim(it?.name) === folderName) {
+    const n = safeTrim(it?.name).normalize('NFKC');
+    if (n === want) {
       const tok = safeTrim(it?.token);
       if (tok) return tok;
     }
@@ -594,9 +620,8 @@ export async function executeFeishuScanJob(supabase, job) {
               continue;
             }
 
+            const relKey = feishuIndexRelKeyForRow(localHit.path, bomRow, keyMap);
             const localBaseName = safeFlatFilename(basenameFromStoragePath(localHit.path));
-            const middleDir = resolveMiddleDirFromRow(bomRow, keyMap);
-            const relKey = expectedRelKey(middleDir, localBaseName);
             const hit = index.get(relKey);
 
             if (!hit) {

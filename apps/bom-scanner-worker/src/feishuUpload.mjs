@@ -138,18 +138,13 @@ function extractExpectedMd5Lower(bomRow, keyMap) {
  * @param {Record<string, unknown>} bomRow
  * @param {ReturnType<typeof mergeKeyMap>} keyMap
  */
+/** 版本目录下的子路径：优先分组，再组件（与 feishuScanWorker / ext 同步一致） */
 function resolveMiddleDirFromRow(bomRow, keyMap) {
-  const mod = firstNonEmptyByKeysRelaxed(bomRow, keyMap.moduleName);
-  if (mod) return safePathSegment(mod);
   const grp = firstNonEmptyByKeysRelaxed(bomRow, keyMap.groupSegment);
   if (grp) return safePathSegment(grp);
+  const mod = firstNonEmptyByKeysRelaxed(bomRow, keyMap.moduleName);
+  if (mod) return safePathSegment(mod);
   return null;
-}
-
-function basenameFromStoragePath(p) {
-  const t = String(p ?? '').trim().replace(/\\/g, '/');
-  const parts = t.split('/').filter(Boolean);
-  return parts.length ? parts[parts.length - 1] : '';
 }
 
 /**
@@ -280,12 +275,15 @@ async function listAllInFolder(accessToken, folderToken) {
 
 /**
  * @param {FeishuListFile[]} items
- * @param {string} folderName
+ * @param {string} folderName 与 create_folder 所用名称一致（已 safePathSegment）
  */
 function findChildFolderToken(items, folderName) {
+  const want = safeTrim(folderName).normalize('NFKC');
+  if (!want) return null;
   for (const it of items) {
     if (safeTrim(it.type) !== 'folder') continue;
-    if (safeTrim(it.name) === folderName) {
+    const n = safeTrim(it.name).normalize('NFKC');
+    if (n === want) {
       const tok = safeTrim(it.token);
       if (tok) return tok;
     }
@@ -325,10 +323,10 @@ async function createDriveChildFolder(accessToken, parentFolderToken, name) {
 }
 
 /**
- * 在 parent 下逐级确保文件夹存在（与飞书扫描 / ext 路径一致）
+ * 在产品飞书根目录下逐级确保文件夹存在（与 feishuScanWorker 列举范围一致）。
  * @param {string} accessToken
- * @param {string} rootFolderToken
- * @param {string[]} segmentNames 例如 ['3.122','MyGroup']
+ * @param {string} rootFolderToken 产品配置的 feishu_drive_root_folder_token
+ * @param {string[]} segmentNames 从根往下每一级目录名，例如 ['v3.1.0','COMMON']：版本目录 + 可选子目录（resolveMiddleDirFromRow，分组优先于组件）
  */
 async function ensureFolderPath(accessToken, rootFolderToken, segmentNames) {
   let cur = rootFolderToken;

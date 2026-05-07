@@ -641,11 +641,11 @@ export async function executeExtSyncJob(supabase, rootAbs, job, tuning) {
       const rowStartedAtMs = Date.now();
       let lastProgressFlushMs = 0;
 
-      const modRaw = firstNonEmptyByKeysRelaxed(bomRow, keyMap.moduleName);
       const groupRaw = firstNonEmptyByKeysRelaxed(bomRow, keyMap.groupSegment);
-      const midDir = modRaw ? safePathSegment(modRaw) : groupRaw ? safePathSegment(groupRaw) : null;
+      const modRaw = firstNonEmptyByKeysRelaxed(bomRow, keyMap.moduleName);
+      const midDir = groupRaw ? safePathSegment(groupRaw) : modRaw ? safePathSegment(modRaw) : null;
       const batchDir = safePathSegment(batchName);
-      // 与飞书对账一致：{repo}/{batchName}/{组件或分组?}/{fileName}
+      // 与飞书对账一致：{repo}/{batchName}/{分组优先否则组件}/{fileName}
       const targetRel = midDir ? [batchDir, midDir, fileName].join('/') : [batchDir, fileName].join('/');
 
       const targetDl = buildArtifactoryDownloadUrl(rootUrl, extRepo, targetRel);

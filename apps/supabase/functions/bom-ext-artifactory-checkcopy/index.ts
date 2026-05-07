@@ -431,10 +431,10 @@ serve(async (req) => {
     // 5) 计算目标路径
     const moduleNameKeys: string[] = Array.isArray(jsonKeyMap.moduleName) && jsonKeyMap.moduleName.length
       ? jsonKeyMap.moduleName
-      : ['模块', 'module', '组件', 'moduleName']
+      : ['组件', 'Component', '组件名']
     const groupSegmentKeys: string[] = Array.isArray(jsonKeyMap.groupSegment) && jsonKeyMap.groupSegment.length
       ? jsonKeyMap.groupSegment
-      : ['分组', 'group', 'groupName', '组别']
+      : ['分组', 'group', 'groupName', '组别', '模块']
     const modRaw = firstNonEmptyByKeysRelaxed(bomRow, moduleNameKeys)
     const groupRaw = firstNonEmptyByKeysRelaxed(bomRow, groupSegmentKeys)
     const midDir = modRaw ? safePathSegment(modRaw) : groupRaw ? safePathSegment(groupRaw) : null

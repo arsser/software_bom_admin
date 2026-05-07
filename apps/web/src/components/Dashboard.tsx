@@ -4,6 +4,7 @@ import type { LucideIcon } from 'lucide-react';
 import { Package, Database, HardDrive, Share2, Loader2, AlertCircle } from 'lucide-react';
 import { fetchBomDashboardStats, type BomDashboardStats } from '../lib/bomDashboardStats';
 import { formatBytesHuman } from '../lib/bytesFormat';
+import { LABEL_EXTERNAL_ARTI } from '../lib/bomUiLabels';
 
 const StatCard = ({
   icon: Icon,
@@ -110,7 +111,7 @@ export const Dashboard: React.FC = () => {
         />
         <StatCard
           icon={Share2}
-          label="ext 转存已完成"
+          label={`${LABEL_EXTERNAL_ARTI} 转存已完成`}
           value={loading && !stats ? '…' : String(stats?.rowsExtSynced ?? 0)}
           subtext={extPct != null ? `约占全部行的 ${extPct}%` : undefined}
           color="bg-emerald-600"

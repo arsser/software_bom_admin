@@ -4,12 +4,64 @@ import type { BomJsonKeyMap } from './bomScannerSettings';
 import type { BomBatchRow } from './bomBatches';
 import type { BomRowRecord } from './bomParser';
 import {
+  IT_STATUS_LEGACY_ARTIFACTORY_PREFIX,
+  IT_STATUS_MD5_PREFIX,
+  IT_STATUS_SIZE_PREFIX,
+  mergeItFetchError,
+  type BomRowStatusJson,
+} from './bomRowStatus';
+import {
   extractDownloadUrlRaw,
   extractHttpUrlFromDownloadCell,
   setRowFieldByAliases,
 } from './bomRowFields';
 
 const CHUNK = 20;
+
+function isMd5ItMessage(p: string): boolean {
+  const t = p.trim();
+  return t.startsWith(IT_STATUS_MD5_PREFIX) || t.startsWith(IT_STATUS_LEGACY_ARTIFACTORY_PREFIX);
+}
+
+function isSizeItMessage(p: string): boolean {
+  return p.trim().startsWith(IT_STATUS_SIZE_PREFIX);
+}
+
+/** 若 It 行已有补全 MD5 类说明，追加尺寸检查说明（否则覆盖为本次尺寸检查结果） */
+function mergeSizeLineWithPreservedMd5(prevIt: string | null | undefined, sizeLine: string): string {
+  const p = (prevIt ?? '').trim();
+  if (isMd5ItMessage(p) && p) {
+    return `${p}\n${sizeLine}`.slice(0, 1000);
+  }
+  return sizeLine.slice(0, 1000);
+}
+
+function nextStatusAfterSizeApi(
+  status: BomRowStatusJson,
+  res: ApiInfoResult,
+  sizeWritten: boolean,
+): BomRowStatusJson {
+  const prev = status.it_fetch_error?.trim() ?? '';
+
+  if (res.ok && res.info && sizeWritten) {
+    if (isMd5ItMessage(prev)) return status;
+    if (!prev || isSizeItMessage(prev)) {
+      return mergeItFetchError(status, null);
+    }
+    return status;
+  }
+
+  const errText = res.error ?? `HTTP ${res.status ?? '错误'}`;
+  const short = errText.length > 200 ? `${errText.slice(0, 197)}…` : errText;
+
+  if (res.ok && res.info && !sizeWritten) {
+    const line = `${IT_STATUS_SIZE_PREFIX} API 成功但未返回可用 size`;
+    return mergeItFetchError(status, mergeSizeLineWithPreservedMd5(status.it_fetch_error, line));
+  }
+
+  const failLine = `${IT_STATUS_SIZE_PREFIX} 失败：${short}`.slice(0, 1000);
+  return mergeItFetchError(status, mergeSizeLineWithPreservedMd5(status.it_fetch_error, failLine));
+}
 
 export type RemoteArtifactorySizeSummary = {
   rowsWithArtifactoryUrl: number;
@@ -22,7 +74,8 @@ export type RemoteArtifactorySizeSummary = {
 };
 
 /**
- * 仅通过内部 Artifactory Storage API 拉取 size 并写入 fileSizeBytes 别名组中的单列（setRowFieldByAliases：已有列优先，否则首项；不改动 MD5 / status）。
+ * 通过内部 Artifactory Storage API 拉取 size 并写入 fileSizeBytes 别名列；
+ * 结果写入 status.it_fetch_error（前缀 `[检查·远程大小]`）；不改动 MD5；若已有 `[补全·MD5]` 说明则在失败时追加一行。
  */
 export async function enrichBomRowsRemoteSizeFromArtifactory(
   rows: BomBatchRow[],
@@ -63,18 +116,21 @@ export async function enrichBomRowsRemoteSizeFromArtifactory(
       slice.forEach((item, j) => {
         const res = results[j] ?? ({ url: item.url, ok: false, error: '无返回' } satisfies ApiInfoResult);
         let nextRecord: BomRowRecord = { ...item.row.bom_row };
+        let sizeWritten = false;
         if (res.ok && res.info) {
           const sz = res.info.size;
           if (typeof sz === 'number' && Number.isFinite(sz) && sz >= 0) {
             nextRecord = setRowFieldByAliases(nextRecord, aliasesSize, String(Math.round(sz)));
             summary.sizeFilledCount += 1;
+            sizeWritten = true;
           } else {
             summary.apiOkButNoSizeCount += 1;
           }
         } else {
           summary.apiRespondedErrorCount += 1;
         }
-        outRows[item.index] = { ...item.row, bom_row: nextRecord };
+        const nextStatus = nextStatusAfterSizeApi(item.row.status, res, sizeWritten);
+        outRows[item.index] = { ...item.row, bom_row: nextRecord, status: nextStatus };
       });
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
@@ -85,8 +141,9 @@ export async function enrichBomRowsRemoteSizeFromArtifactory(
       slice.forEach((item) => {
         const res: ApiInfoResult = { url: item.url, ok: false, error: msg };
         let nextRecord: BomRowRecord = { ...item.row.bom_row };
-        if (!res.ok) summary.apiRespondedErrorCount += 1;
-        outRows[item.index] = { ...item.row, bom_row: nextRecord };
+        summary.apiRespondedErrorCount += 1;
+        const nextStatus = nextStatusAfterSizeApi(item.row.status, res, false);
+        outRows[item.index] = { ...item.row, bom_row: nextRecord, status: nextStatus };
       });
     }
   }

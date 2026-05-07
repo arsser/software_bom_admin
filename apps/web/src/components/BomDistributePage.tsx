@@ -24,6 +24,7 @@ import {
   type BomBatchRow,
   type LocalFileIndexInfo,
 } from '../lib/bomBatches';
+import { StatusExplainLine } from './StatusExplainLine';
 import {
   extractExpectedMd5FromRow,
   extractExtUrlFromRow,
@@ -33,6 +34,7 @@ import {
   normalizeLocalRelativePath,
   headerMatchesAny,
   remarkColumnKeys,
+  deriveItStatusLabel,
   deriveLocalExtStatusLabels,
   rowEligibleForDistributeExternalPull,
 } from '../lib/bomRowFields';
@@ -49,16 +51,18 @@ import { fetchBomFeishuScanJobsForBatch, type BomFeishuScanJob } from '../lib/bo
 import { requestBomFeishuUpload, fetchBomFeishuUploadJobsForBatch, type BomFeishuUploadJob } from '../lib/bomFeishuUploadJobs';
 import { BomDataTableCell, headerIsDownloadColumn, headerIsMd5Column } from '../lib/bomTableCell';
 import { fetchProductDistributionSettings } from '../lib/products';
+import { LABEL_EXTERNAL_ARTI, LABEL_INTERNAL_ARTI } from '../lib/bomUiLabels';
 
 /** 分发页 tooltip：await_manual_download 在文案上显示为「待处理」，枚举值仍保留在括号内 */
 function formatDistributePageBomRowStatusTooltip(s: BomRowStatusJson): string {
   const localZh =
     s.local === 'await_manual_download' ? '待处理' : BOM_ROW_LOCAL_STATUS_LABEL[s.local];
+  const itSummary = s.it_fetch_error?.trim() ? '需关注' : '正常';
   const feishuPart =
     s.feishu != null
       ? `；飞书：${BOM_ROW_FEISHU_STATUS_LABEL[s.feishu]}（${s.feishu}）`
       : '；飞书：未扫描';
-  return `本地：${localZh}（${s.local}）；ext：${BOM_ROW_EXT_STATUS_LABEL[s.ext]}（${s.ext}）${feishuPart}`;
+  return `内部 Artifactory：${itSummary}；外部 Artifactory：${BOM_ROW_EXT_STATUS_LABEL[s.ext]}（${s.ext}）；本地：${localZh}（${s.local}）${feishuPart}`;
 }
 
 /** 本地已校验通过且已跑过飞书扫描、且飞书侧非「已对齐」时，允许点击上传并入队 worker */
@@ -85,7 +89,7 @@ function rowGroupSegmentRaw(row: BomBatchRow['bom_row'], keyMap: BomJsonKeyMap):
  * - 「上传选中到飞书」：作用域 = 当前表格筛选后的行 ∩ 复选框勾选的行；仅对满足条件且未被上述任务占用的行入队。
  */
 
-/** BOM 分发页：只读表格 + 本地/外部状态查看；拉取（外部 AF）；飞书上传经队列由 worker 执行 */
+/** BOM 分发页：只读表格 + 本地/外部状态查看；拉取（外部 Artifactory）；飞书上传经队列由 worker 执行 */
 export const BomDistributePage: React.FC = () => {
   const navigate = useNavigate();
   const params = useParams();
@@ -202,6 +206,11 @@ export const BomDistributePage: React.FC = () => {
     }
     return opts;
   }, [loadedBomRows, tableKeyMap]);
+
+  const distributeListFilterActive = useMemo(
+    () => groupSegmentFilter !== GROUP_FILTER_ALL,
+    [groupSegmentFilter],
+  );
 
   /** 全表本地尚未校验通过的行数（按钮文案「待拉取」） */
   const eligibleExternalPullStubCount = useMemo(
@@ -425,7 +434,7 @@ export const BomDistributePage: React.FC = () => {
     try {
       const jobId = await requestBomDistributeExtPull(batchId, null);
       alert(
-        `已创建分发拉取任务（仅从 ext 转存地址下载）。任务 ID：${jobId}\n` +
+        `已创建分发拉取任务（仅从 ${LABEL_EXTERNAL_ARTI} 转存地址下载）。任务 ID：${jobId}\n` +
           `全表待拉取约 ${eligibleExternalPullStubCount} 行；本次入队以数据库 eligible 为准（与「可拉取」统计可能略有差异）。`,
       );
       await load();
@@ -441,7 +450,7 @@ export const BomDistributePage: React.FC = () => {
     setDistributeExtPullBusy(true);
     try {
       const jobId = await requestBomDistributeExtPull(batchId, [lr.id]);
-      alert(`已创建分发拉取任务（仅从 ext 转存）。任务 ID：${jobId}`);
+      alert(`已创建分发拉取任务（仅从 ${LABEL_EXTERNAL_ARTI} 转存）。任务 ID：${jobId}`);
       await load();
     } catch (e) {
       alert(e instanceof Error ? e.message : String(e));
@@ -622,7 +631,7 @@ export const BomDistributePage: React.FC = () => {
             </div>
             <h2 className="text-2xl font-bold text-slate-900 mt-1">BOM 分发</h2>
             <p className="text-slate-500 mt-1 text-sm">
-              只读查看已入库清单与状态；「拉取」仅从 ext 转存地址（须为可识别的 Artifactory https 链接）；「上传」将排队由 worker 写入飞书云盘。
+              只读查看已入库清单与状态；「拉取」仅从 {LABEL_EXTERNAL_ARTI} 转存地址（须为可识别的 Artifactory https 链接）；「上传」将排队由 worker 写入飞书云盘。
             </p>
           </div>
         </div>
@@ -660,9 +669,9 @@ export const BomDistributePage: React.FC = () => {
 
       <div className="grid md:grid-cols-2 gap-4">
         <div className="rounded-lg border border-sky-200 bg-sky-50/90 p-3 md:p-4 space-y-2">
-          <div className="text-sm font-medium text-sky-950">外部 Artifactory · 拉取至本地</div>
+          <div className="text-sm font-medium text-sky-950">{LABEL_EXTERNAL_ARTI} · 拉取至本地</div>
           <p className="text-xs text-sky-900/90">
-            仅从 <strong>ext 转存</strong> 列的 URL 拉取（须含 artifactory 且为 https）；不读取「下载路径」列。本地已通过则不显示拉取；由 worker 消费队列。
+            仅从 <strong>{LABEL_EXTERNAL_ARTI} 转存</strong> 列的 URL 拉取（须含 artifactory 且为 https）；不读取「下载路径」列。本地已通过则不显示拉取；由 worker 消费队列。
           </p>
           <button
             type="button"
@@ -674,8 +683,8 @@ export const BomDistributePage: React.FC = () => {
               loadedBomRows.length === 0
                 ? '暂无数据'
                 : distributeExternalPullUrlRowCount === 0
-                  ? '当前无可拉取行（可能均已本地校验通过，或均无有效 ext 转存链接）'
-                  : '入队当前版本全部「分发 eligible」行（以数据库为准：ext 为 Artifactory https 且本地/md5 条件满足）'
+                  ? `当前无可拉取行（可能均已本地校验通过，或均无有效 ${LABEL_EXTERNAL_ARTI} 转存链接）`
+                  : `入队当前版本全部「分发 eligible」行（以数据库为准：${LABEL_EXTERNAL_ARTI} 转存链接为 Artifactory https 且本地/md5 条件满足）`
             }
             className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg border border-sky-300 bg-white text-sky-950 text-sm font-medium hover:bg-sky-100 disabled:opacity-50"
           >
@@ -684,7 +693,7 @@ export const BomDistributePage: React.FC = () => {
           </button>
           {loadedBomRows.length > 0 && distributeExternalPullUrlRowCount === 0 ? (
             <p className="text-[11px] text-amber-900">
-              当前版本无可拉取行（均已本地校验通过，或未填写可请求的 ext 链接）；行内拉取列为「—」，「全部拉取」不可用。
+              当前版本无可拉取行（均已本地校验通过，或未填写可请求的 {LABEL_EXTERNAL_ARTI} 链接）；行内拉取列为「—」，「全部拉取」不可用。
             </p>
           ) : null}
           {loadedBomRows.length > 0 && groupSegmentFilter !== GROUP_FILTER_ALL ? (
@@ -871,7 +880,7 @@ export const BomDistributePage: React.FC = () => {
                   {showDebugLinks ? '隐藏调试链接' : '显示调试链接'}
                 </button>
               </div>
-              {groupSegmentFilter !== GROUP_FILTER_ALL ? (
+              {distributeListFilterActive ? (
                 <span className="text-xs text-slate-500">
                   列表显示 {filteredStoredBomRows.length} / {loadedBomRows.length} 行
                   {uploadScopeRows.length > 0
@@ -887,7 +896,7 @@ export const BomDistributePage: React.FC = () => {
 
             {filteredStoredBomRows.length === 0 ? (
               <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
-                当前分组下没有匹配行，请更换分组或选「全部分组」。
+                当前筛选条件下没有匹配行，请调整「分组」或选「全部分组」。
               </div>
             ) : (
               <div className="overflow-x-auto border border-gray-200 rounded-lg -mx-0.5">
@@ -917,13 +926,13 @@ export const BomDistributePage: React.FC = () => {
                       </th>
                       <th
                         className="px-3 py-2 text-left font-semibold text-slate-700 border-b border-gray-200 whitespace-nowrap min-w-[9.5rem] max-w-[11rem] w-[10rem]"
-                        title="ext、本地、飞书（扫描写入）"
+                        title="内部 Artifactory、外部 Artifactory、本地、飞书（扫描写入）"
                       >
                         状态
                       </th>
                       <th
                         className="px-3 py-2 text-left font-semibold text-slate-700 border-b border-gray-200 whitespace-nowrap min-w-[10rem] max-w-[14rem] w-[12rem]"
-                        title="与「状态」列对应：ext、本地、飞书说明。"
+                        title="与「状态」列对应：内部 Artifactory、外部 Artifactory、本地、飞书说明。"
                       >
                         状态说明
                       </th>
@@ -931,7 +940,7 @@ export const BomDistributePage: React.FC = () => {
                         className="px-3 py-2 text-left font-semibold text-slate-700 border-b border-gray-200 whitespace-nowrap min-w-[10rem] max-w-[14rem] w-[12rem]"
                         title="jsonb 中 ext_url 等别名对应的可下载 URI"
                       >
-                        外部 Artifactory 下载链接
+                        {LABEL_EXTERNAL_ARTI} 下载链接
                       </th>
                       <th
                         className="px-3 py-2 text-left font-semibold text-slate-700 border-b border-gray-200 min-w-[10rem] max-w-[20rem] w-[14rem]"
@@ -948,6 +957,7 @@ export const BomDistributePage: React.FC = () => {
                       {dataHeaders.map((h) => {
                         const linkOrMd5 =
                           headerIsDownloadColumn(h, tableKeyMap) || headerIsMd5Column(h, tableKeyMap);
+                        const isDlCol = headerIsDownloadColumn(h, tableKeyMap);
                         const isRemark = headerMatchesAny(h, remarkHeaderKeys);
                         return (
                           <th
@@ -955,10 +965,18 @@ export const BomDistributePage: React.FC = () => {
                             title={
                               isRemark
                                 ? '导入 BOM 中的原始列，列顺序与粘贴表一致；仅展示，系统不会自动改写'
-                                : undefined
+                                : isDlCol
+                                  ? '下载路径：多行展示，换行与单元格内多 URL 均支持'
+                                  : undefined
                             }
-                            className={`px-3 py-2 text-left font-semibold text-slate-700 border-b border-gray-200 whitespace-nowrap ${
-                              linkOrMd5 ? 'max-w-[14rem] w-[14rem]' : isRemark ? 'min-w-[8rem] max-w-[14rem]' : 'max-w-[11rem]'
+                            className={`px-3 py-2 text-left font-semibold text-slate-700 border-b border-gray-200 ${
+                              isDlCol
+                                ? 'min-w-[12rem] max-w-[22rem] w-[18rem] whitespace-normal align-top'
+                                : linkOrMd5
+                                  ? 'max-w-[14rem] w-[14rem] whitespace-nowrap'
+                                  : isRemark
+                                    ? 'min-w-[8rem] max-w-[14rem] whitespace-nowrap'
+                                    : 'max-w-[11rem] whitespace-nowrap'
                             }`}
                           >
                             {h}
@@ -997,19 +1015,22 @@ export const BomDistributePage: React.FC = () => {
                       if (lr.status.local === 'await_manual_download') {
                         localLabel = '待处理';
                       }
+                      const itLabel = deriveItStatusLabel(lr.status);
                       const extUrlCell = extractExtUrlFromRow(r, tableKeyMap);
                       const localExplainRaw = lr.status.local_fetch_error?.trim() ?? null;
                       const extExplainRaw = lr.status.ext_fetch_error?.trim() ?? null;
-                      /** 分发页：await_manual_download 在状态格已标「待处理」，此处仅展示 local_fetch_error，否则 — */
+                      /** 分发页：仅展示各 status 说明字段；local 以 local_fetch_error 为主 */
                       const localExplainLine = localExplainRaw;
                       const extExplainLine = extExplainRaw;
                       const feishuExplainRaw = lr.status.feishu_scan_error?.trim() ?? null;
                       const feishuLabel = lr.status.feishu
                         ? BOM_ROW_FEISHU_STATUS_LABEL[lr.status.feishu]
                         : BOM_ROW_FEISHU_STATUS_LABEL.not_scanned;
+                      const itExplainRaw = lr.status.it_fetch_error?.trim() ?? null;
                       const statusExplainTitle =
                         [
-                          extExplainLine ? `ext：${extExplainLine}` : null,
+                          itExplainRaw ? `${LABEL_INTERNAL_ARTI}：${itExplainRaw}` : null,
+                          extExplainLine ? `${LABEL_EXTERNAL_ARTI}：${extExplainLine}` : null,
                           localExplainLine ? `本地：${localExplainLine}` : null,
                           feishuExplainRaw ? `飞书：${feishuExplainRaw}` : null,
                         ]
@@ -1075,7 +1096,7 @@ export const BomDistributePage: React.FC = () => {
                                 type="button"
                                 disabled={distributeExtPullBusy}
                                 onClick={() => void handleDistributeExtPullRow(lr)}
-                                title="从 ext 转存地址拉取本行至本地（worker）；需本地未校验通过且 ext 为 Artifactory https"
+                                title={`从 ${LABEL_EXTERNAL_ARTI} 转存地址拉取本行至本地（worker）；需本地未校验通过且转存链接为 Artifactory https`}
                                 className="inline-flex items-center justify-center p-1 rounded-md border border-sky-200 bg-sky-50 text-sky-900 hover:bg-sky-100 disabled:opacity-50"
                               >
                                 <Download size={14} />
@@ -1088,7 +1109,7 @@ export const BomDistributePage: React.FC = () => {
                                     ? '本地已校验通过，无需从外部拉取'
                                     : indexedMd5Hit === true
                                       ? '期望 MD5 已在 local_file 索引中命中；后端不会因该行入分发拉取队列'
-                                      : '本行无有效的外部转存（ext）http(s) 链接或其它不满足拉取条件'
+                                      : `本行无有效的 ${LABEL_EXTERNAL_ARTI} 转存 http(s) 链接或其它不满足拉取条件`
                                 }
                               >
                                 —
@@ -1141,10 +1162,17 @@ export const BomDistributePage: React.FC = () => {
                                   lr.status.local === 'local_found' ||
                                   lr.status.ext === 'synced_or_skipped')
                                   ? `整行状态：${formatDistributePageBomRowStatusTooltip(lr.status)}。本地侧显示为「文件不存在」：local_file 中无此期望 MD5（可能已删除或未扫描）；可「刷新」按索引重算状态。`
-                                  : `整行状态：${formatDistributePageBomRowStatusTooltip(lr.status)}。含 ext、本地、飞书。`
+                                  : `整行状态：${formatDistributePageBomRowStatusTooltip(lr.status)}。含内部 Artifactory、外部 Artifactory、本地、飞书。`
                               }
                             >
-                              <div className="text-[11px] font-medium">ext：{extLabel}</div>
+                              <div
+                                className={`text-[11px] font-medium ${
+                                  itLabel === '需关注' ? 'text-amber-900' : ''
+                                }`}
+                              >
+                                {LABEL_INTERNAL_ARTI}：{itLabel}
+                              </div>
+                              <div className="text-[11px] font-medium mt-0.5">{LABEL_EXTERNAL_ARTI}：{extLabel}</div>
                               <div className="text-[11px] font-medium mt-0.5">本地：{localLabel}</div>
                               <div className="text-[11px] font-medium mt-0.5 text-violet-900/90">飞书：{feishuLabel}</div>
                             </div>
@@ -1153,17 +1181,17 @@ export const BomDistributePage: React.FC = () => {
                             className="px-3 py-2 align-middle min-w-[10rem] max-w-[14rem] w-[12rem] text-slate-700"
                             title={statusExplainTitle}
                           >
-                            <div className="text-left text-[11px] leading-snug line-clamp-3 whitespace-pre-line break-words text-slate-800">
-                              <span className="font-medium text-slate-600">ext：</span>
-                              <span>{extExplainLine ?? '—'}</span>
-                            </div>
-                            <div className="text-left text-[11px] leading-snug mt-1.5 pt-1.5 border-t border-slate-100 line-clamp-3 whitespace-pre-line break-words">
-                              <span className="font-medium text-slate-600">本地：</span>
-                              <span className="text-slate-800">{localExplainLine ?? '—'}</span>
-                            </div>
-                            <div className="text-left text-[11px] leading-snug mt-1.5 pt-1.5 border-t border-slate-100 line-clamp-3 whitespace-pre-line break-words">
-                              <span className="font-medium text-slate-600">飞书：</span>
-                              <span className="text-slate-800">{feishuExplainRaw ?? '—'}</span>
+                            <div className="space-y-1.5">
+                              <StatusExplainLine label={LABEL_INTERNAL_ARTI} text={itExplainRaw} />
+                              <div className="pt-1.5 border-t border-slate-100">
+                                <StatusExplainLine label={LABEL_EXTERNAL_ARTI} text={extExplainLine} />
+                              </div>
+                              <div className="pt-1.5 border-t border-slate-100">
+                                <StatusExplainLine label="本地" text={localExplainLine} />
+                              </div>
+                              <div className="pt-1.5 border-t border-slate-100">
+                                <StatusExplainLine label="飞书" text={feishuExplainRaw} />
+                              </div>
                             </div>
                           </td>
                           <td className="px-3 py-2 align-middle min-w-[10rem] max-w-[14rem] w-[12rem] text-slate-700">
@@ -1243,13 +1271,22 @@ export const BomDistributePage: React.FC = () => {
                           {dataHeaders.map((h) => {
                             const linkOrMd5 =
                               headerIsDownloadColumn(h, tableKeyMap) || headerIsMd5Column(h, tableKeyMap);
+                            const isDlCol = headerIsDownloadColumn(h, tableKeyMap);
                             const isRemark = headerMatchesAny(h, remarkHeaderKeys);
                             const cellRaw = String(r[h] ?? '').trim();
                             return (
                               <td
                                 key={`${lr.id}-${h}`}
-                                className={`px-3 py-2 text-slate-700 align-middle overflow-hidden ${
-                                  linkOrMd5 ? 'max-w-[14rem] w-[14rem]' : isRemark ? 'min-w-[8rem] max-w-[14rem]' : 'max-w-[11rem]'
+                                className={`px-3 py-2 text-slate-700 ${
+                                  isDlCol ? 'align-top overflow-visible' : 'align-middle overflow-hidden'
+                                } ${
+                                  isDlCol
+                                    ? 'min-w-[12rem] max-w-[22rem] w-[18rem]'
+                                    : linkOrMd5
+                                      ? 'max-w-[14rem] w-[14rem]'
+                                      : isRemark
+                                        ? 'min-w-[8rem] max-w-[14rem]'
+                                        : 'max-w-[11rem]'
                                 }`}
                               >
                                 {isRemark ? (
@@ -1257,7 +1294,12 @@ export const BomDistributePage: React.FC = () => {
                                     {cellRaw || '—'}
                                   </span>
                                 ) : (
-                                  <BomDataTableCell header={h} value={r[h] ?? ''} keyMap={tableKeyMap} />
+                                  <BomDataTableCell
+                                    header={h}
+                                    value={r[h] ?? ''}
+                                    keyMap={tableKeyMap}
+                                    multilineDownload={isDlCol}
+                                  />
                                 )}
                               </td>
                             );
@@ -1274,7 +1316,7 @@ export const BomDistributePage: React.FC = () => {
               <code className="bg-slate-100 px-1 rounded">local_file</code> 索引刷新；点此页「刷新」可拉取最新。
             </p>
             <p className="text-xs text-slate-500">
-              飞书文件名与大小由「扫描飞书云盘」写入（与「文件名」「大小」列合并展示）；已与飞书对齐的行上传按钮为灰；未扫描前本地已通过的行显示「…」。「上传选中到飞书」仅处理当前筛选下已勾选的行。
+              飞书文件名与大小由「扫描飞书云盘」写入（与「文件名」「大小」列合并展示）；已与飞书对齐的行上传按钮为灰；未扫描前本地已通过的行显示「…」。「上传选中到飞书」仅处理当前「分组」筛选下已勾选的行；下载路径列支持多行与自动换行。
             </p>
           </>
         ) : loading ? (

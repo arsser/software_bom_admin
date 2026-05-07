@@ -39,6 +39,7 @@ import {
   type BomFeishuUploadJob,
   type BomFeishuUploadJobStatus,
 } from '../lib/bomFeishuUploadJobs';
+import { LABEL_EXTERNAL_ARTI, LABEL_INTERNAL_ARTI } from '../lib/bomUiLabels';
 import { fetchBomBatches, type BomBatch } from '../lib/bomBatches';
 import {
   fetchBomJobRowDetails,
@@ -392,7 +393,7 @@ export const BomDownloadJobsPage: React.FC = () => {
             </button>
             <h2 className="text-2xl font-bold text-slate-900 mt-1">BOM 后台任务</h2>
             <p className="text-slate-500 mt-1 text-sm">
-              内部 Artifactory 拉取、外部 Artifactory 同步、飞书云盘上传队列（均由 bom-scanner-worker 执行）。
+              {LABEL_INTERNAL_ARTI} 拉取、{LABEL_EXTERNAL_ARTI} 同步、飞书云盘上传队列（均由 bom-scanner-worker 执行）。
             </p>
           </div>
         </div>
@@ -444,7 +445,7 @@ export const BomDownloadJobsPage: React.FC = () => {
         <p className="text-xs text-slate-500 pb-2">
           {loading
             ? '加载中…'
-            : `每类已加载 it ${jobs.length}（上限 ${itLimit}）· ext ${extJobs.length}（${extLimit}）· 飞书 ${feishuJobs.length}（${feishuLimit}）；点折叠区底部「加载更多」可提高上限`}
+            : `每类已加载 ${LABEL_INTERNAL_ARTI} ${jobs.length}（上限 ${itLimit}）· ${LABEL_EXTERNAL_ARTI} ${extJobs.length}（${extLimit}）· 飞书 ${feishuJobs.length}（${feishuLimit}）；点折叠区底部「加载更多」可提高上限`}
           {hasActive ? ' · 自动刷新中' : ''}
         </p>
       </div>
@@ -457,7 +458,7 @@ export const BomDownloadJobsPage: React.FC = () => {
         >
           {sectionItOpen ? <ChevronDown size={18} className="text-slate-500 shrink-0" /> : <ChevronRight size={18} className="text-slate-500 shrink-0" />}
           <HardDriveDownload size={18} className="text-indigo-600 shrink-0" />
-          <span className="text-sm font-medium text-slate-800">内部 Artifactory 拉取</span>
+          <span className="text-sm font-medium text-slate-800">{LABEL_INTERNAL_ARTI} 拉取</span>
           <span className="text-xs text-slate-500 ml-auto shrink-0">
             {jobs.length} 条
             {itHasMore ? ' · 可加载更多' : ''}
@@ -554,7 +555,7 @@ export const BomDownloadJobsPage: React.FC = () => {
                         <button
                           type="button"
                           onClick={() =>
-                            void openJobDetail('it_download', '内部拉取', j.batchId, j.batchName, j.id, j.rowIds)
+                            void openJobDetail('it_download', `${LABEL_INTERNAL_ARTI} 拉取`, j.batchId, j.batchName, j.id, j.rowIds)
                           }
                           className="inline-flex items-center gap-1 px-2 py-1 rounded border border-indigo-200 text-xs text-indigo-800 hover:bg-indigo-50"
                           title="按任务 row_ids 查看每行文件名、本地索引大小与当前状态"
@@ -620,7 +621,7 @@ export const BomDownloadJobsPage: React.FC = () => {
         >
           {sectionExtOpen ? <ChevronDown size={18} className="text-slate-500 shrink-0" /> : <ChevronRight size={18} className="text-slate-500 shrink-0" />}
           <Upload size={18} className="text-emerald-600 shrink-0" />
-          <span className="text-sm font-medium text-slate-800">外部 Artifactory 同步</span>
+          <span className="text-sm font-medium text-slate-800">{LABEL_EXTERNAL_ARTI} 同步</span>
           <span className="text-xs text-slate-500 ml-auto shrink-0">
             {extJobs.length} 条
             {extHasMore ? ' · 可加载更多' : ''}
@@ -646,7 +647,7 @@ export const BomDownloadJobsPage: React.FC = () => {
               {extJobs.length === 0 && !loading ? (
                 <tr>
                   <td colSpan={8} className="px-4 py-10 text-center text-slate-500">
-                    暂无任务。请在 BOM 明细页发起「同步全部」或单行 ext 同步。
+                    {`暂无任务。请在 BOM 明细页发起「同步全部」或单行 ${LABEL_EXTERNAL_ARTI} 同步。`}
                   </td>
                 </tr>
               ) : null}
@@ -712,10 +713,10 @@ export const BomDownloadJobsPage: React.FC = () => {
                         <button
                           type="button"
                           onClick={() =>
-                            void openJobDetail('ext_sync', 'ext 同步', j.batchId, j.batchName, j.id, j.rowIds)
+                            void openJobDetail('ext_sync', `${LABEL_EXTERNAL_ARTI} 同步`, j.batchId, j.batchName, j.id, j.rowIds)
                           }
                           className="inline-flex items-center gap-1 px-2 py-1 rounded border border-emerald-200 text-xs text-emerald-900 hover:bg-emerald-50"
-                          title="按任务 row_ids 查看每行文件名、本地索引大小与 ext 状态"
+                          title={`按任务 row_ids 查看每行文件名、本地索引大小与 ${LABEL_EXTERNAL_ARTI} 状态`}
                         >
                           <ListTree size={12} />
                           详情
@@ -732,8 +733,8 @@ export const BomDownloadJobsPage: React.FC = () => {
                           onClick={() => void handleCancelExt(j.id)}
                           title={
                             j.status === 'running'
-                              ? '请求取消正在执行的 ext 同步（再次点击可强制取消）'
-                              : '取消排队中的 ext 同步任务'
+                              ? `请求取消正在执行的 ${LABEL_EXTERNAL_ARTI} 同步（再次点击可强制取消）`
+                              : `取消排队中的 ${LABEL_EXTERNAL_ARTI} 同步任务`
                           }
                           className="inline-flex items-center gap-1 px-2 py-1 rounded border border-slate-300 text-xs text-slate-700 hover:bg-slate-50 disabled:opacity-50"
                         >
@@ -763,7 +764,7 @@ export const BomDownloadJobsPage: React.FC = () => {
         ) : null}
         {extJobs.some((j) => j.status === 'running' || j.status === 'queued') ? (
           <div className="px-4 py-2 border-t border-slate-100 bg-emerald-50/50 text-xs text-slate-600">
-            ext 同步任务进行中时每 2 秒刷新。
+            {`${LABEL_EXTERNAL_ARTI} 同步任务进行中时每 2 秒刷新。`}
           </div>
         ) : null}
         </>

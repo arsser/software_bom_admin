@@ -1,6 +1,7 @@
 import { useCallback, useState } from 'react';
 import { Check, Copy } from 'lucide-react';
 import { formatBytesHuman } from '../lib/bytesFormat';
+import { LABEL_EXTERNAL_ARTI, LABEL_INTERNAL_ARTI } from '../lib/bomUiLabels';
 
 type Props = {
   bytes: number;
@@ -71,13 +72,13 @@ type TripleProps = {
 };
 
 /**
- * 自上而下与「选取」优先级一致：外部(ext) → 本地（索引）→ 内部 Artifactory（fileSizeBytes 列）。
+ * 自上而下与「状态」列一致：内部 Arti → 外部 Arti → 本地。
  */
 export function BomRowByteSizeCell({ localBytes, extBytes, remoteBytes }: TripleProps) {
   const segments: Array<{ bytes: number; label: string }> = [];
-  if (extBytes != null) segments.push({ bytes: extBytes, label: '外部 Artifactory' });
-  if (localBytes != null) segments.push({ bytes: localBytes, label: '本地文件' });
-  if (remoteBytes != null) segments.push({ bytes: remoteBytes, label: '内部 Artifactory' });
+  if (remoteBytes != null) segments.push({ bytes: remoteBytes, label: LABEL_INTERNAL_ARTI });
+  if (extBytes != null) segments.push({ bytes: extBytes, label: LABEL_EXTERNAL_ARTI });
+  if (localBytes != null) segments.push({ bytes: localBytes, label: '本地' });
 
   if (segments.length === 0) {
     return <span className="text-slate-400">—</span>;

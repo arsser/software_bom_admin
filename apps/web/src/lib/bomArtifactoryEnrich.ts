@@ -2,7 +2,11 @@ import { getArtifactoryApiInfo, type ApiInfoResult } from './artifactoryApi';
 import type { ArtifactoryConfig } from './artifactorySettings';
 import type { BomJsonKeyMap } from './bomScannerSettings';
 import type { BomBatchRow } from './bomBatches';
-import { mergeLocalFetchError } from './bomRowStatus';
+import {
+  IT_STATUS_LEGACY_ARTIFACTORY_PREFIX,
+  IT_STATUS_MD5_PREFIX,
+  mergeItFetchError,
+} from './bomRowStatus';
 import {
   extractDownloadUrlRaw,
   extractExpectedMd5FromRow,
@@ -12,19 +16,21 @@ import {
 
 const CHUNK = 20;
 
-const ARTIFACTORY_FETCH_ERR_PREFIX = 'Artifactory：';
+function shouldClearItMd5ErrorOnApiSuccess(prev: string | null | undefined): boolean {
+  const p = (prev ?? '').trim();
+  return (
+    p.startsWith(IT_STATUS_MD5_PREFIX) ||
+    p.startsWith(IT_STATUS_LEGACY_ARTIFACTORY_PREFIX)
+  );
+}
 
-function nextLastFetchAfterEnrich(
-  prev: string | null | undefined,
-  res: ApiInfoResult,
-): string | null {
+function nextItMd5FetchAfterEnrich(prev: string | null | undefined, res: ApiInfoResult): string | null {
   if (res.ok && res.info) {
-    const p = (prev ?? '').trim();
-    return p.startsWith(ARTIFACTORY_FETCH_ERR_PREFIX) ? null : prev ?? null;
+    return shouldClearItMd5ErrorOnApiSuccess(prev) ? null : prev ?? null;
   }
   const err = res.error ?? `HTTP ${res.status ?? '错误'}`;
   const short = err.length > 200 ? `${err.slice(0, 197)}…` : err;
-  return `${ARTIFACTORY_FETCH_ERR_PREFIX}${short}`.slice(0, 1000);
+  return `${IT_STATUS_MD5_PREFIX} ${short}`.slice(0, 1000);
 }
 
 function applyApiResultToRow(
@@ -45,10 +51,10 @@ function applyApiResultToRow(
     if (typeof res.info.size === 'number' && Number.isFinite(res.info.size) && res.info.size >= 0) {
       next = setRowFieldByAliases(next, aliasesSize, String(Math.round(res.info.size)));
     }
-    return { bom_row: next, lastFetchError: nextLastFetchAfterEnrich(prevFetchError, res) };
+    return { bom_row: next, lastFetchError: nextItMd5FetchAfterEnrich(prevFetchError, res) };
   }
 
-  return { bom_row: next, lastFetchError: nextLastFetchAfterEnrich(prevFetchError, res) };
+  return { bom_row: next, lastFetchError: nextItMd5FetchAfterEnrich(prevFetchError, res) };
 }
 
 export type EnrichArtifactorySummary = {
@@ -58,7 +64,7 @@ export type EnrichArtifactorySummary = {
   failedChunks: number;
   /** 本次调用后新写入合法 MD5 的行数 */
   md5FilledCount: number;
-  /** Storage API 返回 ok=false 的行数（原因写入 status.local_fetch_error / 状态说明·本地） */
+  /** Storage API 返回 ok=false 的行数（原因写入 status.it_fetch_error / 状态说明·It） */
   apiRespondedErrorCount: number;
   /** API 成功但未返回可用 MD5 校验和的行数 */
   apiOkButNoMd5Count: number;
@@ -68,7 +74,7 @@ export type EnrichArtifactorySummary = {
 
 /**
  * 对版本内各行：用下载路径请求 Storage API，将 MD5、大小写入 jsonb；
- * 失败将摘要写入 status.local_fetch_error（页面「状态说明·本地」）；成功时若原错误为本功能写入的 Artifactory 前缀则清空。
+ * 失败将摘要写入 status.it_fetch_error（页面「状态说明」It 行）；成功时若原错误为本功能写入的 MD5 前缀则清空。
  * 不修改 jsonKeyMap.remark（原始粘贴备注列）。
  */
 export async function enrichBomRowsFromArtifactory(
@@ -113,7 +119,7 @@ export async function enrichBomRowsFromArtifactory(
           item.row.bom_row,
           keyMap,
           res,
-          item.row.status.local_fetch_error,
+          item.row.status.it_fetch_error,
         );
         const afterMd5 = extractExpectedMd5FromRow(newBomRow, keyMap);
         if (!res.ok) {
@@ -126,7 +132,7 @@ export async function enrichBomRowsFromArtifactory(
         outRows[item.index] = {
           ...item.row,
           bom_row: newBomRow,
-          status: mergeLocalFetchError(item.row.status, lastFetchError),
+          status: mergeItFetchError(item.row.status, lastFetchError),
         };
       });
     } catch (e) {
@@ -141,13 +147,13 @@ export async function enrichBomRowsFromArtifactory(
           item.row.bom_row,
           keyMap,
           res,
-          item.row.status.local_fetch_error,
+          item.row.status.it_fetch_error,
         );
         summary.apiRespondedErrorCount += 1;
         outRows[item.index] = {
           ...item.row,
           bom_row: newBomRow,
-          status: mergeLocalFetchError(item.row.status, lastFetchError),
+          status: mergeItFetchError(item.row.status, lastFetchError),
         };
       });
     }

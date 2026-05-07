@@ -18,8 +18,10 @@ export type BomRowFeishuStatus = 'not_scanned' | 'absent' | 'present' | 'error';
 export type BomRowStatusJson = {
   local: BomRowLocalStatus;
   ext: BomRowExtStatus;
-  /** it/本地拉取、补全 MD5 等说明（与 status.local 配套） */
+  /** worker 内部 Artifactory 拉取、主机不一致等说明（与 status.local 配套；状态说明列「本地」行） */
   local_fetch_error?: string | null;
+  /** 网页侧内部 Artifactory 操作（补全 MD5、检查远程大小等；状态说明列「It」行） */
+  it_fetch_error?: string | null;
   /** 外部 Artifactory 查重/同步等说明（与 status.ext 配套） */
   ext_fetch_error?: string | null;
   /** 飞书侧是否存在预期路径文件（Edge 扫描写入，不经 MD5） */
@@ -37,6 +39,13 @@ export const DEFAULT_BOM_ROW_STATUS: BomRowStatusJson = {
   ext: 'not_started',
 };
 
+/** It 行文案前缀：补全 MD5（网页 Storage API） */
+export const IT_STATUS_MD5_PREFIX = '[补全·MD5]';
+/** It 行文案前缀：检查远程大小 */
+export const IT_STATUS_SIZE_PREFIX = '[检查·远程大小]';
+/** 历史前缀（写入 It 行；可与 MD5 前缀一并清除） */
+export const IT_STATUS_LEGACY_ARTIFACTORY_PREFIX = 'Artifactory：';
+
 /** 写入或清除 status.local_fetch_error（null/空串 表示删除该键） */
 export function mergeLocalFetchError(
   status: BomRowStatusJson,
@@ -49,6 +58,21 @@ export function mergeLocalFetchError(
     return next;
   }
   next.local_fetch_error = message.slice(0, 1000);
+  return next;
+}
+
+/** 写入或清除 status.it_fetch_error（null/空串 表示删除该键） */
+export function mergeItFetchError(
+  status: BomRowStatusJson,
+  message: string | null | undefined,
+): BomRowStatusJson {
+  const next: BomRowStatusJson = { ...status };
+  if (message === undefined) return next;
+  if (message === null || message === '') {
+    delete next.it_fetch_error;
+    return next;
+  }
+  next.it_fetch_error = message.slice(0, 1000);
   return next;
 }
 
@@ -87,8 +111,10 @@ export function parseBomRowStatus(raw: unknown): BomRowStatusJson {
       if (isBomRowLocalStatus(local) && isBomRowExtStatus(ext)) {
         const out: BomRowStatusJson = { local, ext };
         const lf = o.local_fetch_error;
+        const itf = o.it_fetch_error;
         const ef = o.ext_fetch_error;
         if (typeof lf === 'string' && lf.trim()) out.local_fetch_error = lf.trim().slice(0, 1000);
+        if (typeof itf === 'string' && itf.trim()) out.it_fetch_error = itf.trim().slice(0, 1000);
         if (typeof ef === 'string' && ef.trim()) out.ext_fetch_error = ef.trim().slice(0, 1000);
         const fh = o.feishu;
         if (typeof fh === 'string' && isBomRowFeishuStatus(fh)) out.feishu = fh;
@@ -136,11 +162,12 @@ export const BOM_ROW_FEISHU_STATUS_LABEL: Record<BomRowFeishuStatus, string> = {
 
 /** 兼容旧 UI：整行摘要（tooltip） */
 export function formatBomRowStatusTooltip(s: BomRowStatusJson): string {
+  const itSummary = s.it_fetch_error?.trim() ? '需关注' : '正常';
   const feishuPart =
     s.feishu != null
       ? `；飞书：${BOM_ROW_FEISHU_STATUS_LABEL[s.feishu]}（${s.feishu}）`
       : '；飞书：未扫描';
-  return `本地：${BOM_ROW_LOCAL_STATUS_LABEL[s.local]}（${s.local}）；ext：${BOM_ROW_EXT_STATUS_LABEL[s.ext]}（${s.ext}）${feishuPart}`;
+  return `内部 Artifactory：${itSummary}；外部 Artifactory：${BOM_ROW_EXT_STATUS_LABEL[s.ext]}（${s.ext}）；本地：${BOM_ROW_LOCAL_STATUS_LABEL[s.local]}（${s.local}）${feishuPart}`;
 }
 
 /** @deprecated 旧单一枚举，仅用于文档/迁移对照 */
@@ -174,6 +201,6 @@ export const BOM_STATUS_LEGEND_VERIFIED_OK = '本地索引中已存在与期望 
 export const BOM_STATUS_LEGEND_MANUAL =
   '链接不支持自动拉取，请自行下载并放入暂存目录，保存后由扫描更新索引与状态。';
 
-/** 自动拉取或 ext 同步失败等：原因在 status.local_fetch_error / status.ext_fetch_error，页面「状态说明」列以「本地：」「ext：」前缀同行展示。 */
+/** 自动拉取或 ext 同步失败等：原因在 status 各说明字段；页面「状态说明」列为 内部 Artifactory / 外部 Artifactory / 本地 分行展示。 */
 export const BOM_STATUS_LEGEND_ERROR =
-  '自动从内部 Artifactory 拉取失败、外部 Artifactory 同步失败或主机与配置不一致；详见「状态说明」列（对应 JSON 内 local_fetch_error / ext_fetch_error）。';
+  '自动从内部 Artifactory 拉取失败、外部 Artifactory 同步失败或主机与配置不一致；详见「状态说明」列（对应 JSON：it_fetch_error、ext_fetch_error、local_fetch_error）。';

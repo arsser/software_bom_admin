@@ -160,8 +160,8 @@ const DEFAULT_KEY_MAP = {
   extFileSizeBytes: ['ext_size_bytes', 'ext文件大小', 'extSize', 'ext大小'],
   releaseVersion: ['版本', 'version', 'releaseVersion', '产品版本'],
   releaseBatch: ['批次', 'batch', 'releaseBatch', '发布批次'],
-  moduleName: ['模块', 'module', '组件', 'moduleName'],
-  groupSegment: ['分组', 'group', 'groupName', '组别'],
+  moduleName: ['组件', 'Component', '组件名'],
+  groupSegment: ['分组', 'group', 'groupName', '组别', '模块'],
 };
 
 const CANONICAL_EXT_URL_KEY = 'ext_url';

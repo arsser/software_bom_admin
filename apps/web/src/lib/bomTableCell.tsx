@@ -91,10 +91,12 @@ export type BomDataTableCellProps = {
   header: string;
   value: string;
   keyMap: BomJsonKeyMap;
+  /** 为 true 时下载路径列按行换行展示（含单元格内换行），每行可单独解析链接 */
+  multilineDownload?: boolean;
 };
 
 /** 下载路径列：可点击 http(s) 超链接 + 复制；MD5 列：等宽 + 复制 */
-export function BomDataTableCell({ header, value, keyMap }: BomDataTableCellProps) {
+export function BomDataTableCell({ header, value, keyMap, multilineDownload }: BomDataTableCellProps) {
   const raw = value ?? '';
   const isDl = headerIsDownloadColumn(header, keyMap);
   const isMd5 = headerIsMd5Column(header, keyMap);
@@ -106,6 +108,53 @@ export function BomDataTableCell({ header, value, keyMap }: BomDataTableCellProp
   const href = isDl ? extractHrefFromDownloadCell(raw) : null;
   const copyText = isDl ? textToCopyForDownload(raw) : raw.trim();
   const linkTitle = isDl ? copyText || href || raw : raw;
+
+  if (isDl && multilineDownload) {
+    const lines = raw.replace(/\r\n/g, '\n').split('\n');
+    const showEmpty = lines.length === 1 && lines[0] === '';
+    return (
+      <div className="flex items-start gap-1 min-w-0 w-full max-w-full">
+        <div className="min-w-0 flex-1 space-y-0.5 text-left">
+          {showEmpty ? (
+            <span className="text-slate-400">—</span>
+          ) : (
+            lines.map((line, idx) => {
+              const lineHref = extractHrefFromDownloadCell(line);
+              if (lineHref) {
+                return (
+                  <a
+                    key={idx}
+                    href={lineHref}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="block break-all text-indigo-600 hover:text-indigo-800 hover:underline text-[11px] leading-snug"
+                    title={textToCopyForDownload(line) || lineHref || line}
+                  >
+                    {anchorLabelForDownload(line)}
+                  </a>
+                );
+              }
+              if (line === '') {
+                return <div key={idx} className="min-h-[0.5rem]" aria-hidden />;
+              }
+              return (
+                <span
+                  key={idx}
+                  className="block break-all text-slate-800 text-[11px] leading-snug whitespace-pre-wrap"
+                  title={line}
+                >
+                  {line}
+                </span>
+              );
+            })
+          )}
+        </div>
+        {copyText ? (
+          <CopyIconButton text={copyText} title="复制下载路径" />
+        ) : null}
+      </div>
+    );
+  }
 
   return (
     <div className="flex items-center gap-1 min-w-0 w-full max-w-full">

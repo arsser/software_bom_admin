@@ -26,6 +26,7 @@ import {
   type Product,
 } from '../lib/products';
 import { BomProductEditorModal } from './BomProductEditorModal';
+import { LABEL_EXTERNAL_ARTI } from '../lib/bomUiLabels';
 
 type ProductWithBatches = {
   product: Product;
@@ -457,7 +458,7 @@ export const BomMaster: React.FC = () => {
                                 type="button"
                                 onClick={() => navigate(`/bom/${b.id}/distribute`)}
                                 className="inline-flex items-center gap-1 text-slate-600 hover:text-slate-900 text-sm font-medium"
-                                title="分发：只读清单、本地/ext/飞书状态与拉取等"
+                                title={`分发：只读清单、本地/${LABEL_EXTERNAL_ARTI}/飞书状态与拉取等`}
                               >
                                 <Share2 size={14} />
                                 分发

@@ -11,6 +11,7 @@ import {
 } from './bomRowFields';
 import { parseBomRowStatus, type BomRowStatusJson } from './bomRowStatus';
 import { fetchBomScannerSettings, type BomJsonKeyMap } from './bomScannerSettings';
+import { LABEL_EXTERNAL_ARTI, LABEL_INTERNAL_ARTI } from './bomUiLabels';
 
 /** 与后台任务类型对应，用于详情里状态摘要的侧重点 */
 export type BomJobDetailKind = 'it_download' | 'ext_sync' | 'feishu_upload';
@@ -51,12 +52,16 @@ function displayNameForRow(row: BomRowRecord, keyMap: BomJsonKeyMap): string {
 
 function statusLineForKind(kind: BomJobDetailKind, st: BomRowStatusJson): string {
   if (kind === 'it_download') {
+    const ie = st.it_fetch_error?.trim();
     const le = st.local_fetch_error?.trim();
-    return `本地 ${st.local}${le ? ` · ${le.slice(0, 160)}` : ''}`;
+    let part = `本地 ${st.local}`;
+    if (ie) part += ` · ${LABEL_INTERNAL_ARTI} ${ie.slice(0, 140)}`;
+    if (le) part += ` · ${le.slice(0, 140)}`;
+    return part;
   }
   if (kind === 'ext_sync') {
     const ee = st.ext_fetch_error?.trim();
-    return `ext ${st.ext}${ee ? ` · ${ee.slice(0, 160)}` : ''}`;
+    return `${LABEL_EXTERNAL_ARTI} ${st.ext}${ee ? ` · ${ee.slice(0, 160)}` : ''}`;
   }
   const f = st.feishu ?? 'not_scanned';
   const fe = st.feishu_scan_error?.trim();

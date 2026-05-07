@@ -1,7 +1,7 @@
 import type { BomBatchRow, LocalFileIndexInfo } from './bomBatches';
 import type { BomJsonKeyMap } from './bomScannerSettings';
 import type { BomRowRecord } from './bomParser';
-import { BOM_ROW_LOCAL_STATUS_LABEL } from './bomRowStatus';
+import { BOM_ROW_LOCAL_STATUS_LABEL, type BomRowStatusJson } from './bomRowStatus';
 
 function norm(h: string): string {
   return h.trim().toLowerCase();
@@ -49,8 +49,23 @@ export function firstNonEmptyByKeysRelaxed(row: BomRowRecord, keys: string[]): s
 }
 
 export function extractGroupSegmentFromRow(row: BomRowRecord, keyMap: BomJsonKeyMap): string | null {
-  const keys = keyMap.groupSegment?.length ? keyMap.groupSegment : ['分组', 'group', 'groupName', '组别'];
+  const keys = keyMap.groupSegment?.length ? keyMap.groupSegment : ['分组', 'group', 'groupName', '组别', '模块'];
   return firstNonEmptyByKeysRelaxed(row, keys);
+}
+
+/** 组件类型 / 模块名（仅 jsonKeyMap.moduleName 配置的别名；宽松匹配列名） */
+export function extractModuleTypeFromRow(row: BomRowRecord, keyMap: BomJsonKeyMap): string | null {
+  const keys = keyMap.moduleName?.length ? keyMap.moduleName : ['组件', 'Component', '组件名'];
+  const exact = firstNonEmptyByKeys(row, keys);
+  if (exact) return exact;
+  const want = new Set(keys.map((k) => normalizeBomKeyForMatch(k)).filter(Boolean));
+  for (const [k, val] of Object.entries(row)) {
+    if (want.has(normalizeBomKeyForMatch(k))) {
+      const v = String(val ?? '').trim();
+      if (v) return v;
+    }
+  }
+  return null;
 }
 
 export function extractDownloadUrlRaw(row: BomRowRecord, keyMap: BomJsonKeyMap): string | null {
@@ -258,6 +273,15 @@ export function deriveLocalExtStatusLabels(
   }
 
   return { localLabel, extLabel };
+}
+
+/**
+ * 状态格「内部 Artifactory」行摘要：依据 status.it_fetch_error（补全 MD5 / 检查远程大小等）。
+ */
+export function deriveItStatusLabel(status: BomRowStatusJson): string {
+  const t = status.it_fetch_error?.trim();
+  if (!t) return '正常';
+  return '需关注';
 }
 
 /** 从相对/绝对路径取文件名（用于表格展示） */

@@ -9,7 +9,12 @@ import {
   type BomWarning,
   type HeaderValidationResult,
 } from './bomParser';
-import { mergeLocalFetchError, parseBomRowStatus, type BomRowStatusJson } from './bomRowStatus';
+import {
+  mergeItFetchError,
+  mergeLocalFetchError,
+  parseBomRowStatus,
+  type BomRowStatusJson,
+} from './bomRowStatus';
 
 export type BomBatch = {
   id: string;
@@ -25,7 +30,7 @@ export type BomBatch = {
 export type BomBatchRow = {
   id: string;
   bom_row: BomRowRecord;
-  /** JSONB：local / ext 及可选 local_fetch_error、ext_fetch_error */
+  /** JSONB：local / ext 及可选 local_fetch_error、it_fetch_error、ext_fetch_error */
   status: BomRowStatusJson;
 };
 
@@ -241,17 +246,35 @@ export async function updateBomRowRecord(rowId: string, bom_row: BomRowRecord): 
   if (error) throw error;
 }
 
-/** 同时更新 bom_row 与 status.local_fetch_error（如「补全 MD5」写入状态说明·本地） */
+/** 合并更新 bom_row 与 status 说明字段（仅传入的键会写入；undefined 表示不改） */
+export async function updateBomRowBomAndStatusFetchErrors(
+  rowId: string,
+  bom_row: BomRowRecord,
+  patches: {
+    local_fetch_error?: string | null;
+    it_fetch_error?: string | null;
+  },
+): Promise<void> {
+  const { data: row, error: selErr } = await supabase.from('bom_rows').select('status').eq('id', rowId).maybeSingle();
+  if (selErr) throw selErr;
+  let status = parseBomRowStatus(row?.status);
+  if ('local_fetch_error' in patches) {
+    status = mergeLocalFetchError(status, patches.local_fetch_error ?? null);
+  }
+  if ('it_fetch_error' in patches) {
+    status = mergeItFetchError(status, patches.it_fetch_error ?? null);
+  }
+  const { error } = await supabase.from('bom_rows').update({ bom_row, status }).eq('id', rowId);
+  if (error) throw error;
+}
+
+/** 同时更新 bom_row 与 status.local_fetch_error（worker 拉取等写入状态说明·本地） */
 export async function updateBomRowBomAndFetchError(
   rowId: string,
   bom_row: BomRowRecord,
   local_fetch_error: string | null,
 ): Promise<void> {
-  const { data: row, error: selErr } = await supabase.from('bom_rows').select('status').eq('id', rowId).maybeSingle();
-  if (selErr) throw selErr;
-  const status = mergeLocalFetchError(parseBomRowStatus(row?.status), local_fetch_error);
-  const { error } = await supabase.from('bom_rows').update({ bom_row, status }).eq('id', rowId);
-  if (error) throw error;
+  return updateBomRowBomAndStatusFetchErrors(rowId, bom_row, { local_fetch_error });
 }
 
 export type LocalFileIndexInfo = {

@@ -34,12 +34,12 @@ import {
   parsePastedFromClipboard,
   replaceBatchRows,
   updateBomBatchHeaderOrder,
-  updateBomRowBomAndFetchError,
-  updateBomRowRecord,
+  updateBomRowBomAndStatusFetchErrors,
   validateRequiredHeaders,
   type BomBatchRow,
   type BomRowRecord,
 } from '../lib/bomBatches';
+import { StatusExplainLine } from './StatusExplainLine';
 import { enrichBomRowsFromArtifactory } from '../lib/bomArtifactoryEnrich';
 import { enrichBomRowsRemoteSizeFromArtifactory } from '../lib/bomArtifactorySizes';
 import { fetchArtifactorySettings, type ArtifactoryConfig } from '../lib/artifactorySettings';
@@ -84,12 +84,14 @@ import {
   rowEligibleForExtSync,
   rowEligibleForExtCheckCopy,
   rowEligibleForItPull,
+  deriveItStatusLabel,
   deriveLocalExtStatusLabels,
   rowExtUiComplete,
 } from '../lib/bomRowFields';
 import { BomRowByteSizeCell } from './HumanByteSize';
 import { BomDataTableCell, headerIsDownloadColumn, headerIsMd5Column } from '../lib/bomTableCell';
 import { formatBomRowStatusTooltip } from '../lib/bomRowStatus';
+import { LABEL_EXTERNAL_ARTI, LABEL_INTERNAL_ARTI } from '../lib/bomUiLabels';
 import {
   fetchProducts,
   fetchProductDistributionSettings,
@@ -152,13 +154,13 @@ export const BomDetail: React.FC = () => {
   const [showExtAdvancedTools, setShowExtAdvancedTools] = useState(false);
   /** 已入库表格：勾选用于复制 curl/wget 的行 id（内部 Artifactory / BOM 下载列） */
   const [copyRowIds, setCopyRowIds] = useState<Set<string>>(() => new Set());
-  /** 勾选用于复制 ext 转存链接 curl/wget 的行 id */
+  /** 勾选用于复制外部 Arti 转存链接 curl/wget 的行 id */
   const [extCopyRowIds, setExtCopyRowIds] = useState<Set<string>>(() => new Set());
   const [copyCmdToast, setCopyCmdToast] = useState<string | null>(null);
   const [extCopyCmdToast, setExtCopyCmdToast] = useState<string | null>(null);
   /** 已入库表格：仅显示本地侧非「校验通过」的行（与「只看本地校验未通过」一致） */
   const [filterStoredLocalNotVerifiedOk, setFilterStoredLocalNotVerifiedOk] = useState(false);
-  /** 已入库表格：仅显示 ext 侧未完成行（与表格 ext「已完成」判定一致，含已写入 ext 链接） */
+  /** 已入库表格：仅显示外部 Arti 侧未完成行（与表格「已完成」判定一致，含已写入转存链接） */
   const [filterStoredExtNotComplete, setFilterStoredExtNotComplete] = useState(false);
 
   // 编辑模式下：用于控制「覆盖 BOM 清单」按钮可用性（仅 BOM 原始内容是否相对上次入库有改动）
@@ -246,7 +248,7 @@ export const BomDetail: React.FC = () => {
     return keys;
   }, [batchHeaderOrder, selectedRows]);
 
-  /** 动态 BOM 列：保留导入表头顺序（含备注列）；仅排除系统单独展示的体积/ext 直链列 */
+  /** 动态 BOM 列：保留导入表头顺序（含备注列）；仅排除系统单独展示的体积与转存直链列 */
   const dataHeaders = useMemo(() => {
     const sizeKeys = tableKeyMap.fileSizeBytes ?? [];
     const legacySizeAliases = ['文件大小', 'size_bytes', '远端大小'];
@@ -716,7 +718,7 @@ export const BomDetail: React.FC = () => {
       setExtCheckLastDetailText(null);
       setExtCheckDetailToast(null);
 
-      // 并发限制：避免同时开太多 ext checksum 请求
+      // 并发限制：避免同时开太多外部 Arti checksum 请求
       const concurrency = 4;
       const results: BomExtCheckCopyResult[] = new Array(ids.length);
       let cursor = 0;
@@ -738,7 +740,7 @@ export const BomDetail: React.FC = () => {
       let nError = 0;
       const sampleErrors: string[] = [];
       const detailErrors: string[] = [];
-      const needPutNonVerifiedPhrase = 'ext 不存在，需本地下载并校验后再上传';
+      const needPutNonVerifiedPhrase = `${LABEL_EXTERNAL_ARTI} 侧尚无制品，需本地下载并校验后再上传`;
       for (let i = 0; i < results.length; i++) {
         const r = results[i];
         const id = ids[i];
@@ -757,10 +759,10 @@ export const BomDetail: React.FC = () => {
 
       const suffix = sampleErrors.length ? `（示例：${sampleErrors.join('；')}）` : '';
       const needPutNonVerifiedPart = nNeedPutNonVerifiedOk ? `；${nNeedPutNonVerifiedOk} 行：${needPutNonVerifiedPhrase}` : '';
-      alert(`ext 全部检查完成：已 Copy ${nCopied}，需 PUT ${nNeedPutVerifiedOk}，失败 ${nError}${needPutNonVerifiedPart}${suffix}`);
+      alert(`${LABEL_EXTERNAL_ARTI} 全部检查完成：已 Copy ${nCopied}，需 PUT ${nNeedPutVerifiedOk}，失败 ${nError}${needPutNonVerifiedPart}${suffix}`);
       if (detailErrors.length) {
         setExtCheckLastDetailText(
-          [`ext 全部检查失败详情`, `失败行数：${detailErrors.length}`, '', ...detailErrors].join('\n'),
+          [`${LABEL_EXTERNAL_ARTI} 全部检查失败详情`, `失败行数：${detailErrors.length}`, '', ...detailErrors].join('\n'),
         );
       } else {
         setExtCheckLastDetailText(null);
@@ -769,7 +771,7 @@ export const BomDetail: React.FC = () => {
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       alert(msg);
-      setExtCheckLastDetailText(`ext 全部检查异常：\n${msg}`);
+      setExtCheckLastDetailText(`${LABEL_EXTERNAL_ARTI} 全部检查异常：\n${msg}`);
     } finally {
       setExtCheckBusy(false);
     }
@@ -781,26 +783,26 @@ export const BomDetail: React.FC = () => {
     try {
       const r = (await checkCopyExtForBomRow(rowId)) as BomExtCheckCopyResult;
       if (!r.ok) {
-        alert('ext 快速查重/Copy 失败：' + r.error);
+        alert(`${LABEL_EXTERNAL_ARTI} 快速查重/Copy 失败：` + r.error);
         return;
       }
 
       if (r.needPut) {
         const row = loadedBomRows.find((lr) => lr.id === rowId);
         if (row?.status.local !== 'verified_ok') {
-          // ext 不存在但本地未校验通过：worker 无法 PUT，需要先下载并校验
-          alert('ext 不存在，需本地下载并校验后再上传');
+          // 外部 Arti 侧尚无制品但本地未校验通过：worker 无法 PUT，需要先下载并校验
+          alert(`${LABEL_EXTERNAL_ARTI} 侧尚无制品，需本地下载并校验后再上传`);
           return;
         }
 
         // 仅当本地确实存在对应文件时才允许上传（排队 worker PUT）
         const md5 = row ? extractExpectedMd5FromRow(row.bom_row, tableKeyMap) : null;
         if (!md5 || !localInfoByMd5.get(md5)?.path) {
-          alert('本地无该文件，无法上传（请先拉取并校验通过后再同步 ext）');
+          alert(`本地无该文件，无法上传（请先拉取并校验通过后再同步到 ${LABEL_EXTERNAL_ARTI}）`);
           return;
         }
 
-        // ext 不存在：交给 worker 做本地 PUT/上传
+        // 外部 Arti 侧尚无制品：交给 worker 做本地 PUT/上传
         await requestBomExtSync(batchId, [rowId]);
         const jobs = await fetchBomExtSyncJobsForBatch(batchId);
         setExtSyncJobs(jobs);
@@ -968,7 +970,7 @@ export const BomDetail: React.FC = () => {
       .map((lr, idx) => ({ row: lr, displayLine: idx + 1 }))
       .filter(({ row }) => extCopyRowIds.has(row.id));
     if (items.length === 0) {
-      alert('请先勾选「ext」列复选框（需为已写入 外部 Artifactory http(s) 链接的行）。');
+      alert('请先勾选「外部 Arti」列复选框（需为已写入 外部 Artifactory http(s) 链接的行）。');
       return;
     }
     const { text, errors } = buildCopyCommandsForExtRows(items, config.jsonKeyMap, af, tool);
@@ -984,7 +986,7 @@ export const BomDetail: React.FC = () => {
       await copyTextWithFallback(clip);
       const label = tool === 'curl' ? 'curl' : 'wget';
       setExtCopyCmdToast(
-        `已复制 ext ${label}（${items.length} 条命令${errors.length ? `，${errors.length} 条跳过` : ''}）`,
+        `已复制 ${LABEL_EXTERNAL_ARTI} ${label}（${items.length} 条命令${errors.length ? `，${errors.length} 条跳过` : ''}）`,
       );
       window.setTimeout(() => setExtCopyCmdToast(null), 4000);
       if (errors.length) {
@@ -1033,10 +1035,11 @@ export const BomDetail: React.FC = () => {
         const b = enriched[i];
         if (!a || !b) continue;
         const bomChanged = JSON.stringify(a.bom_row) !== JSON.stringify(b.bom_row);
-        const errChanged =
-          (a.status.local_fetch_error ?? null) !== (b.status.local_fetch_error ?? null);
-        if (bomChanged || errChanged) {
-          await updateBomRowBomAndFetchError(b.id, b.bom_row, b.status.local_fetch_error ?? null);
+        const itErrChanged = (a.status.it_fetch_error ?? null) !== (b.status.it_fetch_error ?? null);
+        if (bomChanged || itErrChanged) {
+          await updateBomRowBomAndStatusFetchErrors(b.id, b.bom_row, {
+            it_fetch_error: b.status.it_fetch_error ?? null,
+          });
           persisted += 1;
         }
       }
@@ -1050,7 +1053,7 @@ export const BomDetail: React.FC = () => {
       ];
       if (summary.apiRespondedErrorCount > 0) {
         parts.push(
-          `API 返回失败 ${summary.apiRespondedErrorCount} 行（见各行「状态说明·本地」中的 Artifactory 摘要）`,
+          `API 返回失败 ${summary.apiRespondedErrorCount} 行（见各行「状态说明」${LABEL_INTERNAL_ARTI} 行中 [补全·MD5] 摘要）`,
         );
       }
       if (summary.apiOkButNoMd5Count > 0) {
@@ -1100,8 +1103,12 @@ export const BomDetail: React.FC = () => {
         const a = targets[i];
         const b = enriched[i];
         if (!a || !b) continue;
-        if (JSON.stringify(a.bom_row) !== JSON.stringify(b.bom_row)) {
-          await updateBomRowRecord(b.id, b.bom_row);
+        const bomCh = JSON.stringify(a.bom_row) !== JSON.stringify(b.bom_row);
+        const itCh = (a.status.it_fetch_error ?? null) !== (b.status.it_fetch_error ?? null);
+        if (bomCh || itCh) {
+          await updateBomRowBomAndStatusFetchErrors(b.id, b.bom_row, {
+            it_fetch_error: b.status.it_fetch_error ?? null,
+          });
           persisted += 1;
         }
       }
@@ -1111,7 +1118,7 @@ export const BomDetail: React.FC = () => {
       const parts: string[] = [
         `已保存变更 ${persisted} 行`,
         `参与 Storage API 的行：${summary.rowsWithArtifactoryUrl}`,
-        `写入/更新 it 大小列：${summary.sizeFilledCount} 行`,
+        `写入/更新内部 Artifactory 大小列：${summary.sizeFilledCount} 行`,
       ];
       if (summary.apiRespondedErrorCount > 0) {
         parts.push(`API 返回失败 ${summary.apiRespondedErrorCount} 行`);
@@ -1481,11 +1488,17 @@ export const BomDetail: React.FC = () => {
                     {previewDisplayHeaders.map((h) => {
                       const linkOrMd5 =
                         headerIsDownloadColumn(h, tableKeyMap) || headerIsMd5Column(h, tableKeyMap);
+                      const isDlCol = headerIsDownloadColumn(h, tableKeyMap);
                       return (
                         <th
                           key={h}
-                          className={`px-3 py-2 text-left font-semibold text-slate-700 border-b border-gray-200 whitespace-nowrap ${
-                            linkOrMd5 ? 'max-w-[14rem] w-[14rem]' : 'max-w-[11rem]'
+                          title={isDlCol ? '下载路径：多行展示' : undefined}
+                          className={`px-3 py-2 text-left font-semibold text-slate-700 border-b border-gray-200 ${
+                            isDlCol
+                              ? 'min-w-[12rem] max-w-[22rem] w-[18rem] whitespace-normal align-top'
+                              : linkOrMd5
+                                ? 'max-w-[14rem] w-[14rem] whitespace-nowrap'
+                                : 'max-w-[11rem] whitespace-nowrap'
                           }`}
                         >
                           {h}
@@ -1501,14 +1514,26 @@ export const BomDetail: React.FC = () => {
                       {previewDisplayHeaders.map((h) => {
                         const linkOrMd5 =
                           headerIsDownloadColumn(h, tableKeyMap) || headerIsMd5Column(h, tableKeyMap);
+                        const isDlCol = headerIsDownloadColumn(h, tableKeyMap);
                         return (
                           <td
                             key={`${i}-${h}`}
-                            className={`px-3 py-2 text-slate-700 align-middle ${
-                              linkOrMd5 ? 'max-w-[14rem] w-[14rem]' : 'max-w-[11rem]'
+                            className={`px-3 py-2 text-slate-700 ${
+                              isDlCol ? 'align-top overflow-visible' : 'align-middle overflow-hidden'
+                            } ${
+                              isDlCol
+                                ? 'min-w-[12rem] max-w-[22rem] w-[18rem]'
+                                : linkOrMd5
+                                  ? 'max-w-[14rem] w-[14rem]'
+                                  : 'max-w-[11rem]'
                             }`}
                           >
-                            <BomDataTableCell header={h} value={r[h] ?? ''} keyMap={tableKeyMap} />
+                            <BomDataTableCell
+                              header={h}
+                              value={r[h] ?? ''}
+                              keyMap={tableKeyMap}
+                              multilineDownload={isDlCol}
+                            />
                           </td>
                         );
                       })}
@@ -1550,7 +1575,7 @@ export const BomDetail: React.FC = () => {
               <div className="rounded-lg border border-indigo-100 bg-indigo-50/90 p-3 md:p-4 space-y-3">
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <div>
-                    <div className="text-sm font-medium text-indigo-950">内部 Artifactory</div>
+                    <div className="text-sm font-medium text-indigo-950">{LABEL_INTERNAL_ARTI}</div>
                     
                   </div>
                   <div className="flex flex-wrap items-center gap-2">
@@ -1665,7 +1690,7 @@ export const BomDetail: React.FC = () => {
                         <p className="text-xs text-emerald-800 font-medium px-0.5">{copyCmdToast}</p>
                       ) : null}
                       <p className="text-[11px] text-slate-600 leading-snug">
-                        在下方表格「it」列（展开本工具后显示）勾选含 BOM 下载列 内部 Artifactory 链接的行，再复制终端命令（与 worker 相同 Bearer 与 JFrog 头）。命令含敏感信息，请勿泄露剪贴板内容。ext 转存链接请在 外部 Artifactory 卡片展开「高级/排障工具」。
+                        在下方表格「{LABEL_INTERNAL_ARTI}」列（展开本工具后显示）勾选含 BOM 下载列 内部 Artifactory 链接的行，再复制终端命令（与 worker 相同 Bearer 与 JFrog 头）。命令含敏感信息，请勿泄露剪贴板内容。转存链接请在 {LABEL_EXTERNAL_ARTI} 卡片展开「高级/排障工具」。
                       </p>
                     </div>
                   ) : null}
@@ -1713,7 +1738,7 @@ export const BomDetail: React.FC = () => {
               <div className="rounded-lg border border-emerald-100 bg-emerald-50/90 p-3 md:p-4 space-y-3">
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <div>
-                    <div className="text-sm font-medium text-emerald-950">外部 Artifactory</div>
+                    <div className="text-sm font-medium text-emerald-950">{LABEL_EXTERNAL_ARTI}</div>
                     
                   </div>
                   <div className="flex flex-wrap items-center gap-2">
@@ -1724,8 +1749,8 @@ export const BomDetail: React.FC = () => {
                         onClick={() => void handleCancelExtSyncJob(activeExtSyncJobToCancel.id)}
                         title={
                           activeExtSyncJobToCancel.status === 'running'
-                            ? '请求取消正在执行的 ext 同步（再次点击可强制取消）'
-                            : '取消排队中的 ext 同步任务'
+                            ? `请求取消正在执行的 ${LABEL_EXTERNAL_ARTI} 同步（再次点击可强制取消）`
+                            : `取消排队中的 ${LABEL_EXTERNAL_ARTI} 同步任务`
                         }
                         className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-slate-300 bg-white text-slate-700 text-sm font-medium hover:bg-slate-50 disabled:opacity-50"
                       >
@@ -1747,7 +1772,7 @@ export const BomDetail: React.FC = () => {
                       }
                       onClick={() => void handleExtCheckAll()}
                       className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg border border-slate-300 bg-white text-slate-700 text-sm font-medium hover:bg-slate-50 disabled:opacity-50 disabled:cursor-not-allowed"
-                      title="对当前版本全部行执行 ext 查重（checksum search + Copy）；无 MD5 等将记为失败"
+                      title={`对当前版本全部行执行 ${LABEL_EXTERNAL_ARTI} 查重（checksum search + Copy）；无 MD5 等将记为失败`}
                     >
                       {extCheckBusy ? <Loader2 size={16} className="animate-spin" /> : <Search size={16} />}
                       检查（{loadedBomRows.length}）
@@ -1806,7 +1831,7 @@ export const BomDetail: React.FC = () => {
                           type="button"
                           onClick={() => void handleCopyExtDownloadCommands('wget')}
                           disabled={extCopyRowIds.size === 0}
-                          title="按 ext 链接复制选中行的 wget 命令"
+                          title={`按转存链接复制选中行的 wget 命令（${LABEL_EXTERNAL_ARTI}）`}
                           className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-slate-300 bg-white text-slate-800 text-sm font-medium hover:bg-slate-50 disabled:opacity-45 disabled:cursor-not-allowed"
                         >
                           <ClipboardCopy size={16} />
@@ -1817,7 +1842,7 @@ export const BomDetail: React.FC = () => {
                         <p className="text-xs text-emerald-800 font-medium px-0.5">{extCopyCmdToast}</p>
                       ) : null}
                       <p className="text-[11px] text-slate-600 leading-snug">
-                        在下方表格「ext」列（展开本工具后显示；若同时展开 it 高级工具则在第二列复选）勾选含 外部 Artifactory 转存链接的行，再复制终端命令（与 worker 相同 Bearer 与 JFrog 头）。命令含敏感信息，请勿泄露剪贴板内容。
+                        在下方表格「{LABEL_EXTERNAL_ARTI}」列（展开本工具后显示；若同时展开 {LABEL_INTERNAL_ARTI} 高级工具则在第二列复选）勾选含 外部 Artifactory 转存链接的行，再复制终端命令（与 worker 相同 Bearer 与 JFrog 头）。命令含敏感信息，请勿泄露剪贴板内容。
                       </p>
                     </div>
                   ) : null}
@@ -1908,7 +1933,9 @@ export const BomDetail: React.FC = () => {
                       onChange={(e) => setFilterStoredExtNotComplete(e.target.checked)}
                       className="h-3.5 w-3.5 rounded border-slate-400 text-indigo-600 focus:ring-indigo-500"
                     />
-                    <span title="隐藏 ext 侧已完成的行（已写入转存链接，或状态为已转存/跳过）">只看 ext 未完成</span>
+                    <span title={`隐藏 ${LABEL_EXTERNAL_ARTI} 侧已完成的行（已写入转存链接，或状态为已转存/跳过）`}>
+                      只看 {LABEL_EXTERNAL_ARTI} 未完成
+                    </span>
                   </label>
                 </div>
                 {(filterStoredLocalNotVerifiedOk || filterStoredExtNotComplete) ? (
@@ -1933,14 +1960,14 @@ export const BomDetail: React.FC = () => {
                       {showAdvancedTools ? (
                         <th
                           className="px-2 py-2 text-center font-semibold text-slate-700 border-b border-gray-200 whitespace-nowrap w-9"
-                          title="it：BOM 下载列 · 全选含 内部 Artifactory 链接的行"
+                          title={`${LABEL_INTERNAL_ARTI}：BOM 下载列 · 全选含 内部 Artifactory 链接的行`}
                         >
                           <input
                             type="checkbox"
                             checked={allCopyableRowsSelected}
                             disabled={copyableRowIds.length === 0}
                             onChange={toggleSelectAllCopyableRows}
-                            aria-label="全选 内部 Artifactory 可复制行"
+                            aria-label={`全选 ${LABEL_INTERNAL_ARTI} 可复制行`}
                             className="h-3.5 w-3.5 rounded border-slate-400 align-middle cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
                           />
                         </th>
@@ -1948,14 +1975,14 @@ export const BomDetail: React.FC = () => {
                       {showExtAdvancedTools ? (
                         <th
                           className="px-2 py-2 text-center font-semibold text-slate-700 border-b border-gray-200 whitespace-nowrap w-9"
-                          title="ext：转存链接列 · 全选含 外部 Artifactory 链接的行"
+                          title={`${LABEL_EXTERNAL_ARTI}：转存链接列 · 全选含外部 Artifactory 链接的行`}
                         >
                           <input
                             type="checkbox"
                             checked={allExtCopyableRowsSelected}
                             disabled={extCopyableRowIds.length === 0}
                             onChange={toggleSelectAllExtCopyableRows}
-                            aria-label="全选 外部 Artifactory 可复制行"
+                            aria-label={`全选 ${LABEL_EXTERNAL_ARTI} 可复制行`}
                             className="h-3.5 w-3.5 rounded border-slate-400 align-middle cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
                           />
                         </th>
@@ -1968,13 +1995,13 @@ export const BomDetail: React.FC = () => {
                       </th>
                       <th
                         className="px-3 py-2 text-left font-semibold text-slate-700 border-b border-gray-200 whitespace-nowrap min-w-[9.5rem] max-w-[11rem] w-[10rem]"
-                        title="上行：ext（转存是否完成）；下行：本地（暂存/校验）。均由现有 status 与 ext_url 等推导。"
+                        title="三行依次为：内部 Artifactory（网页侧）、外部 Artifactory（转存）、本地（暂存/校验）。均由 status 与 ext_url、it_fetch_error 等推导。"
                       >
                         状态
                       </th>
                       <th
                         className="px-3 py-2 text-left font-semibold text-slate-700 border-b border-gray-200 whitespace-nowrap min-w-[10rem] max-w-[14rem] w-[12rem]"
-                        title="与「状态」列对应：上行「ext」为 status.ext_fetch_error；下行「本地」为 status.local_fetch_error；与 local/ext 枚举同条 JSON。"
+                        title="三行依次为：内部 Artifactory / 外部 Artifactory / 本地，对应 it_fetch_error、ext_fetch_error、local_fetch_error（及本地行对 await_manual_download 的 UI 兜底说明）。"
                       >
                         状态说明
                       </th>
@@ -1982,7 +2009,7 @@ export const BomDetail: React.FC = () => {
                         className="px-3 py-2 text-left font-semibold text-slate-700 border-b border-gray-200 whitespace-nowrap min-w-[10rem] max-w-[14rem] w-[12rem]"
                         title="jsonb 中 ext_url 等别名对应的可下载 URI（外部 Artifactory 同步后写入）"
                       >
-                        外部 Artifactory 下载链接
+                        {LABEL_EXTERNAL_ARTI} 下载链接
                       </th>
                       <th
                         className="px-3 py-2 text-left font-semibold text-slate-700 border-b border-gray-200 min-w-[14rem] max-w-[28rem] w-[18rem]"
@@ -1992,13 +2019,14 @@ export const BomDetail: React.FC = () => {
                       </th>
                       <th
                         className="px-3 py-2 text-left font-semibold text-slate-700 border-b border-gray-200 whitespace-nowrap w-[11rem]"
-                        title="统一展示大小来源：外部 Artifactory、本地文件索引、内部 Artifactory（若有）"
+                        title="统一展示大小来源，自上而下：内部 Artifactory、外部 Artifactory、本地（若有对应数据）"
                       >
                         大小
                       </th>
                       {dataHeaders.map((h) => {
                         const linkOrMd5 =
                           headerIsDownloadColumn(h, tableKeyMap) || headerIsMd5Column(h, tableKeyMap);
+                        const isDlCol = headerIsDownloadColumn(h, tableKeyMap);
                         const isRemark = headerMatchesAny(h, remarkHeaderKeys);
                         return (
                           <th
@@ -2006,10 +2034,18 @@ export const BomDetail: React.FC = () => {
                             title={
                               isRemark
                                 ? '导入 BOM 中的原始列，列顺序与粘贴表一致；仅展示，系统不会自动改写'
-                                : undefined
+                                : isDlCol
+                                  ? '下载路径：多行展示，换行与单元格内多 URL 均支持'
+                                  : undefined
                             }
-                            className={`px-3 py-2 text-left font-semibold text-slate-700 border-b border-gray-200 whitespace-nowrap ${
-                              linkOrMd5 ? 'max-w-[14rem] w-[14rem]' : isRemark ? 'min-w-[8rem] max-w-[14rem]' : 'max-w-[11rem]'
+                            className={`px-3 py-2 text-left font-semibold text-slate-700 border-b border-gray-200 ${
+                              isDlCol
+                                ? 'min-w-[12rem] max-w-[22rem] w-[18rem] whitespace-normal align-top'
+                                : linkOrMd5
+                                  ? 'max-w-[14rem] w-[14rem] whitespace-nowrap'
+                                  : isRemark
+                                    ? 'min-w-[8rem] max-w-[14rem] whitespace-nowrap'
+                                    : 'max-w-[11rem] whitespace-nowrap'
                             }`}
                           >
                             {h}
@@ -2027,7 +2063,7 @@ export const BomDetail: React.FC = () => {
                       const localPath = localInfo?.path ?? null;
                       const extB = extractExtSizeBytesFromRow(r, tableKeyMap);
                       const remoteB = extractRemoteSizeBytesFromRow(r, tableKeyMap);
-                      /** 优先 ext：已转存完成一律绿色；ext 未开始时沿用原先按 local 的配色 */
+                      /** 优先外部 Artifactory：已转存完成一律绿色；未开始时沿用原先按本地的配色 */
                       const badgeClass =
                         lr.status.ext === 'synced_or_skipped'
                           ? 'bg-emerald-50 text-emerald-900 border-emerald-200'
@@ -2049,6 +2085,7 @@ export const BomDetail: React.FC = () => {
                         tableKeyMap,
                         indexedMd5Hit,
                       );
+                      const itLabel = deriveItStatusLabel(lr.status);
                       const canPullThis = rowEligibleForItPull(lr, tableKeyMap, localInfoByMd5);
                       const canExtSyncThisRow =
                         lr.status.local === 'verified_ok' &&
@@ -2058,6 +2095,7 @@ export const BomDetail: React.FC = () => {
                       const canCopyCmd = rowHasArtifactoryHttpUrl(lr, tableKeyMap);
                       const canExtCopyCmd = rowHasExtArtifactoryHttpUrl(lr, tableKeyMap);
                       const localExplainRaw = lr.status.local_fetch_error?.trim() ?? null;
+                      const itExplainRaw = lr.status.it_fetch_error?.trim() ?? null;
                       const extExplainRaw = lr.status.ext_fetch_error?.trim() ?? null;
                       const localExplainLine =
                         localExplainRaw ??
@@ -2067,7 +2105,8 @@ export const BomDetail: React.FC = () => {
                       const extExplainLine = extExplainRaw;
                       const statusExplainTitle =
                         [
-                          extExplainLine ? `ext：${extExplainLine}` : null,
+                          itExplainRaw ? `${LABEL_INTERNAL_ARTI}：${itExplainRaw}` : null,
+                          extExplainLine ? `${LABEL_EXTERNAL_ARTI}：${extExplainLine}` : null,
                           localExplainLine ? `本地：${localExplainLine}` : null,
                         ]
                           .filter(Boolean)
@@ -2093,7 +2132,11 @@ export const BomDetail: React.FC = () => {
                                 checked={copyRowIds.has(lr.id)}
                                 disabled={!canCopyCmd}
                                 onChange={() => toggleCopyRowId(lr.id)}
-                                title={canCopyCmd ? '勾选后可批量复制 it 侧 curl/wget' : '无 内部 Artifactory 链接'}
+                                title={
+                                  canCopyCmd
+                                    ? `勾选后可批量复制 ${LABEL_INTERNAL_ARTI} 侧 curl/wget`
+                                    : '无 内部 Artifactory 链接'
+                                }
                                 className="h-3.5 w-3.5 rounded border-slate-400 align-middle cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed"
                               />
                             </td>
@@ -2107,7 +2150,7 @@ export const BomDetail: React.FC = () => {
                                 onChange={() => toggleExtCopyRowId(lr.id)}
                                 title={
                                   canExtCopyCmd
-                                    ? '勾选后可批量复制 ext 侧 curl/wget'
+                                    ? `勾选后可批量复制 ${LABEL_EXTERNAL_ARTI} 侧 curl/wget`
                                     : '无 外部 Artifactory 链接（需先有 ext_url 等）'
                                 }
                                 className="h-3.5 w-3.5 rounded border-slate-400 align-middle cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed"
@@ -2120,7 +2163,7 @@ export const BomDetail: React.FC = () => {
                                 type="button"
                                 disabled={rowPullDisabled}
                                 onClick={() => void handleDownloadOneIt(lr.id)}
-                                title="拉取本行 内部 Artifactory 制品"
+                                title={`拉取本行 ${LABEL_INTERNAL_ARTI} 制品`}
                                 className="inline-flex items-center justify-center p-1 rounded-md border border-indigo-200 bg-indigo-50 text-indigo-800 hover:bg-indigo-100 disabled:opacity-45 disabled:cursor-not-allowed"
                               >
                                 {rowPullDisabled ? (
@@ -2147,7 +2190,7 @@ export const BomDetail: React.FC = () => {
                                 type="button"
                                 disabled={rowExtDisabled}
                                 onClick={() => void handleExtSyncOne(lr.id)}
-                                title="本地已有文件：查重并 Copy 到 ext 版本目录（必要时排队 PUT）；无本地文件请用顶部「外部 Artifactory 全部检查」"
+                                title={`本地已有文件：查重并 Copy 到 ${LABEL_EXTERNAL_ARTI} 版本目录（必要时排队 PUT）；无本地文件请用顶部「${LABEL_EXTERNAL_ARTI} 全部检查」`}
                                 className="inline-flex items-center justify-center p-1 rounded-md border border-emerald-200 bg-emerald-50 text-emerald-900 hover:bg-emerald-100 disabled:opacity-45 disabled:cursor-not-allowed"
                               >
                                 {rowExtDisabled ? (
@@ -2178,11 +2221,18 @@ export const BomDetail: React.FC = () => {
                                   lr.status.local === 'local_found' ||
                                   lr.status.ext === 'synced_or_skipped')
                                   ? `整行状态：${formatBomRowStatusTooltip(lr.status)}。本地侧显示为「文件不存在」：local_file 中无此期望 MD5（可能已删除或未扫描）；可点「拉取」重新下载，或「刷新」按索引重算状态。`
-                                  : `整行状态：${formatBomRowStatusTooltip(lr.status)}。上行为 ext，下行为本地。`
+                                  : `整行状态：${formatBomRowStatusTooltip(lr.status)}。依次为内部 Artifactory、外部 Artifactory、本地。`
                               }
                             >
-                              <div className="text-[11px] font-medium">
-                                ext：{extLabel}
+                              <div
+                                className={`text-[11px] font-medium ${
+                                  itLabel === '需关注' ? 'text-amber-900' : ''
+                                }`}
+                              >
+                                {LABEL_INTERNAL_ARTI}：{itLabel}
+                              </div>
+                              <div className="text-[11px] font-medium mt-0.5">
+                                {LABEL_EXTERNAL_ARTI}：{extLabel}
                               </div>
                               <div className="text-[11px] font-medium mt-0.5">
                                 本地：{localLabel}
@@ -2193,21 +2243,24 @@ export const BomDetail: React.FC = () => {
                             className="px-3 py-2 align-middle min-w-[10rem] max-w-[14rem] w-[12rem] text-slate-700"
                             title={statusExplainTitle}
                           >
-                            <div className="text-left text-[11px] leading-snug line-clamp-3 whitespace-pre-line break-words text-slate-800">
-                              <span className="font-medium text-slate-600">ext：</span>
-                              <span>{extExplainLine ?? '—'}</span>
-                            </div>
-                            <div className="text-left text-[11px] leading-snug mt-1.5 pt-1.5 border-t border-slate-100 line-clamp-3 whitespace-pre-line break-words">
-                              <span className="font-medium text-slate-600">本地：</span>
-                              <span
-                                className={
-                                  localExplainLine && lr.status.local === 'await_manual_download' && !localExplainRaw
-                                    ? 'text-amber-900/90'
-                                    : 'text-slate-800'
-                                }
-                              >
-                                {localExplainLine ?? '—'}
-                              </span>
+                            <div className="space-y-1.5">
+                              <StatusExplainLine label={LABEL_INTERNAL_ARTI} text={itExplainRaw} />
+                              <div className="pt-1.5 border-t border-slate-100">
+                                <StatusExplainLine label={LABEL_EXTERNAL_ARTI} text={extExplainLine} />
+                              </div>
+                              <div className="pt-1.5 border-t border-slate-100">
+                                <StatusExplainLine
+                                  label="本地"
+                                  text={localExplainLine}
+                                  amberManualHint={
+                                    Boolean(
+                                      localExplainLine &&
+                                        lr.status.local === 'await_manual_download' &&
+                                        !localExplainRaw,
+                                    )
+                                  }
+                                />
+                              </div>
                             </div>
                           </td>
                           <td className="px-3 py-2 align-middle min-w-[10rem] max-w-[14rem] w-[12rem] text-slate-700">
@@ -2247,13 +2300,22 @@ export const BomDetail: React.FC = () => {
                           {dataHeaders.map((h) => {
                             const linkOrMd5 =
                               headerIsDownloadColumn(h, tableKeyMap) || headerIsMd5Column(h, tableKeyMap);
+                            const isDlCol = headerIsDownloadColumn(h, tableKeyMap);
                             const isRemark = headerMatchesAny(h, remarkHeaderKeys);
                             const cellRaw = String(r[h] ?? '').trim();
                             return (
                               <td
                                 key={`${lr.id}-${h}`}
-                                className={`px-3 py-2 text-slate-700 align-middle overflow-hidden ${
-                                  linkOrMd5 ? 'max-w-[14rem] w-[14rem]' : isRemark ? 'min-w-[8rem] max-w-[14rem]' : 'max-w-[11rem]'
+                                className={`px-3 py-2 text-slate-700 ${
+                                  isDlCol ? 'align-top overflow-visible' : 'align-middle overflow-hidden'
+                                } ${
+                                  isDlCol
+                                    ? 'min-w-[12rem] max-w-[22rem] w-[18rem]'
+                                    : linkOrMd5
+                                      ? 'max-w-[14rem] w-[14rem]'
+                                      : isRemark
+                                        ? 'min-w-[8rem] max-w-[14rem]'
+                                        : 'max-w-[11rem]'
                                 }`}
                               >
                                 {isRemark ? (
@@ -2261,7 +2323,12 @@ export const BomDetail: React.FC = () => {
                                     {cellRaw || '—'}
                                   </span>
                                 ) : (
-                                  <BomDataTableCell header={h} value={r[h] ?? ''} keyMap={tableKeyMap} />
+                                  <BomDataTableCell
+                                    header={h}
+                                    value={r[h] ?? ''}
+                                    keyMap={tableKeyMap}
+                                    multilineDownload={isDlCol}
+                                  />
                                 )}
                               </td>
                             );

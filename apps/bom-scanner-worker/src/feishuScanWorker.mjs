@@ -605,7 +605,7 @@ export async function executeFeishuScanJob(supabase, job) {
                 ...prev,
                 feishu: 'absent',
                 feishu_scanned_at: iso,
-                feishu_scan_error: `飞书未找到路径「${relKey}」（与外部 AF：版本目录/组件或分组/本地文件名）`,
+                feishu_scan_error: `飞书未找到路径「${relKey}」（与外部 Artifactory：版本目录/组件或分组/本地文件名）`,
               };
               delete next.feishu_file_token;
               delete next.feishu_file_name;

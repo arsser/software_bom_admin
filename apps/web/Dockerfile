@@ -1,7 +1,8 @@
 # Build stage
 FROM node:20-alpine AS builder
 
-RUN corepack enable && corepack prepare pnpm@latest --activate
+# pnpm 11+ 需 Node ≥22.13 且依赖 node:sqlite；与仓库 lockfile / 根目录 packageManager 一致固定为 9.x
+RUN corepack enable && corepack prepare pnpm@9 --activate
 
 WORKDIR /app
 

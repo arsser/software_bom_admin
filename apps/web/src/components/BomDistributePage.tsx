@@ -28,7 +28,7 @@ import { StatusExplainLine } from './StatusExplainLine';
 import {
   extractExpectedMd5FromRow,
   extractExtUrlFromRow,
-  extractGroupSegmentFromRow,
+  extractModuleFromRow,
   fileBasename,
   normalizeBomKeyForMatch,
   normalizeLocalRelativePath,
@@ -71,12 +71,12 @@ function feishuRowEligibleForUploadStub(status: BomRowStatusJson): boolean {
   return f === 'absent' || f === 'error';
 }
 
-/** 下拉「无分组」与 BOM 中空字符串对应；勿与真实分组名冲突（极罕见） */
-const GROUP_FILTER_ALL = '';
-const GROUP_FILTER_EMPTY = '\u0000bom_dist_no_group\u0000';
+/** 下拉「无模块」与 BOM 中空字符串对应；勿与真实模块名冲突（极罕见） */
+const MODULE_FILTER_ALL = '';
+const MODULE_FILTER_EMPTY = '\u0000bom_dist_no_group\u0000';
 
-function rowGroupSegmentRaw(row: BomBatchRow['bom_row'], keyMap: BomJsonKeyMap): string {
-  return extractGroupSegmentFromRow(row, keyMap) ?? '';
+function rowModuleRaw(row: BomBatchRow['bom_row'], keyMap: BomJsonKeyMap): string {
+  return extractModuleFromRow(row, keyMap) ?? '';
 }
 
 /**
@@ -103,7 +103,7 @@ export const BomDistributePage: React.FC = () => {
   const [loadedBomRows, setLoadedBomRows] = useState<BomBatchRow[]>([]);
   const [localInfoByMd5, setLocalInfoByMd5] = useState<Map<string, LocalFileIndexInfo>>(() => new Map());
   const [localIndexReady, setLocalIndexReady] = useState(true);
-  const [groupSegmentFilter, setGroupSegmentFilter] = useState<string>(GROUP_FILTER_ALL);
+  const [moduleFilter, setModuleFilter] = useState<string>(MODULE_FILTER_ALL);
   /** 飞书上传范围：与「当前表格筛选结果」取交后的选中行 id */
   const [selectedUploadRowIds, setSelectedUploadRowIds] = useState<Set<string>>(() => new Set());
   const [feishuScanBusy, setFeishuScanBusy] = useState(false);
@@ -182,32 +182,32 @@ export const BomDistributePage: React.FC = () => {
 
   const filteredStoredBomRows = useMemo(() => {
     return loadedBomRows.filter((lr) => {
-      if (groupSegmentFilter !== GROUP_FILTER_ALL) {
-        const seg = rowGroupSegmentRaw(lr.bom_row, tableKeyMap);
-        const want = groupSegmentFilter === GROUP_FILTER_EMPTY ? '' : groupSegmentFilter;
+      if (moduleFilter !== MODULE_FILTER_ALL) {
+        const seg = rowModuleRaw(lr.bom_row, tableKeyMap);
+        const want = moduleFilter === MODULE_FILTER_EMPTY ? '' : moduleFilter;
         if (seg !== want) return false;
       }
       return true;
     });
-  }, [loadedBomRows, groupSegmentFilter, tableKeyMap]);
+  }, [loadedBomRows, moduleFilter, tableKeyMap]);
 
-  const groupSegmentFilterOptions = useMemo(() => {
+  const moduleFilterOptions = useMemo(() => {
     const seen = new Set<string>();
     for (const lr of loadedBomRows) {
-      seen.add(rowGroupSegmentRaw(lr.bom_row, tableKeyMap));
+      seen.add(rowModuleRaw(lr.bom_row, tableKeyMap));
     }
-    const opts: { value: string; label: string }[] = [{ value: GROUP_FILTER_ALL, label: '全部分组' }];
+    const opts: { value: string; label: string }[] = [{ value: MODULE_FILTER_ALL, label: '全部模块' }];
     const rest = Array.from(seen).sort((a, b) => a.localeCompare(b, 'zh-Hans-CN'));
     for (const seg of rest) {
-      if (seg === '') opts.push({ value: GROUP_FILTER_EMPTY, label: '（无分组）' });
+      if (seg === '') opts.push({ value: MODULE_FILTER_EMPTY, label: '（无模块）' });
       else opts.push({ value: seg, label: seg });
     }
     return opts;
   }, [loadedBomRows, tableKeyMap]);
 
   const distributeListFilterActive = useMemo(
-    () => groupSegmentFilter !== GROUP_FILTER_ALL,
-    [groupSegmentFilter],
+    () => moduleFilter !== MODULE_FILTER_ALL,
+    [moduleFilter],
   );
 
   /** 全表本地尚未校验通过的行数（按钮文案「待拉取」） */
@@ -328,7 +328,7 @@ export const BomDistributePage: React.FC = () => {
       return;
     }
     setSelectedUploadRowIds(new Set());
-    setGroupSegmentFilter(GROUP_FILTER_ALL);
+    setModuleFilter(MODULE_FILTER_ALL);
     void load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [batchId]);
@@ -381,10 +381,10 @@ export const BomDistributePage: React.FC = () => {
   }, [loadedBomRows, feishuUploadLockedRowIds]);
 
   useEffect(() => {
-    if (groupSegmentFilter === GROUP_FILTER_ALL) return;
-    const exists = groupSegmentFilterOptions.some((o) => o.value === groupSegmentFilter);
-    if (!exists) setGroupSegmentFilter(GROUP_FILTER_ALL);
-  }, [groupSegmentFilter, groupSegmentFilterOptions]);
+    if (moduleFilter === MODULE_FILTER_ALL) return;
+    const exists = moduleFilterOptions.some((o) => o.value === moduleFilter);
+    if (!exists) setModuleFilter(MODULE_FILTER_ALL);
+  }, [moduleFilter, moduleFilterOptions]);
 
   useLayoutEffect(() => {
     const el = uploadSelectAllHeaderRef.current;
@@ -580,7 +580,7 @@ export const BomDistributePage: React.FC = () => {
         unlocked.map((r) => r.id),
       );
       alert(
-        `已创建飞书上传任务（排队由 bom-scanner-worker 执行）。任务 ID：${jobId}\n将自动创建版本目录/分组子目录（与扫描规则一致）；≤5MB 整文件上传，>5MB 自动分片上传（支持断点续传）。`,
+        `已创建飞书上传任务（排队由 bom-scanner-worker 执行）。任务 ID：${jobId}\n将自动创建版本目录/模块或组件子目录（与扫描规则一致）；≤5MB 整文件上传，>5MB 自动分片上传（支持断点续传）。`,
       );
       await load();
     } catch (e) {
@@ -694,9 +694,9 @@ export const BomDistributePage: React.FC = () => {
               当前版本无可拉取行（均已本地校验通过，或未填写可请求的 {LABEL_EXTERNAL_ARTI} 链接）；行内拉取列为「—」，「全部拉取」不可用。
             </p>
           ) : null}
-          {loadedBomRows.length > 0 && groupSegmentFilter !== GROUP_FILTER_ALL ? (
+          {loadedBomRows.length > 0 && moduleFilter !== MODULE_FILTER_ALL ? (
             <p className="text-[11px] text-sky-900/80">
-              当前列表内待拉取 {eligibleExternalPullStubFilteredCount} 行（随分组筛选变化，与按钮上全表「待拉取」口径相同、范围不同）。
+              当前列表内待拉取 {eligibleExternalPullStubFilteredCount} 行（随模块筛选变化，与按钮上全表「待拉取」口径相同、范围不同）。
             </p>
           ) : null}
         </div>
@@ -704,10 +704,10 @@ export const BomDistributePage: React.FC = () => {
         <div className="rounded-lg border border-violet-200 bg-violet-50/90 p-3 md:p-4 space-y-2">
           <div className="text-sm font-medium text-violet-950">飞书网盘 · 扫描 / 上传</div>
           <p className="text-xs text-violet-900/90">
-            扫描：在飞书根目录下按版本名文件夹 +（组件或分组）+ 本地文件名 查找文件，读取飞书字节数，与{' '}
+            扫描：在飞书根目录下按版本名文件夹 +（模块优先、否则组件）+ 本地文件名 查找文件，读取飞书字节数，与{' '}
             <code className="bg-violet-100/80 px-1 rounded text-[10px]">local_file</code> 索引比对文件名与大小；入队后由
             bom-scanner-worker 执行（不用 BOM 行内 MD5 参与飞书路径计算，但需 MD5 对账本地索引）。上传：入队后由 worker 使用
-            upload_all（≤5MB）写入飞书，并自动创建版本/分组目录。
+            upload_all（≤5MB）写入飞书，并自动创建版本/模块或组件目录。
           </p>
           <div className="flex flex-wrap items-center gap-2 gap-x-3">
             <button
@@ -837,16 +837,16 @@ export const BomDistributePage: React.FC = () => {
             <div className="flex flex-col gap-1.5 items-start text-sm text-slate-700">
               <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center sm:gap-x-5 sm:gap-y-2">
                 <label className="inline-flex items-center gap-2 select-none text-slate-700">
-                  <span className="text-xs shrink-0" title="与扫描/飞书路径中的分组子目录一致（jsonKeyMap.groupSegment）">
-                    分组
+                  <span className="text-xs shrink-0" title="与扫描/飞书路径中的模块子目录一致（jsonKeyMap.module）">
+                    模块
                   </span>
                   <select
-                    value={groupSegmentFilter}
-                    onChange={(e) => setGroupSegmentFilter(e.target.value)}
+                    value={moduleFilter}
+                    onChange={(e) => setModuleFilter(e.target.value)}
                     className="h-7 rounded-md border border-slate-300 bg-white px-2 text-xs text-slate-800 max-w-[12rem] min-w-[6rem]"
                   >
-                    {groupSegmentFilterOptions.map((o) => (
-                      <option key={o.value === GROUP_FILTER_ALL ? '__all__' : o.value} value={o.value}>
+                    {moduleFilterOptions.map((o) => (
+                      <option key={o.value === MODULE_FILTER_ALL ? '__all__' : o.value} value={o.value}>
                         {o.label}
                       </option>
                     ))}
@@ -894,7 +894,7 @@ export const BomDistributePage: React.FC = () => {
 
             {filteredStoredBomRows.length === 0 ? (
               <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
-                当前筛选条件下没有匹配行，请调整「分组」或选「全部分组」。
+                当前筛选条件下没有匹配行，请调整「模块」或选「全部模块」。
               </div>
             ) : (
               <div className="overflow-x-auto border border-gray-200 rounded-lg -mx-0.5">
@@ -1304,7 +1304,7 @@ export const BomDistributePage: React.FC = () => {
               <code className="bg-slate-100 px-1 rounded">local_file</code> 索引刷新；点此页「刷新」可拉取最新。
             </p>
             <p className="text-xs text-slate-500">
-              飞书文件名与大小由「扫描飞书云盘」写入（与「文件名」「大小」列合并展示）；已与飞书对齐的行上传按钮为灰；未扫描前本地已通过的行显示「…」。「上传选中到飞书」仅处理当前「分组」筛选下已勾选的行；下载路径列换行规则与「Artifactory-ext 下载链接」一致（整格最多 3 行、break-all）。
+              飞书文件名与大小由「扫描飞书云盘」写入（与「文件名」「大小」列合并展示）；已与飞书对齐的行上传按钮为灰；未扫描前本地已通过的行显示「…」。「上传选中到飞书」仅处理当前「模块」筛选下已勾选的行；下载路径列换行规则与「Artifactory-ext 下载链接」一致（整格最多 3 行、break-all）。
             </p>
           </>
         ) : loading ? (

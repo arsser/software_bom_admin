@@ -48,14 +48,15 @@ export function firstNonEmptyByKeysRelaxed(row: BomRowRecord, keys: string[]): s
   return null;
 }
 
-export function extractGroupSegmentFromRow(row: BomRowRecord, keyMap: BomJsonKeyMap): string | null {
-  const keys = keyMap.groupSegment?.length ? keyMap.groupSegment : ['分组', 'group', 'groupName', '组别', '模块'];
+/** BOM 模块列（jsonKeyMap.module） */
+export function extractModuleFromRow(row: BomRowRecord, keyMap: BomJsonKeyMap): string | null {
+  const keys = keyMap.module?.length ? keyMap.module : ['分组', 'group', 'groupName', '组别', '模块'];
   return firstNonEmptyByKeysRelaxed(row, keys);
 }
 
-/** 组件类型 / 模块名（仅 jsonKeyMap.moduleName 配置的别名；宽松匹配列名） */
-export function extractModuleTypeFromRow(row: BomRowRecord, keyMap: BomJsonKeyMap): string | null {
-  const keys = keyMap.moduleName?.length ? keyMap.moduleName : ['组件', 'Component', '组件名'];
+/** 组件列（jsonKeyMap.component） */
+export function extractComponentFromRow(row: BomRowRecord, keyMap: BomJsonKeyMap): string | null {
+  const keys = keyMap.component?.length ? keyMap.component : ['组件', 'Component', '组件名'];
   const exact = firstNonEmptyByKeys(row, keys);
   if (exact) return exact;
   const want = new Set(keys.map((k) => normalizeBomKeyForMatch(k)).filter(Boolean));

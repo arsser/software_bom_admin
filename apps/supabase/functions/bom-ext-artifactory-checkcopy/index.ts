@@ -428,16 +428,19 @@ serve(async (req) => {
       })
     }
 
-    // 5) 计算目标路径
-    const moduleNameKeys: string[] = Array.isArray(jsonKeyMap.moduleName) && jsonKeyMap.moduleName.length
-      ? jsonKeyMap.moduleName
-      : ['组件', 'Component', '组件名']
-    const groupSegmentKeys: string[] = Array.isArray(jsonKeyMap.groupSegment) && jsonKeyMap.groupSegment.length
-      ? jsonKeyMap.groupSegment
-      : ['分组', 'group', 'groupName', '组别', '模块']
-    const modRaw = firstNonEmptyByKeysRelaxed(bomRow, moduleNameKeys)
-    const groupRaw = firstNonEmptyByKeysRelaxed(bomRow, groupSegmentKeys)
-    const midDir = modRaw ? safePathSegment(modRaw) : groupRaw ? safePathSegment(groupRaw) : null
+    // 5) 计算目标路径（jsonKeyMap 须含 module、component；与 apps/web bomScannerSettings 默认一致）
+    const jm = jsonKeyMap as Record<string, unknown>
+    const moduleKeys: string[] =
+      Array.isArray(jm.module) && jm.module.length && jm.module.every((x) => typeof x === 'string')
+        ? (jm.module as string[])
+        : ['分组', 'group', 'groupName', '组别', '模块']
+    const componentKeys: string[] =
+      Array.isArray(jm.component) && jm.component.length && jm.component.every((x) => typeof x === 'string')
+        ? (jm.component as string[])
+        : ['组件', 'Component', '组件名']
+    const moduleRaw = firstNonEmptyByKeysRelaxed(bomRow, moduleKeys)
+    const componentRaw = firstNonEmptyByKeysRelaxed(bomRow, componentKeys)
+    const midDir = moduleRaw ? safePathSegment(moduleRaw) : componentRaw ? safePathSegment(componentRaw) : null
 
     const fileName = (() => {
       const p = parsed.path.replace(/\/+$/, '')

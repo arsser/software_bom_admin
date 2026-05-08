@@ -138,12 +138,12 @@ function extractExpectedMd5Lower(bomRow, keyMap) {
  * @param {Record<string, unknown>} bomRow
  * @param {ReturnType<typeof mergeKeyMap>} keyMap
  */
-/** 版本目录下的子路径：优先分组，再组件（与 feishuScanWorker / ext 同步一致） */
+/** 版本目录下的子路径：优先 module，再 component（与 feishuScanWorker / ext 一致） */
 function resolveMiddleDirFromRow(bomRow, keyMap) {
-  const grp = firstNonEmptyByKeysRelaxed(bomRow, keyMap.groupSegment);
-  if (grp) return safePathSegment(grp);
-  const mod = firstNonEmptyByKeysRelaxed(bomRow, keyMap.moduleName);
-  if (mod) return safePathSegment(mod);
+  const modSeg = firstNonEmptyByKeysRelaxed(bomRow, keyMap.module);
+  if (modSeg) return safePathSegment(modSeg);
+  const comp = firstNonEmptyByKeysRelaxed(bomRow, keyMap.component);
+  if (comp) return safePathSegment(comp);
   return null;
 }
 
@@ -326,7 +326,7 @@ async function createDriveChildFolder(accessToken, parentFolderToken, name) {
  * 在产品飞书根目录下逐级确保文件夹存在（与 feishuScanWorker 列举范围一致）。
  * @param {string} accessToken
  * @param {string} rootFolderToken 产品配置的 feishu_drive_root_folder_token
- * @param {string[]} segmentNames 从根往下每一级目录名，例如 ['v3.1.0','COMMON']：版本目录 + 可选子目录（resolveMiddleDirFromRow，分组优先于组件）
+ * @param {string[]} segmentNames 从根往下每一级目录名，例如 ['v3.1.0','COMMON']：版本目录 + 可选子目录（resolveMiddleDirFromRow，module 优先于 component）
  */
 async function ensureFolderPath(accessToken, rootFolderToken, segmentNames) {
   let cur = rootFolderToken;

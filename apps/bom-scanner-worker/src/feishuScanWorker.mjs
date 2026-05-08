@@ -60,12 +60,12 @@ function extractExpectedMd5Lower(bomRow, keyMap) {
  * @param {Record<string, unknown>} bomRow
  * @param {ReturnType<typeof mergeKeyMap>} keyMap
  */
-/** 版本目录下的子路径：优先分组，与飞书/Artifactory-ext 目录约定一致（避免组件名如 ubuntu 盖住分组 COMMON） */
+/** 版本目录下的子路径：优先 module（BOM 模块列），再 component；与飞书/Artifactory-ext 一致 */
 function resolveMiddleDirFromRow(bomRow, keyMap) {
-  const grp = firstNonEmptyByKeysRelaxed(bomRow, keyMap.groupSegment);
-  if (grp) return safePathSegment(grp);
-  const mod = firstNonEmptyByKeysRelaxed(bomRow, keyMap.moduleName);
-  if (mod) return safePathSegment(mod);
+  const modSeg = firstNonEmptyByKeysRelaxed(bomRow, keyMap.module);
+  if (modSeg) return safePathSegment(modSeg);
+  const comp = firstNonEmptyByKeysRelaxed(bomRow, keyMap.component);
+  if (comp) return safePathSegment(comp);
   return null;
 }
 
@@ -77,7 +77,7 @@ function basenameFromStoragePath(p) {
 
 /**
  * 飞书「版本文件夹」下、与 buildFileIndexUnder 键一致的相对路径（正斜杠、无首尾 /）。
- * - BOM 有分组/组件：与 feishuUpload 一致，为 {middleDir}/{文件名}（middleDir 优先分组）。
+ * - BOM 有 module/component：与 feishuUpload 一致，为 {middleDir}/{文件名}（middleDir 优先 module）。
  * - 无 middleDir 但 local_file.path 带子路径（如扫描得到的 COMMON/xxx.iso）：用该相对路径对账，
  *   避免只取 basename 时与云盘子文件夹不一致。
  */
@@ -630,7 +630,7 @@ export async function executeFeishuScanJob(supabase, job) {
                 ...prev,
                 feishu: 'absent',
                 feishu_scanned_at: iso,
-                feishu_scan_error: `飞书未找到路径「${relKey}」（与 Artifactory-ext：版本目录/组件或分组/本地文件名）`,
+                feishu_scan_error: `飞书未找到路径「${relKey}」（与 Artifactory-ext：版本目录/模块优先否则组件/本地文件名）`,
               };
               delete next.feishu_file_token;
               delete next.feishu_file_name;

@@ -101,8 +101,8 @@ VALUES
         "extUrl": ["ext_url", "extUrl", "转存地址"],
         "releaseVersion": ["版本", "version", "releaseVersion", "产品版本"],
         "releaseBatch": ["批次", "batch", "releaseBatch", "发布批次"],
-        "moduleName": ["模块", "module", "组件", "moduleName"],
-        "groupSegment": ["分组", "group", "groupName", "组别"],
+        "module": ["分组", "group", "groupName", "组别", "模块"],
+        "component": ["组件", "Component", "组件名"],
         "fileSizeBytes": ["文件大小", "size_bytes", "远端大小"],
         "extFileSizeBytes": ["ext_size_bytes", "ext文件大小", "extSize", "ext大小"],
         "remark": ["备注", "note", "remark"]

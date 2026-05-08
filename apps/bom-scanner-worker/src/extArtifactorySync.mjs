@@ -160,8 +160,8 @@ const DEFAULT_KEY_MAP = {
   extFileSizeBytes: ['ext_size_bytes', 'ext文件大小', 'extSize', 'ext大小'],
   releaseVersion: ['版本', 'version', 'releaseVersion', '产品版本'],
   releaseBatch: ['批次', 'batch', 'releaseBatch', '发布批次'],
-  moduleName: ['组件', 'Component', '组件名'],
-  groupSegment: ['分组', 'group', 'groupName', '组别', '模块'],
+  module: ['分组', 'group', 'groupName', '组别', '模块'],
+  component: ['组件', 'Component', '组件名'],
 };
 
 const CANONICAL_EXT_URL_KEY = 'ext_url';
@@ -204,8 +204,8 @@ export function mergeKeyMap(scannerValue) {
     extFileSizeBytes: arr('extFileSizeBytes', DEFAULT_KEY_MAP.extFileSizeBytes),
     releaseVersion: arr('releaseVersion', DEFAULT_KEY_MAP.releaseVersion),
     releaseBatch: arr('releaseBatch', DEFAULT_KEY_MAP.releaseBatch),
-    moduleName: arr('moduleName', DEFAULT_KEY_MAP.moduleName),
-    groupSegment: arr('groupSegment', DEFAULT_KEY_MAP.groupSegment),
+    module: arr('module', DEFAULT_KEY_MAP.module),
+    component: arr('component', DEFAULT_KEY_MAP.component),
   };
 }
 
@@ -522,7 +522,7 @@ export async function executeExtSyncJob(supabase, rootAbs, job, tuning) {
 
   const rootUrl = normalizeArtifactoryRootUrl(creds.baseUrl);
 
-  // 目标路径：一级目录用 bom_batches.name；二级目录用 bom_row["分组"]
+  // 目标路径：一级目录用 bom_batches.name；二级目录用 jsonKeyMap.module（优先）或 component
   const batchNameRaw = batchProdCfg.batchName;
   const batchNameFallback = `batch-${String(job.batch_id).replace(/-/g, '').slice(0, 8)}`;
   const batchName = batchNameRaw || batchNameFallback;
@@ -641,11 +641,11 @@ export async function executeExtSyncJob(supabase, rootAbs, job, tuning) {
       const rowStartedAtMs = Date.now();
       let lastProgressFlushMs = 0;
 
-      const groupRaw = firstNonEmptyByKeysRelaxed(bomRow, keyMap.groupSegment);
-      const modRaw = firstNonEmptyByKeysRelaxed(bomRow, keyMap.moduleName);
-      const midDir = groupRaw ? safePathSegment(groupRaw) : modRaw ? safePathSegment(modRaw) : null;
+      const moduleRaw = firstNonEmptyByKeysRelaxed(bomRow, keyMap.module);
+      const componentRaw = firstNonEmptyByKeysRelaxed(bomRow, keyMap.component);
+      const midDir = moduleRaw ? safePathSegment(moduleRaw) : componentRaw ? safePathSegment(componentRaw) : null;
       const batchDir = safePathSegment(batchName);
-      // 与飞书对账一致：{repo}/{batchName}/{分组优先否则组件}/{fileName}
+      // 与飞书对账一致：{repo}/{batchName}/{模块优先否则组件}/{fileName}
       const targetRel = midDir ? [batchDir, midDir, fileName].join('/') : [batchDir, fileName].join('/');
 
       const targetDl = buildArtifactoryDownloadUrl(rootUrl, extRepo, targetRel);

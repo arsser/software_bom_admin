@@ -391,8 +391,8 @@ export const Settings: React.FC = () => {
                     <code className="bg-gray-100 px-1 rounded">extUrl</code>、
                     <code className="bg-gray-100 px-1 rounded">releaseVersion</code>、
                     <code className="bg-gray-100 px-1 rounded">releaseBatch</code>、
-                    <code className="bg-gray-100 px-1 rounded">moduleName</code>、
-                    <code className="bg-gray-100 px-1 rounded">groupSegment</code>、
+                    <code className="bg-gray-100 px-1 rounded">module</code>、
+                    <code className="bg-gray-100 px-1 rounded">component</code>、
                     <code className="bg-gray-100 px-1 rounded">fileSizeBytes</code>、
                     <code className="bg-gray-100 px-1 rounded">extFileSizeBytes</code>、
                     <code className="bg-gray-100 px-1 rounded">remark</code>（可选）；值为字符串数组，表示 jsonb 中可能出现的列名。

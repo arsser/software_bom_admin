@@ -12,10 +12,10 @@ export type BomJsonKeyMap = {
   releaseVersion?: string[];
   /** 发布版本段（releaseBatch；表头别名仍可匹配「批次」等历史列名） */
   releaseBatch?: string[];
-  /** 模块 / 组件段 */
-  moduleName?: string[];
-  /** ext 同步目录：分组子目录（对应 bom_row 中的列名别名） */
-  groupSegment?: string[];
+  /** BOM 模块段（飞书/ext 路径优先；列别名常含「分组」「模块」等） */
+  module?: string[];
+  /** 组件段（列别名常含「组件」等） */
+  component?: string[];
   /** 写入 Artifactory 拉取/补全的大小（字节，整数字符串）；规范列名为数组首项（默认「文件大小」） */
   fileSizeBytes?: string[];
   /** Artifactory-ext 侧大小（字节，整数字符串） */
@@ -102,8 +102,8 @@ const defaultJsonKeyMap: BomJsonKeyMap = {
   extUrl: ['ext_url', 'extUrl', '转存地址'],
   releaseVersion: ['版本', 'version', 'releaseVersion', '产品版本'],
   releaseBatch: ['批次', 'batch', 'releaseBatch', '发布批次'],
-  moduleName: ['组件', 'Component', '组件名'],
-  groupSegment: ['分组', 'group', 'groupName', '组别', '模块'],
+  module: ['分组', 'group', 'groupName', '组别', '模块'],
+  component: ['组件', 'Component', '组件名'],
   /** 读：任一键；DB 同步/迁移：仅保留首键为规范列（见 migrations 20260419170000、20260419180000） */
   fileSizeBytes: ['文件大小', 'size_bytes', '远端大小'],
   extFileSizeBytes: ['ext_size_bytes', 'ext文件大小', 'extSize', 'ext大小'],
@@ -152,8 +152,8 @@ function mergeConfig(raw: BomScannerRaw | null | undefined): BomScannerConfig {
       extUrl: Array.isArray(jm?.extUrl) && jm.extUrl.length ? jm.extUrl : defaultJsonKeyMap.extUrl,
       releaseVersion: optArr(jm, 'releaseVersion', defaultJsonKeyMap.releaseVersion),
       releaseBatch: optArr(jm, 'releaseBatch', defaultJsonKeyMap.releaseBatch),
-      moduleName: optArr(jm, 'moduleName', defaultJsonKeyMap.moduleName),
-      groupSegment: optArr(jm, 'groupSegment', defaultJsonKeyMap.groupSegment),
+      module: optArr(jm, 'module', defaultJsonKeyMap.module) ?? defaultJsonKeyMap.module,
+      component: optArr(jm, 'component', defaultJsonKeyMap.component) ?? defaultJsonKeyMap.component,
       fileSizeBytes:
         Array.isArray(jm?.fileSizeBytes) && jm.fileSizeBytes.length ? jm.fileSizeBytes : defaultJsonKeyMap.fileSizeBytes!,
       extFileSizeBytes: optArr(jm, 'extFileSizeBytes', defaultJsonKeyMap.extFileSizeBytes),

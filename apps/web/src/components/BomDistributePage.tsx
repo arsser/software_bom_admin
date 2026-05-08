@@ -41,6 +41,7 @@ import {
   BOM_ROW_EXT_STATUS_LABEL,
   BOM_ROW_FEISHU_STATUS_LABEL,
   BOM_ROW_LOCAL_STATUS_LABEL,
+  feishuScanErrorBlocksFeishuUpload,
   type BomRowStatusJson,
 } from '../lib/bomRowStatus';
 import { formatBytesHuman } from '../lib/bytesFormat';
@@ -63,11 +64,15 @@ function formatDistributePageBomRowStatusTooltip(s: BomRowStatusJson): string {
   return `Artifactory-ext：${BOM_ROW_EXT_STATUS_LABEL[s.ext]}（${s.ext}）；本地：${localZh}（${s.local}）${feishuPart}`;
 }
 
-/** 本地已校验通过且已跑过飞书扫描、且飞书侧非「已对齐」时，允许点击上传并入队 worker */
+/**
+ * 本地已校验通过且已跑过飞书扫描、且飞书侧非「已对齐」时，原则上可上传；
+ * 若 feishu_scan_error 表明尚无本地索引路径（与上传 worker 依赖 local_file 一致），则不展示上传。
+ */
 function feishuRowEligibleForUploadStub(status: BomRowStatusJson): boolean {
   if (status.local !== 'verified_ok') return false;
   const f = status.feishu;
   if (f == null || f === 'not_scanned') return false;
+  if (feishuScanErrorBlocksFeishuUpload(status.feishu_scan_error)) return false;
   return f === 'absent' || f === 'error';
 }
 
@@ -83,7 +88,7 @@ function rowModuleRaw(row: BomBatchRow['bom_row'], keyMap: BomJsonKeyMap): strin
  * 拉取 / 上传 按钮显示逻辑（分发页）：
  * - 表头「全部拉取」：至少一行可拉取时可点；文案为全表总行数、待拉取（本地非 verified_ok）、可拉取（待拉取且含有效 ext 链接）。
  * - 行内「拉取」：仅当本地非「校验通过」且存在有效 ext http(s) 链接时显示按钮；本地已通过则始终「—」。
- * - 行内「上传」：仅当 feishuRowEligibleForUploadStub 为真时显示按钮；本地已通过但飞书未扫描显示「…」；否则「—」。若该行已在 bom_feishu_upload_jobs 的 queued/running 任务中，按钮 disabled（与 DB 一致，刷新不丢）。
+ * - 行内「上传」：同上，但若飞书扫描错误为「本地索引无 MD5 / 缺期望 MD5」等（无法解析上传路径）则不显示上传。
  * - 「上传选中到飞书」：作用域 = 当前表格筛选后的行 ∩ 复选框勾选的行；仅对满足条件且未被上述任务占用的行入队。
  */
 
@@ -129,6 +134,10 @@ export const BomDistributePage: React.FC = () => {
     [activeFeishuScanJobs],
   );
   const prevHadActiveFeishuScanRef = useRef(false);
+  /** 本次点击「扫描飞书」入队的任务 id，用于任务结束时判断是否 failed 并提示（worker 失败不写行级 feishu_scan_error） */
+  const pendingFeishuScanJobIdRef = useRef<string | null>(null);
+  /** 最近一次飞书扫描任务失败时的 message（便于阅读长错误，可与 alert 并存） */
+  const [feishuScanJobFailedBanner, setFeishuScanJobFailedBanner] = useState<string | null>(null);
   /** 扫描时若飞书根下无版本名文件夹，是否自动 create_folder（与 Edge batchDir 规则一致） */
   const [feishuAutoCreateVersionFolder, setFeishuAutoCreateVersionFolder] = useState(false);
   const uploadSelectAllHeaderRef = useRef<HTMLInputElement>(null);
@@ -353,7 +362,21 @@ export const BomDistributePage: React.FC = () => {
     const had = prevHadActiveFeishuScanRef.current;
     prevHadActiveFeishuScanRef.current = hasActiveFeishuScanJob;
     if (had && !hasActiveFeishuScanJob && batchId) {
-      void load();
+      void (async () => {
+        try {
+          const jobs = await fetchBomFeishuScanJobsForBatch(batchId, 15);
+          const pid = pendingFeishuScanJobIdRef.current;
+          const job = pid ? jobs.find((j) => j.id === pid) : null;
+          pendingFeishuScanJobIdRef.current = null;
+          if (job?.status === 'failed') {
+            const msg = job.message?.trim() || '飞书扫描任务失败（无详细说明）';
+            setFeishuScanJobFailedBanner(msg);
+            window.alert(`飞书扫描失败：${msg}`);
+          }
+        } finally {
+          await load();
+        }
+      })();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [hasActiveFeishuScanJob, batchId]);
@@ -544,9 +567,18 @@ export const BomDistributePage: React.FC = () => {
         return;
       }
       if ('async' in r && r.async === true) {
+        pendingFeishuScanJobIdRef.current = r.jobId;
+        setFeishuScanJobFailedBanner(null);
         alert(r.message ?? '已排队飞书扫描，由 bom-scanner-worker 执行；下方显示进度，完成后表格将自动刷新。');
         const jobs = await fetchBomFeishuScanJobsForBatch(batchId, 20);
         setActiveFeishuScanJobs(jobs);
+        const justJob = jobs.find((j) => j.id === r.jobId);
+        if (justJob?.status === 'failed') {
+          const msg = justJob.message?.trim() || '飞书扫描任务失败（无详细说明）';
+          pendingFeishuScanJobIdRef.current = null;
+          setFeishuScanJobFailedBanner(msg);
+          window.alert(`飞书扫描失败：${msg}`);
+        }
         return;
       }
       if (r.ok && 'rows_present' in r) {
@@ -819,6 +851,21 @@ export const BomDistributePage: React.FC = () => {
                 .join('；')}
               ）；完成后本页将自动刷新 BOM 行状态。
             </p>
+          ) : null}
+          {feishuScanJobFailedBanner ? (
+            <div className="rounded-lg border border-red-300 bg-red-50 px-3 py-2 text-xs text-red-900 flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+              <span className="break-words min-w-0">
+                <strong className="font-semibold">飞书扫描任务失败：</strong>
+                {feishuScanJobFailedBanner}
+              </span>
+              <button
+                type="button"
+                className="shrink-0 text-red-800 underline hover:text-red-950 text-[11px]"
+                onClick={() => setFeishuScanJobFailedBanner(null)}
+              >
+                关闭
+              </button>
+            </div>
           ) : null}
           {!productFeishuRootFolderToken.trim() ? (
             <p className="text-xs text-amber-900">

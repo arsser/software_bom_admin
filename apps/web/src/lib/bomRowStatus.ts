@@ -160,6 +160,19 @@ export const BOM_ROW_FEISHU_STATUS_LABEL: Record<BomRowFeishuStatus, string> = {
   error: '飞书扫描异常',
 };
 
+/**
+ * 飞书上传 worker 依赖期望 MD5 在 local_file 能解析出磁盘路径。
+ * 扫描阶段写出此类说明时，上传同样不可执行，不应在分发页展示「上传」按钮。
+ * （与 apps/bom-scanner-worker feishuScanWorker / feishuUpload 约定文案对齐）
+ */
+export function feishuScanErrorBlocksFeishuUpload(error: string | null | undefined): boolean {
+  const t = error?.trim() ?? '';
+  if (!t) return false;
+  if (t.includes('本地索引中无该 MD5')) return true;
+  if (t.includes('BOM 行缺少合法期望 MD5')) return true;
+  return false;
+}
+
 /** 兼容旧 UI：整行摘要（tooltip） */
 export function formatBomRowStatusTooltip(s: BomRowStatusJson): string {
   const itSummary = s.it_fetch_error?.trim() ? '需关注' : '正常';

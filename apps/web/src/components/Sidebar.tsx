@@ -1,5 +1,5 @@
 import { useNavigate, useLocation } from 'react-router-dom';
-import { LayoutDashboard, Settings, LogOut, Database, ChevronLeft, ChevronRight, Calculator, Package, HardDriveDownload } from 'lucide-react';
+import { LayoutDashboard, Settings, LogOut, ChevronLeft, ChevronRight, Calculator, Package, HardDriveDownload } from 'lucide-react';
 import { useAuthStore } from '../stores/authStore';
 import { SidebarWorkerHeartbeat } from './SidebarWorkerHeartbeat';
 
@@ -49,9 +49,15 @@ export const Sidebar: React.FC<SidebarProps> = ({ collapsed = false, onToggle })
 
       {/* Header & Logo */}
       <div className={`p-6 flex items-center ${collapsed ? 'justify-center' : 'gap-3'} border-b border-gray-100`}>
-        <div className="w-8 h-8 bg-blue-600 rounded-lg flex items-center justify-center text-white flex-shrink-0">
-          <Database size={18} />
-        </div>
+        <img
+          src="/favicon.svg"
+          alt=""
+          title="软件BOM管理"
+          width={32}
+          height={32}
+          className="w-8 h-8 rounded-lg flex-shrink-0 object-contain shadow-sm ring-1 ring-slate-200/80"
+          decoding="async"
+        />
         {!collapsed && (
           <span className="font-bold text-xl text-slate-800 tracking-tight whitespace-nowrap">软件BOM管理</span>
         )}

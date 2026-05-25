@@ -8,6 +8,12 @@ importers:
 
   .: {}
 
+  apps/bom-scanner-worker:
+    dependencies:
+      '@supabase/supabase-js':
+        specifier: ^2.49.8
+        version: 2.99.3
+
   apps/supabase:
     devDependencies:
       supabase:

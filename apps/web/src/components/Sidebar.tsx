@@ -2,6 +2,7 @@ import { useNavigate, useLocation } from 'react-router-dom';
 import { LayoutDashboard, Settings, LogOut, ChevronLeft, ChevronRight, Calculator, Package, HardDriveDownload } from 'lucide-react';
 import { useAuthStore } from '../stores/authStore';
 import { SidebarWorkerHeartbeat } from './SidebarWorkerHeartbeat';
+import { UserAvatar } from './UserAvatar';
 
 interface SidebarProps {
   collapsed?: boolean;
@@ -96,11 +97,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ collapsed = false, onToggle })
         <SidebarWorkerHeartbeat collapsed={collapsed} />
          {!collapsed && (
            <div className="flex items-center gap-3 px-2">
-              <img
-                  src={`https://ui-avatars.com/api/?name=${displayName}&background=random`}
-                  alt="User"
-                  className="w-9 h-9 rounded-full border border-gray-200 flex-shrink-0"
-              />
+              <UserAvatar name={displayName} className="h-9 w-9" />
               <div className="flex-1 min-w-0">
                   <p className="text-sm font-semibold text-slate-800 truncate">{displayName}</p>
                   <p className="text-xs text-slate-500 capitalize truncate">管理员</p>
@@ -109,12 +106,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ collapsed = false, onToggle })
          )}
          {collapsed && (
            <div className="flex justify-center">
-             <img
-                 src={`https://ui-avatars.com/api/?name=${displayName}&background=random`}
-                 alt="User"
-                 className="w-9 h-9 rounded-full border border-gray-200"
-                 title={displayName}
-             />
+             <UserAvatar name={displayName} className="h-9 w-9" title={displayName} />
            </div>
          )}
 

@@ -5,8 +5,9 @@
 //
 // 示例：
 //   window.__APP_CONFIG__ = {
-//     supabaseUrl: 'http://127.0.0.1:54321',   // 本地：supabase start 后的 API URL
-//     supabaseAnonKey: 'eyJhbGciOiJIUzI1NiIs...', // 本地：supabase status 中的 anon key
+//     supabaseUrl: 'http://127.0.0.1:54321',   // 本地cli
+//     supabaseUrl: 'http://10.40.29.50/supabase',  // 正式部署
+//     supabaseAnonKey: 'eyJhbGciOiJIUzI1NiIs...' // anon key
 //   };
 
 window.__APP_CONFIG__ = window.__APP_CONFIG__ || {

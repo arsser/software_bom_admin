@@ -69,6 +69,21 @@ export function extractComponentFromRow(row: BomRowRecord, keyMap: BomJsonKeyMap
   return null;
 }
 
+/** 组件 ID 列（BOM 与组装映射匹配键；非常规 jsonKeyMap 字段） */
+export function extractComponentIdFromRow(row: BomRowRecord): string | null {
+  const keys = ['组件ID', 'componentId', 'component_id'];
+  const exact = firstNonEmptyByKeys(row, keys);
+  if (exact) return exact;
+  const want = new Set(keys.map((k) => normalizeBomKeyForMatch(k)).filter(Boolean));
+  for (const [k, val] of Object.entries(row)) {
+    if (want.has(normalizeBomKeyForMatch(k))) {
+      const v = String(val ?? '').trim();
+      if (v) return v;
+    }
+  }
+  return null;
+}
+
 export function extractDownloadUrlRaw(row: BomRowRecord, keyMap: BomJsonKeyMap): string | null {
   return firstNonEmptyByKeys(row, keyMap.downloadUrl);
 }

@@ -97,6 +97,12 @@ import {
   fetchProductDistributionSettings,
   type Product,
 } from '../lib/products';
+import {
+  applyAssemblyMappingToBom,
+  ASSEMBLY_HEADERS,
+  parseAssemblyFromClipboard,
+  type AssemblyParseResult,
+} from '../lib/bomAssemblyMapping';
 
 export const BomDetail: React.FC = () => {
   const navigate = useNavigate();
@@ -132,6 +138,10 @@ export const BomDetail: React.FC = () => {
   const [showRawInput, setShowRawInput] = useState(false);
   const [previewHeaderError, setPreviewHeaderError] = useState<string>('');
   const [clipboardListBusy, setClipboardListBusy] = useState(false);
+  /** 系统组装：组件ID → 模块名 */
+  const [assemblyMapping, setAssemblyMapping] = useState<Map<string, string>>(() => new Map());
+  const [assemblyParseWarnings, setAssemblyParseWarnings] = useState<string[]>([]);
+  const [assemblyApplyWarnings, setAssemblyApplyWarnings] = useState<string[]>([]);
   const [artifactoryConfig, setArtifactoryConfig] = useState<ArtifactoryConfig | null>(null);
   const [localInfoByMd5, setLocalInfoByMd5] = useState<Map<string, LocalFileIndexInfo>>(() => new Map());
   /** local_file 按 MD5 查询完成后为 true，避免加载中空窗期误判「文件不存在」 */
@@ -168,7 +178,9 @@ export const BomDetail: React.FC = () => {
   const [lastSavedPastedText, setLastSavedPastedText] = useState<string | null>(null);
 
   const pasteAreaRef = useRef<HTMLDivElement>(null);
+  const assemblyPasteAreaRef = useRef<HTMLDivElement>(null);
   const PASTE_AREA_HINT = '在此处 Ctrl/Cmd+V 粘贴 Excel 区域';
+  const ASSEMBLY_PASTE_AREA_HINT = '在此处 Ctrl/Cmd+V 粘贴系统组装表（模块 / 组件ID / 备注）';
 
   function escapeDelimitedCell(v: string, delimiter: '\t' | ',' | '|'): string {
     const s = String(v ?? '');
@@ -264,6 +276,86 @@ export const BomDetail: React.FC = () => {
   }, [existingHeaders, tableKeyMap]);
 
   const remarkHeaderKeys = useMemo(() => remarkColumnKeys(tableKeyMap), [tableKeyMap]);
+
+  const syncBomPreview = (
+    headers: string[],
+    rows: BomRowRecord[],
+    options: { updatePastedText?: boolean; mapping?: Map<string, string> } = {},
+  ) => {
+    const mapping = options.mapping ?? assemblyMapping;
+    const keyMap = tableKeyMap;
+    let nextHeaders = headers;
+    let nextRows = rows;
+    let applyWarnings: string[] = [];
+
+    if (mapping.size > 0) {
+      const applied = applyAssemblyMappingToBom(headers, rows, mapping, keyMap);
+      applyWarnings = applied.warnings;
+      if (applied.applied) {
+        nextHeaders = applied.headers;
+        nextRows = applied.rows;
+      }
+    }
+
+    setPreviewHeaders(nextHeaders);
+    setPreviewRows(nextRows);
+    setAssemblyApplyWarnings(applyWarnings);
+
+    if (options.updatePastedText && nextHeaders.length > 0) {
+      try {
+        setPastedText(stringifyBomToPasteText(nextHeaders, nextRows));
+      } catch {
+        // 表头为空等异常时保留原 pastedText
+      }
+    }
+
+    const cfg = config ?? defaultBomScannerConfig;
+    if (nextHeaders.length > 0) {
+      const headerCheck = validateRequiredHeaders(nextHeaders, cfg.jsonKeyMap);
+      if (!headerCheck.ok) {
+        const missingText = headerCheck.missingGroups
+          .map((g) => (g === 'downloadUrl' ? 'downloadUrl（下载路径）' : 'expectedMd5（期望MD5）'))
+          .join('、');
+        setPreviewHeaderError(`列头缺少必需列组：${missingText}。该表将不能入库。`);
+      } else {
+        setPreviewHeaderError('');
+      }
+    } else {
+      setPreviewHeaderError('');
+    }
+  };
+
+  const applyAssemblyPasteResult = (result: AssemblyParseResult) => {
+    setAssemblyMapping(result.mapping);
+    setAssemblyParseWarnings(result.warnings);
+
+    if (previewHeaders.length > 0 || previewRows.length > 0) {
+      syncBomPreview(previewHeaders, previewRows, { updatePastedText: true, mapping: result.mapping });
+      return;
+    }
+    if (pastedText.trim()) {
+      try {
+        const parsed = parsePastedBom(pastedText);
+        syncBomPreview(parsed.headers, parsed.rows, { updatePastedText: true, mapping: result.mapping });
+      } catch {
+        setAssemblyApplyWarnings([]);
+      }
+    }
+  };
+
+  const handleClearAssemblyPaste = () => {
+    setAssemblyMapping(new Map());
+    setAssemblyParseWarnings([]);
+    setAssemblyApplyWarnings([]);
+    const el = assemblyPasteAreaRef.current;
+    if (el) el.textContent = ASSEMBLY_PASTE_AREA_HINT;
+  };
+
+  const assemblyWarningsCombined = useMemo(
+    () => [...assemblyParseWarnings, ...assemblyApplyWarnings],
+    [assemblyParseWarnings, assemblyApplyWarnings],
+  );
+
   const previewDisplayHeaders = useMemo(() => {
     const sizeKeys = tableKeyMap.fileSizeBytes ?? [];
     const extSizeKeys = tableKeyMap.extFileSizeBytes ?? [];
@@ -284,29 +376,17 @@ export const BomDetail: React.FC = () => {
       setPreviewHeaders([]);
       setPreviewRows([]);
       setPreviewHeaderError('');
+      setAssemblyApplyWarnings([]);
       return;
     }
     try {
       const parsed = parsePastedBom(rawText);
-      setPreviewHeaders(parsed.headers);
-      setPreviewRows(parsed.rows);
-      if (config) {
-        const headerCheck = validateRequiredHeaders(parsed.headers, config.jsonKeyMap);
-        if (!headerCheck.ok) {
-          const missingText = headerCheck.missingGroups
-            .map((g) => (g === 'downloadUrl' ? 'downloadUrl（下载路径）' : 'expectedMd5（期望MD5）'))
-            .join('、');
-          setPreviewHeaderError(`列头缺少必需列组：${missingText}。该表将不能入库。`);
-        } else {
-          setPreviewHeaderError('');
-        }
-      } else {
-        setPreviewHeaderError('');
-      }
+      syncBomPreview(parsed.headers, parsed.rows);
     } catch {
       setPreviewHeaders([]);
       setPreviewRows([]);
       setPreviewHeaderError('');
+      setAssemblyApplyWarnings([]);
     }
   };
 
@@ -315,6 +395,7 @@ export const BomDetail: React.FC = () => {
     setPreviewHeaders([]);
     setPreviewRows([]);
     setPreviewHeaderError('');
+    setAssemblyApplyWarnings([]);
     const el = pasteAreaRef.current;
     if (el) el.textContent = PASTE_AREA_HINT;
   };
@@ -1392,21 +1473,7 @@ export const BomDetail: React.FC = () => {
               const text = e.clipboardData.getData('text/plain');
               try {
                 const parsed = parsePastedFromClipboard(html, text);
-                const normalizedText = [parsed.headers.join('\t'), ...parsed.rows.map((r) => parsed.headers.map((h) => r[h] ?? '').join('\t'))].join('\n');
-                setPastedText(normalizedText);
-                setPreviewHeaders(parsed.headers);
-                setPreviewRows(parsed.rows);
-                if (config) {
-                  const headerCheck = validateRequiredHeaders(parsed.headers, config.jsonKeyMap);
-                  if (!headerCheck.ok) {
-                    const missingText = headerCheck.missingGroups
-                      .map((g) => (g === 'downloadUrl' ? 'downloadUrl（下载路径）' : 'expectedMd5（期望MD5）'))
-                      .join('、');
-                    setPreviewHeaderError(`列头缺少必需列组：${missingText}。该表将不能入库。`);
-                  } else {
-                    setPreviewHeaderError('');
-                  }
-                }
+                syncBomPreview(parsed.headers, parsed.rows, { updatePastedText: true });
               } catch (err) {
                 alert(err instanceof Error ? err.message : String(err));
               }
@@ -1414,6 +1481,75 @@ export const BomDetail: React.FC = () => {
           >
             {PASTE_AREA_HINT}
           </div>
+        </div>
+
+        <div>
+          <div className="flex items-center justify-between gap-3 mb-1">
+            <label className="block text-sm font-medium text-slate-700">系统组装粘贴区</label>
+            <button
+              type="button"
+              onClick={handleClearAssemblyPaste}
+              disabled={assemblyMapping.size === 0 && assemblyParseWarnings.length === 0}
+              className="inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium rounded-md border border-slate-300 text-slate-600 hover:bg-slate-100 disabled:opacity-40 disabled:pointer-events-none"
+            >
+              <Trash2 size={14} className="shrink-0" />
+              清空组装
+            </button>
+          </div>
+          <p className="text-xs text-slate-500 mb-2">
+            粘贴模块与组件ID 对应关系后，系统将按组件ID 在 BOM 首列写入「模块」（覆盖已有分组/模块值；备注列仅作说明）。
+          </p>
+          <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-600 mb-2">
+            <p className="font-medium text-slate-700 mb-2">表头</p>
+            <div className="overflow-x-auto rounded-md border border-slate-200 bg-white">
+              <table className="min-w-full border-collapse text-left">
+                <thead>
+                  <tr>
+                    {ASSEMBLY_HEADERS.map((cell, idx) => (
+                      <th
+                        key={cell}
+                        scope="col"
+                        className={`px-3 py-2 border-b border-slate-200 whitespace-nowrap bg-emerald-50/80 text-emerald-900 font-semibold ${
+                          idx < ASSEMBLY_HEADERS.length - 1 ? 'border-r border-slate-200' : ''
+                        }`}
+                      >
+                        {cell}
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+              </table>
+            </div>
+          </div>
+          <div
+            ref={assemblyPasteAreaRef}
+            className="w-full min-h-20 px-3 py-2 border border-dashed border-emerald-300 rounded-lg text-xs text-slate-500 bg-emerald-50/30"
+            contentEditable
+            suppressContentEditableWarning
+            onPaste={(e) => {
+              e.preventDefault();
+              const html = e.clipboardData.getData('text/html');
+              const text = e.clipboardData.getData('text/plain');
+              try {
+                const result = parseAssemblyFromClipboard(html, text);
+                applyAssemblyPasteResult(result);
+              } catch (err) {
+                alert(err instanceof Error ? err.message : String(err));
+              }
+            }}
+          >
+            {ASSEMBLY_PASTE_AREA_HINT}
+          </div>
+          {assemblyMapping.size > 0 ? (
+            <p className="text-xs text-emerald-700 mt-1">已加载 {assemblyMapping.size} 条组件ID → 模块 映射</p>
+          ) : null}
+          {assemblyWarningsCombined.length > 0 ? (
+            <div className="mt-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900 space-y-1">
+              {assemblyWarningsCombined.map((w, i) => (
+                <p key={`${i}-${w}`}>{w}</p>
+              ))}
+            </div>
+          ) : null}
         </div>
 
         <div>

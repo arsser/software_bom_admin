@@ -1498,6 +1498,7 @@ export const BomDetail: React.FC = () => {
           </div>
           <p className="text-xs text-slate-500 mb-2">
             粘贴模块与组件ID 对应关系后，系统将按组件ID 在 BOM 首列写入「模块」（覆盖已有分组/模块值；备注列仅作说明）。
+            同一组件ID 多行表示被多个模块引用，将合并为「模块A--模块B」（飞书目录名需与此一致；单个模块名不得含 --、& 或路径非法字符）。
           </p>
           <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-600 mb-2">
             <p className="font-medium text-slate-700 mb-2">表头</p>

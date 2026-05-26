@@ -6,6 +6,12 @@ import {
   headerMatchesAny,
   normalizeBomKeyForMatch,
 } from './bomRowFields';
+import {
+  mergeModuleSegmentNames,
+  MODULE_MERGE_SEP,
+  validateMergedModuleSegment,
+  validateModuleSegmentName,
+} from './pathSegment';
 
 /** BOM 表头第一列的模块列名（与 jsonKeyMap.module 语义一致） */
 export const MODULE_COLUMN = '模块';
@@ -89,20 +95,47 @@ function buildMappingFromAssemblyRows(
     throw new Error('组装表缺少「组件ID」列');
   }
 
-  const mapping = new Map<string, string>();
+  /** 组件ID → 按出现顺序去重后的模块名列表 */
+  const moduleLists = new Map<string, string[]>();
+
   rows.forEach((row, idx) => {
     const componentId = (row[componentIdCol] ?? '').trim();
-    const moduleName = (row[moduleCol] ?? '').trim();
+    const moduleRaw = (row[moduleCol] ?? '').trim();
     if (!componentId) return;
-    if (!moduleName) {
+    if (!moduleRaw) {
       warnings.push(`组装表第 ${idx + 2} 行：组件ID「${componentId}」对应模块为空，已跳过`);
       return;
     }
-    const prev = mapping.get(componentId);
-    if (prev !== undefined && prev !== moduleName) {
-      warnings.push(`组装表：组件ID「${componentId}」重复，已采用最后一行模块「${moduleName}」`);
+
+    const validated = validateModuleSegmentName(moduleRaw);
+    if (!validated.ok) {
+      warnings.push(`组装表第 ${idx + 2} 行：${validated.error}（组件ID「${componentId}」）`);
+      return;
     }
-    mapping.set(componentId, moduleName);
+
+    const moduleName = validated.value;
+    const list = moduleLists.get(componentId) ?? [];
+    if (!list.includes(moduleName)) {
+      list.push(moduleName);
+      moduleLists.set(componentId, list);
+    }
+  });
+
+  const mapping = new Map<string, string>();
+
+  moduleLists.forEach((modules, componentId) => {
+    const merged = mergeModuleSegmentNames(modules);
+    const mergeErr = validateMergedModuleSegment(merged);
+    if (mergeErr) {
+      warnings.push(`组装表：组件ID「${componentId}」${mergeErr}，未写入映射`);
+      return;
+    }
+    if (modules.length > 1) {
+      warnings.push(
+        `组装表：组件ID「${componentId}」被多个模块引用，已合并为「${merged}」（飞书目录名需与此一致）`,
+      );
+    }
+    mapping.set(componentId, merged);
   });
 
   return { mapping, warnings };
@@ -189,3 +222,5 @@ export function applyAssemblyMappingToBom(
     applied: true,
   };
 }
+
+export { MODULE_MERGE_SEP };

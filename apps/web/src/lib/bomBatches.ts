@@ -25,6 +25,8 @@ export type BomBatch = {
   headerOrder: string[];
   createdAt: string;
   rowCount: number;
+  /** 各行汇总体积之和（本地索引 → 飞书 → ext → 远端 BOM 列） */
+  totalBytes: number;
 };
 
 export type BomBatchRow = {
@@ -34,13 +36,35 @@ export type BomBatchRow = {
   status: BomRowStatusJson;
 };
 
+function parseRpcTotalBytes(raw: unknown): number {
+  if (typeof raw === 'number' && Number.isFinite(raw)) return Math.max(0, Math.trunc(raw));
+  if (typeof raw === 'string' && /^\d+$/.test(raw.trim())) {
+    const b = BigInt(raw.trim());
+    const max = BigInt(Number.MAX_SAFE_INTEGER);
+    return Number(b > max ? max : b);
+  }
+  return 0;
+}
+
 export async function fetchBomBatches(): Promise<BomBatch[]> {
-  const { data, error } = await supabase
-    .from('bom_batches')
-    .select('id,name,original_bom_url,created_at,product_id,header_order,products(name),bom_rows(count)')
-    .order('created_at', { ascending: false });
+  const [{ data, error }, { data: totalsData, error: totalsError }] = await Promise.all([
+    supabase
+      .from('bom_batches')
+      .select('id,name,original_bom_url,created_at,product_id,header_order,products(name),bom_rows(count)')
+      .order('created_at', { ascending: false }),
+    supabase.rpc('bom_batch_byte_totals'),
+  ]);
 
   if (error) throw error;
+  if (totalsError) throw totalsError;
+
+  const bytesByBatchId = new Map<string, number>();
+  for (const row of totalsData ?? []) {
+    const o = row as { batch_id?: string; total_bytes?: unknown };
+    if (typeof o.batch_id === 'string') {
+      bytesByBatchId.set(o.batch_id, parseRpcTotalBytes(o.total_bytes));
+    }
+  }
 
   return (data ?? []).map((item: any) => ({
     id: item.id as string,
@@ -51,6 +75,7 @@ export async function fetchBomBatches(): Promise<BomBatch[]> {
     headerOrder: Array.isArray(item.header_order) ? (item.header_order as string[]) : [],
     createdAt: item.created_at as string,
     rowCount: Number(item.bom_rows?.[0]?.count ?? 0),
+    totalBytes: bytesByBatchId.get(item.id as string) ?? 0,
   }));
 }
 

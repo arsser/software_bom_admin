@@ -314,3 +314,64 @@ export function normalizeLocalRelativePath(path: string): string {
     .trim()
     .replace(/\\/g, '/');
 }
+
+export type ModuleAggregateStat = {
+  moduleLabel: string;
+  fileCount: number;
+  totalBytes: number;
+};
+
+/** 行级汇总体积：本地索引 → 飞书 → ext → 远端 BOM 列 */
+export function resolveRowAggregateSizeBytes(
+  row: BomRowRecord,
+  keyMap: BomJsonKeyMap,
+  localInfo?: LocalFileIndexInfo | null,
+  feishuSizeBytes?: number | null,
+): number | null {
+  const localB = localInfo?.sizeBytes;
+  if (localB != null && Number.isFinite(localB) && localB >= 0) return Math.trunc(localB);
+  if (feishuSizeBytes != null && Number.isFinite(feishuSizeBytes) && feishuSizeBytes >= 0) {
+    return Math.trunc(feishuSizeBytes);
+  }
+  const extB = extractExtSizeBytesFromRow(row, keyMap);
+  if (extB != null) return extB;
+  return extractRemoteSizeBytesFromRow(row, keyMap);
+}
+
+/** 按模块（jsonKeyMap.module）统计当前行集合的文件数与体积合计 */
+export function computeModuleAggregateStats(
+  rows: BomBatchRow[],
+  keyMap: BomJsonKeyMap,
+  localInfoByMd5: Map<string, LocalFileIndexInfo>,
+): ModuleAggregateStat[] {
+  const map = new Map<string, { fileCount: number; totalBytes: number }>();
+  for (const lr of rows) {
+    const modRaw = extractModuleFromRow(lr.bom_row, keyMap) ?? '';
+    const moduleLabel = modRaw === '' ? '（无模块）' : modRaw;
+    const md5 = extractExpectedMd5FromRow(lr.bom_row, keyMap);
+    const localInfo = md5 != null ? localInfoByMd5.get(md5) : undefined;
+    const sz = resolveRowAggregateSizeBytes(lr.bom_row, keyMap, localInfo);
+    const cur = map.get(moduleLabel) ?? { fileCount: 0, totalBytes: 0 };
+    cur.fileCount += 1;
+    if (sz != null) cur.totalBytes += sz;
+    map.set(moduleLabel, cur);
+  }
+  return Array.from(map.entries())
+    .map(([moduleLabel, v]) => ({ moduleLabel, ...v }))
+    .sort((a, b) => a.moduleLabel.localeCompare(b.moduleLabel, 'zh-Hans-CN'));
+}
+
+export function sumRowsAggregateBytes(
+  rows: BomBatchRow[],
+  keyMap: BomJsonKeyMap,
+  localInfoByMd5: Map<string, LocalFileIndexInfo>,
+): number {
+  let sum = 0;
+  for (const lr of rows) {
+    const md5 = extractExpectedMd5FromRow(lr.bom_row, keyMap);
+    const localInfo = md5 != null ? localInfoByMd5.get(md5) : undefined;
+    const sz = resolveRowAggregateSizeBytes(lr.bom_row, keyMap, localInfo, lr.status.feishu_size_bytes);
+    if (sz != null) sum += sz;
+  }
+  return sum;
+}

@@ -26,6 +26,7 @@ import {
   type Product,
 } from '../lib/products';
 import { BomProductEditorModal } from './BomProductEditorModal';
+import { formatBytesMbGb } from '../lib/bytesFormat';
 import { LABEL_EXTERNAL_ARTI } from '../lib/bomUiLabels';
 
 type ProductWithBatches = {
@@ -48,7 +49,7 @@ export const BomMaster: React.FC = () => {
   const [editorMode, setEditorMode] = useState<'create' | 'edit'>('create');
   const [editorProduct, setEditorProduct] = useState<Product | null>(null);
   const [batchSort, setBatchSort] = useState<{
-    key: 'name' | 'rowCount' | 'createdAt';
+    key: 'name' | 'rowCount' | 'totalBytes' | 'createdAt';
     direction: 'asc' | 'desc';
   }>({
     key: 'createdAt',
@@ -173,7 +174,7 @@ export const BomMaster: React.FC = () => {
     return Array.from(map.values());
   }, [products, batches]);
 
-  const toggleBatchSort = (key: 'name' | 'rowCount' | 'createdAt') => {
+  const toggleBatchSort = (key: 'name' | 'rowCount' | 'totalBytes' | 'createdAt') => {
     setBatchSort((prev) => {
       if (prev.key === key) {
         return {
@@ -195,13 +196,15 @@ export const BomMaster: React.FC = () => {
         diff = a.name.localeCompare(b.name, 'zh-Hans-CN');
       } else if (batchSort.key === 'rowCount') {
         diff = a.rowCount - b.rowCount;
+      } else if (batchSort.key === 'totalBytes') {
+        diff = a.totalBytes - b.totalBytes;
       } else {
         diff = a.createdAt.localeCompare(b.createdAt);
       }
       return batchSort.direction === 'asc' ? diff : -diff;
     });
 
-  const sortArrow = (key: 'name' | 'rowCount' | 'createdAt') => {
+  const sortArrow = (key: 'name' | 'rowCount' | 'totalBytes' | 'createdAt') => {
     if (batchSort.key !== key) return '↕';
     return batchSort.direction === 'asc' ? '↑' : '↓';
   };
@@ -376,6 +379,17 @@ export const BomMaster: React.FC = () => {
                         <th className="px-3 py-2 text-left text-xs font-semibold text-slate-700 border-b border-slate-200">
                           <button
                             type="button"
+                            onClick={() => toggleBatchSort('totalBytes')}
+                            className="inline-flex items-center gap-1 hover:text-indigo-700"
+                            title="按汇总体积排序（本地索引 → 飞书 → ext → 远端 BOM 列）"
+                          >
+                            总文件大小
+                            <span className="text-[11px]">{sortArrow('totalBytes')}</span>
+                          </button>
+                        </th>
+                        <th className="px-3 py-2 text-left text-xs font-semibold text-slate-700 border-b border-slate-200">
+                          <button
+                            type="button"
                             onClick={() => toggleBatchSort('createdAt')}
                             className="inline-flex items-center gap-1 hover:text-indigo-700"
                             title="按创建时间排序"
@@ -392,6 +406,16 @@ export const BomMaster: React.FC = () => {
                           <tr key={b.id} className="border-b last:border-b-0">
                             <td className="px-3 py-2 text-slate-900">{b.name}</td>
                             <td className="px-3 py-2 text-slate-700">{b.rowCount}</td>
+                            <td
+                              className="px-3 py-2 text-slate-700 tabular-nums"
+                              title={
+                                b.rowCount > 0 && b.totalBytes === 0
+                                  ? '各行均无已知体积数据'
+                                  : `${b.totalBytes} 字节`
+                              }
+                            >
+                              {b.rowCount > 0 ? formatBytesMbGb(b.totalBytes) : '—'}
+                            </td>
                             <td className="px-3 py-2 text-slate-600">{new Date(b.createdAt).toLocaleString()}</td>
                             <td className="px-3 py-2">
                               <div className="flex items-center justify-end gap-3 flex-wrap">

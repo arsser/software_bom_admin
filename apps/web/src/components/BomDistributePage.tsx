@@ -36,6 +36,7 @@ import {
   remarkColumnKeys,
   deriveLocalExtStatusLabels,
   rowEligibleForDistributeExternalPull,
+  sumRowsAggregateBytes,
 } from '../lib/bomRowFields';
 import {
   BOM_ROW_EXT_STATUS_LABEL,
@@ -44,7 +45,7 @@ import {
   feishuScanErrorBlocksFeishuUpload,
   type BomRowStatusJson,
 } from '../lib/bomRowStatus';
-import { formatBytesHuman } from '../lib/bytesFormat';
+import { formatBytesHuman, formatBytesMbGb } from '../lib/bytesFormat';
 import { requestBomDistributeExtPull } from '../lib/bomDownloadJobs';
 import { requestBomFeishuScan } from '../lib/bomFeishuScan';
 import { fetchBomFeishuScanJobsForBatch, type BomFeishuScanJob } from '../lib/bomFeishuScanJobs';
@@ -276,6 +277,14 @@ export const BomDistributePage: React.FC = () => {
     () => uploadScopeEligibleRows.filter((lr) => !feishuUploadLockedRowIds.has(lr.id)),
     [uploadScopeEligibleRows, feishuUploadLockedRowIds],
   );
+
+  const uploadScopeBytesTotal = useMemo(
+    () => sumRowsAggregateBytes(uploadScopeRows, tableKeyMap, localInfoByMd5),
+    [uploadScopeRows, tableKeyMap, localInfoByMd5],
+  );
+
+  const uploadScopeSizeSuffix =
+    uploadScopeRows.length > 0 ? ` · 合计 ${formatBytesMbGb(uploadScopeBytesTotal)}` : '';
 
   const selectedUploadableInFilterCount = useMemo(
     () => uploadSelectableFilteredRows.filter((lr) => selectedUploadRowIds.has(lr.id)).length,
@@ -929,12 +938,13 @@ export const BomDistributePage: React.FC = () => {
                 <span className="text-xs text-slate-500">
                   列表显示 {filteredStoredBomRows.length} / {loadedBomRows.length} 行
                   {uploadScopeRows.length > 0
-                    ? `；上传勾选 ${uploadScopeRows.length} 行（其中 ${uploadScopeEligibleRows.length} 行可执行上传）`
+                    ? `；上传勾选 ${uploadScopeRows.length} 行（其中 ${uploadScopeEligibleRows.length} 行可执行上传）${uploadScopeSizeSuffix}`
                     : null}
                 </span>
               ) : uploadScopeRows.length > 0 ? (
                 <span className="text-xs text-slate-500">
                   上传勾选 {uploadScopeRows.length} 行（其中 {uploadScopeEligibleRows.length} 行可执行上传）
+                  {uploadScopeSizeSuffix}
                 </span>
               ) : null}
             </div>

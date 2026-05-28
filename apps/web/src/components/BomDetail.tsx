@@ -77,6 +77,8 @@ import {
   extractHttpUrlFromDownloadCell,
   extractExtSizeBytesFromRow,
   extractRemoteSizeBytesFromRow,
+  computeModuleAggregateStats,
+  sumRowsAggregateBytes,
   normalizeBomKeyForMatch,
   normalizeLocalRelativePath,
   headerMatchesAny,
@@ -88,6 +90,7 @@ import {
   deriveLocalExtStatusLabels,
   rowExtUiComplete,
 } from '../lib/bomRowFields';
+import { formatBytesMbGb } from '../lib/bytesFormat';
 import { BomRowByteSizeCell } from './HumanByteSize';
 import { BomDataTableCell, headerIsDownloadColumn, headerIsMd5Column } from '../lib/bomTableCell';
 import { formatBomRowStatusTooltip } from '../lib/bomRowStatus';
@@ -657,6 +660,24 @@ export const BomDetail: React.FC = () => {
       return true;
     });
   }, [loadedBomRows, filterStoredLocalNotVerifiedOk, filterStoredExtNotComplete, tableKeyMap]);
+
+  const moduleAggregateStats = useMemo(
+    () => computeModuleAggregateStats(filteredStoredBomRows, tableKeyMap, localInfoByMd5),
+    [filteredStoredBomRows, tableKeyMap, localInfoByMd5],
+  );
+
+  const selectedProductName = useMemo(
+    () => products.find((p) => p.id === selectedProductId)?.name?.trim() || '—',
+    [products, selectedProductId],
+  );
+
+  const filteredListAggregate = useMemo(
+    () => ({
+      fileCount: filteredStoredBomRows.length,
+      totalBytes: sumRowsAggregateBytes(filteredStoredBomRows, tableKeyMap, localInfoByMd5),
+    }),
+    [filteredStoredBomRows, tableKeyMap, localInfoByMd5],
+  );
 
   const hasActiveDownloadJob = useMemo(
     () => downloadJobs.some((j) => j.status === 'queued' || j.status === 'running'),
@@ -2073,6 +2094,29 @@ export const BomDetail: React.FC = () => {
                       只看 {LABEL_EXTERNAL_ARTI} 未完成
                     </span>
                   </label>
+                  {loadedBomRows.length > 0 ? (
+                    <>
+                      <span className="hidden sm:inline w-px h-5 bg-slate-200 self-center" aria-hidden />
+                      <span
+                        className="text-xs text-slate-500 leading-relaxed"
+                        title="按当前列表筛选结果统计；体积优先本地索引，其次 ext/远端 BOM 列"
+                      >
+                        产品版本：{selectedProductName} / {batchName.trim() || '—'}；总文件数：{filteredListAggregate.fileCount} 个；总大小：
+                        {formatBytesMbGb(filteredListAggregate.totalBytes)}
+                        {moduleAggregateStats.length > 0 ? (
+                          <>
+                            ；按模块：
+                            {moduleAggregateStats.map((s, idx) => (
+                              <span key={s.moduleLabel}>
+                                {idx > 0 ? '；' : ''}
+                                {s.moduleLabel} {s.fileCount} 个 · {formatBytesMbGb(s.totalBytes)}
+                              </span>
+                            ))}
+                          </>
+                        ) : null}
+                      </span>
+                    </>
+                  ) : null}
                 </div>
                 {(filterStoredLocalNotVerifiedOk || filterStoredExtNotComplete) ? (
                   <span className="text-xs text-slate-500">

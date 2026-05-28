@@ -1,3 +1,19 @@
+/** 汇总展示：≥1 GiB 用 GB，否则用 MB（1024 进制） */
+export function formatBytesMbGb(n: number): string {
+  if (!Number.isFinite(n) || n < 0) return '—';
+  const MB = 1024 * 1024;
+  const GB = 1024 * MB;
+  if (n === 0) return '0 MB';
+  if (n >= GB) {
+    const v = n / GB;
+    const digits = v >= 100 ? 0 : v >= 10 ? 1 : 2;
+    return `${v.toFixed(digits)} GB`;
+  }
+  const v = n / MB;
+  const digits = v >= 100 ? 0 : v >= 10 ? 1 : 2;
+  return `${v.toFixed(digits)} MB`;
+}
+
 /** 人类可读二进制单位（1024） */
 export function formatBytesHuman(n: number): string {
   if (!Number.isFinite(n) || n < 0) return '—';

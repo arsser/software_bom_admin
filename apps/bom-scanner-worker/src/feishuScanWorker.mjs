@@ -5,6 +5,11 @@ import {
   safePathSegment,
 } from './extArtifactorySync.mjs';
 import { feishuApiFailDetail } from './feishuUpload.mjs';
+import {
+  buildFeishuPackageRelPath,
+  findPackageManifestHit,
+  loadFeishuPackageManifest,
+} from './feishuPackageManifest.mjs';
 
 function log(...args) {
   console.log(new Date().toISOString(), ...args);
@@ -482,6 +487,16 @@ export async function executeFeishuScanJob(supabase, job) {
     }
 
     const accessToken = await feishuTenantToken(appId, appSecret);
+
+    /** @type {Awaited<ReturnType<typeof loadFeishuPackageManifest>> | null} */
+    let packageManifest = null;
+    try {
+      packageManifest = await loadFeishuPackageManifest(accessToken, rootFolder);
+    } catch (e) {
+      log('[feishu-scan-worker] job', jobId, 'manifest load failed (continue):', e instanceof Error ? e.message : e);
+      packageManifest = null;
+    }
+
     const rootItems = await listAllInFolder(accessToken, rootFolder);
     let batchFolderToken = findChildFolderToken(rootItems, batchDir);
     if (batchFolderToken) {
@@ -508,19 +523,82 @@ export async function executeFeishuScanJob(supabase, job) {
 
     if (!batchFolderToken) {
       lastMessage = `飞书根目录下未找到版本文件夹「${batchDir}」`;
+      const md5Needed = new Set();
+      for (const r of rows) {
+        const bomRow = r.bom_row && typeof r.bom_row === 'object' ? r.bom_row : {};
+        const m = extractExpectedMd5Lower(bomRow, keyMap);
+        if (m) md5Needed.add(m);
+      }
+      /** @type {Map<string, { path: string, sizeBytes: number }>} */
+      const localByMd5 = new Map();
+      if (md5Needed.size > 0) {
+        const { data: lfRows } = await supabase
+          .from('local_file')
+          .select('md5,path,size_bytes')
+          .in('md5', [...md5Needed]);
+        for (const row of lfRows ?? []) {
+          const m = String(row.md5 ?? '').trim().toLowerCase();
+          const p = String(row.path ?? '').trim();
+          const szRaw = row.size_bytes;
+          const sz = typeof szRaw === 'string' ? Number(szRaw) : Number(szRaw);
+          if (/^[a-f0-9]{32}$/.test(m) && p && Number.isFinite(sz) && sz >= 0 && !localByMd5.has(m)) {
+            localByMd5.set(m, { path: p, sizeBytes: Math.trunc(sz) });
+          }
+        }
+      }
       for (const r of rows) {
         const prev = r.status && typeof r.status === 'object' ? r.status : {};
+        const bomRow = r.bom_row && typeof r.bom_row === 'object' ? r.bom_row : {};
+        const md5Lower = extractExpectedMd5Lower(bomRow, keyMap);
+        const localHit = md5Lower ? localByMd5.get(md5Lower) : null;
+        if (packageManifest && md5Lower && localHit) {
+          const localBaseName = safeFlatFilename(basenameFromStoragePath(localHit.path));
+          const middleDir = resolveMiddleDirFromRow(bomRow, keyMap);
+          const pathSegments = middleDir ? [batchDir, middleDir] : [batchDir];
+          const packageRelPath = buildFeishuPackageRelPath(pathSegments, localBaseName);
+          const manifestHit = findPackageManifestHit(packageManifest, {
+            fileName: localBaseName,
+            md5: md5Lower,
+            sizeBytes: localHit.sizeBytes,
+            relPath: packageRelPath,
+          });
+          if (manifestHit) {
+            rowsPresent += 1;
+            const next = {
+              ...prev,
+              feishu: 'present',
+              feishu_file_token: manifestHit.file_token,
+              feishu_file_name: manifestHit.file_name,
+              feishu_size_bytes: manifestHit.size_bytes,
+              feishu_scanned_at: new Date().toISOString(),
+            };
+            delete next.feishu_scan_error;
+            const { error: uerr } = await supabase.from('bom_rows').update({ status: next }).eq('id', r.id);
+            if (uerr) {
+              rowsPresent -= 1;
+              rowsError += 1;
+              errDbOnAbsent += 1;
+            }
+            continue;
+          }
+        }
         const next = {
           ...prev,
           feishu: 'absent',
           feishu_scanned_at: new Date().toISOString(),
           feishu_scan_error: lastMessage,
         };
+        delete next.feishu_file_token;
+        delete next.feishu_file_name;
+        delete next.feishu_size_bytes;
         const { error: uerr } = await supabase.from('bom_rows').update({ status: next }).eq('id', r.id);
         if (uerr) {
           rowsError += 1;
           errDbOnAbsent += 1;
         } else rowsAbsent += 1;
+      }
+      if (rowsPresent > 0) {
+        lastMessage = `版本文件夹「${batchDir}」不存在；清单去重命中 ${rowsPresent}，其余标为 absent`;
       }
     } else {
       await patchScanJob(supabase, jobId, { message: '扫描中：正在列举飞书版本目录下的文件…' });
@@ -625,6 +703,37 @@ export async function executeFeishuScanJob(supabase, job) {
             const hit = index.get(relKey);
 
             if (!hit) {
+              const middleDir = resolveMiddleDirFromRow(bomRow, keyMap);
+              const pathSegments = middleDir ? [batchDir, middleDir] : [batchDir];
+              const packageRelPath = buildFeishuPackageRelPath(pathSegments, localBaseName);
+              const manifestHit = packageManifest
+                ? findPackageManifestHit(packageManifest, {
+                    fileName: localBaseName,
+                    md5: md5Lower,
+                    sizeBytes: localHit.sizeBytes,
+                    relPath: packageRelPath,
+                  })
+                : null;
+              if (manifestHit) {
+                rowsPresent += 1;
+                const next = {
+                  ...prev,
+                  feishu: 'present',
+                  feishu_file_token: manifestHit.file_token,
+                  feishu_file_name: manifestHit.file_name,
+                  feishu_size_bytes: manifestHit.size_bytes,
+                  feishu_scanned_at: iso,
+                };
+                delete next.feishu_scan_error;
+                log('[feishu-scan-worker] manifest hit', {
+                  rowId: r.id,
+                  expected: relKey,
+                  actual: manifestHit.rel_path,
+                });
+                await supabase.from('bom_rows').update({ status: next }).eq('id', r.id);
+                continue;
+              }
+
               rowsAbsent += 1;
               const next = {
                 ...prev,

@@ -1,15 +1,6 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import {
-  ArrowLeft,
-  Download,
-  FolderSearch,
-  Hourglass,
-  Loader2,
-  Package,
-  RefreshCcw,
-  UploadCloud,
-} from 'lucide-react';
+import { ArrowLeft, Download, FileSpreadsheet, FolderSearch, Hourglass, Loader2, Package, RefreshCcw, UploadCloud } from 'lucide-react';
 import {
   defaultBomScannerConfig,
   fetchBomScannerSettings,
@@ -50,6 +41,13 @@ import { requestBomDistributeExtPull } from '../lib/bomDownloadJobs';
 import { requestBomFeishuScan } from '../lib/bomFeishuScan';
 import { fetchBomFeishuScanJobsForBatch, type BomFeishuScanJob } from '../lib/bomFeishuScanJobs';
 import { requestBomFeishuUpload, fetchBomFeishuUploadJobsForBatch, type BomFeishuUploadJob } from '../lib/bomFeishuUploadJobs';
+import {
+  requestBomFeishuVersionSheet,
+  fetchBomFeishuVersionSheetJobsForBatch,
+  feishuVersionSheetJobIsActive,
+  BOM_FEISHU_VERSION_SHEET_JOB_STATUS_LABEL,
+  type BomFeishuVersionSheetJob,
+} from '../lib/bomFeishuVersionSheet';
 import { BomDataTableCell, headerIsDownloadColumn, headerIsMd5Column } from '../lib/bomTableCell';
 import { fetchProductDistributionSettings } from '../lib/products';
 import { LABEL_EXTERNAL_ARTI } from '../lib/bomUiLabels';
@@ -141,6 +139,17 @@ export const BomDistributePage: React.FC = () => {
   const [feishuScanJobFailedBanner, setFeishuScanJobFailedBanner] = useState<string | null>(null);
   /** 扫描时若飞书根下无版本名文件夹，是否自动 create_folder（与 Edge batchDir 规则一致） */
   const [feishuAutoCreateVersionFolder, setFeishuAutoCreateVersionFolder] = useState(false);
+  const [versionSheetBusy, setVersionSheetBusy] = useState(false);
+  const [versionSheetJobs, setVersionSheetJobs] = useState<BomFeishuVersionSheetJob[]>([]);
+  const hasActiveVersionSheetJob = useMemo(
+    () => versionSheetJobs.some((j) => feishuVersionSheetJobIsActive(j.status)),
+    [versionSheetJobs],
+  );
+  const latestVersionSheetJob = versionSheetJobs[0] ?? null;
+  const feishuPresentCount = useMemo(
+    () => loadedBomRows.filter((lr) => lr.status.feishu === 'present').length,
+    [loadedBomRows],
+  );
   const uploadSelectAllHeaderRef = useRef<HTMLInputElement>(null);
 
   const tableKeyMap = useMemo(() => (config ?? defaultBomScannerConfig).jsonKeyMap, [config]);
@@ -324,14 +333,16 @@ export const BomDistributePage: React.FC = () => {
         console.warn('WARN refreshBomRowStatusesForBatch', e instanceof Error ? e.message : String(e));
       }
 
-      const [rows, fJobs, fScanJobs] = await Promise.all([
+      const [rows, fJobs, fScanJobs, vSheetJobs] = await Promise.all([
         fetchBomRows(batchId),
         fetchBomFeishuUploadJobsForBatch(batchId, 20),
         fetchBomFeishuScanJobsForBatch(batchId, 20),
+        fetchBomFeishuVersionSheetJobsForBatch(batchId, 8),
       ]);
       setLoadedBomRows(rows);
       setActiveFeishuJobs(fJobs);
       setActiveFeishuScanJobs(fScanJobs);
+      setVersionSheetJobs(vSheetJobs);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -389,6 +400,14 @@ export const BomDistributePage: React.FC = () => {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [hasActiveFeishuScanJob, batchId]);
+
+  useEffect(() => {
+    if (!hasActiveVersionSheetJob || !batchId) return;
+    const id = window.setInterval(() => {
+      void fetchBomFeishuVersionSheetJobsForBatch(batchId, 8).then(setVersionSheetJobs);
+    }, 2000);
+    return () => window.clearInterval(id);
+  }, [hasActiveVersionSheetJob, batchId]);
 
   useEffect(() => {
     const byId = new Map(loadedBomRows.map((lr) => [lr.id, lr] as const));
@@ -621,13 +640,40 @@ export const BomDistributePage: React.FC = () => {
         unlocked.map((r) => r.id),
       );
       alert(
-        `已创建飞书上传任务（排队由 bom-scanner-worker 执行）。任务 ID：${jobId}\n将自动创建版本目录/模块或组件子目录（与扫描规则一致）；≤5MB 整文件上传，>5MB 自动分片上传（支持断点续传）。`,
+        `已创建飞书上传任务（排队由 bom-scanner-worker 执行）。任务 ID：${jobId}\n将自动创建版本目录/模块或组件子目录（与扫描规则一致）；≤5MB 整文件上传，>5MB 自动分片上传（支持断点续传）。\n上传结束后将自动在版本目录生成「软件包清单」飞书表格。`,
       );
       await load();
     } catch (e) {
       alert(e instanceof Error ? e.message : String(e));
     } finally {
       setFeishuUploadBusy(false);
+    }
+  };
+
+  const handleGenerateVersionSheet = async () => {
+    if (!batchId) return;
+    if (feishuPresentCount === 0) {
+      alert('当前版本没有飞书状态为「已对齐」的行，请先完成上传或扫描后再生成清单表。');
+      return;
+    }
+    if (hasActiveVersionSheetJob) {
+      alert('已有生成任务进行中，请稍候。');
+      return;
+    }
+    setVersionSheetBusy(true);
+    try {
+      const r = await requestBomFeishuVersionSheet(batchId);
+      if (!r.ok) {
+        alert(r.error);
+        return;
+      }
+      alert(r.message ?? '已排队生成版本目录「软件包清单」电子表格');
+      const jobs = await fetchBomFeishuVersionSheetJobsForBatch(batchId, 8);
+      setVersionSheetJobs(jobs);
+    } catch (e) {
+      alert(e instanceof Error ? e.message : String(e));
+    } finally {
+      setVersionSheetBusy(false);
     }
   };
 
@@ -748,7 +794,7 @@ export const BomDistributePage: React.FC = () => {
             扫描：在飞书根目录下按版本名文件夹 +（模块优先、否则组件）+ 本地文件名 查找文件，读取飞书字节数，与{' '}
             <code className="bg-violet-100/80 px-1 rounded text-[10px]">local_file</code> 索引比对文件名与大小；入队后由
             bom-scanner-worker 执行（不用 BOM 行内 MD5 参与飞书路径计算，但需 MD5 对账本地索引）。上传：入队后由 worker 使用
-            upload_all（≤5MB）写入飞书，并自动创建版本/模块或组件目录。
+            upload_all（≤5MB）写入飞书，并自动创建版本/模块或组件目录。上传成功后会在版本目录生成「软件包清单」飞书表格（含去重复用文件的下载链接）。
           </p>
           <div className="flex flex-wrap items-center gap-2 gap-x-3">
             <button
@@ -812,7 +858,49 @@ export const BomDistributePage: React.FC = () => {
               )}
               上传选中到飞书（可执行 {uploadScopeEligibleUnlockedRows.length} / 已选 {uploadScopeRows.length}）
             </button>
+            <button
+              type="button"
+              disabled={
+                versionSheetBusy ||
+                hasActiveVersionSheetJob ||
+                !productFeishuRootFolderToken.trim() ||
+                feishuPresentCount === 0
+              }
+              title={
+                feishuPresentCount === 0
+                  ? '需至少有一行飞书状态为「已对齐」'
+                  : '按当前版本已对齐行，覆盖生成版本目录下「软件包清单」飞书电子表格'
+              }
+              onClick={() => void handleGenerateVersionSheet()}
+              className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg border border-violet-300 bg-white text-violet-950 text-sm font-medium hover:bg-violet-100 disabled:opacity-50"
+            >
+              {versionSheetBusy || hasActiveVersionSheetJob ? (
+                <Loader2 size={16} className="animate-spin" />
+              ) : (
+                <FileSpreadsheet size={16} />
+              )}
+              生成版本清单表
+            </button>
           </div>
+          {latestVersionSheetJob ? (
+            <p className="text-[11px] text-violet-900/85">
+              最近清单表任务：{BOM_FEISHU_VERSION_SHEET_JOB_STATUS_LABEL[latestVersionSheetJob.status]}
+              {latestVersionSheetJob.message ? ` · ${latestVersionSheetJob.message}` : ''}
+              {latestVersionSheetJob.sheetUrl ? (
+                <>
+                  {' · '}
+                  <a
+                    href={latestVersionSheetJob.sheetUrl}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="underline text-violet-800 hover:text-violet-600"
+                  >
+                    打开表格
+                  </a>
+                </>
+              ) : null}
+            </p>
+          ) : null}
           {loadedBomRows.length > 0 ? (
             <p className="text-[11px] text-violet-900/85">
               全表可上传约 {feishuUploadStubCount} 行；当前筛选下列表内可上传约 {feishuUploadStubCountFiltered} 行（与是否勾选无关）。

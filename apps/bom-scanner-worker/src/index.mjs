@@ -8,6 +8,8 @@ import { createClient } from '@supabase/supabase-js';
 import { drainExtSyncJobs, failStaleExtSyncJobs } from './extArtifactorySync.mjs';
 import { drainFeishuUploadJobs, failStaleFeishuUploadJobs } from './feishuUpload.mjs';
 import { drainFeishuScanJobs, failStaleFeishuScanJobs } from './feishuScanWorker.mjs';
+import { drainFeishuManifestJobs, failStaleFeishuManifestJobs } from './feishuManifestWorker.mjs';
+import { drainFeishuVersionSheetJobs, failStaleFeishuVersionSheetJobs } from './feishuVersionSheetWorker.mjs';
 import {
   fetchBomScannerWorkerConfig,
   isRetriableSettingsFetchError,
@@ -1079,12 +1081,16 @@ async function sleepWithDownloadPoll(supabase, rootAbs, intervalMs, tuning) {
       await failStaleExtSyncJobs(supabase, JOB_STALE_SECONDS);
       await failStaleFeishuUploadJobs(supabase, JOB_STALE_SECONDS);
       await failStaleFeishuScanJobs(supabase, SCAN_STALE_SECONDS);
+      await failStaleFeishuManifestJobs(supabase, SCAN_STALE_SECONDS);
+      await failStaleFeishuVersionSheetJobs(supabase, SCAN_STALE_SECONDS);
       await failStaleDownloadJobs(supabase, JOB_STALE_SECONDS);
       await failStaleScanJobs(supabase, SCAN_STALE_SECONDS);
       await drainWebDownloadJobs(supabase, rootAbs, tuning);
       await drainExtSyncJobs(supabase, rootAbs, tuning);
       await drainFeishuUploadJobs(supabase, rootAbs, tuning);
       await drainFeishuScanJobs(supabase);
+      await drainFeishuManifestJobs(supabase, rootAbs);
+      await drainFeishuVersionSheetJobs(supabase, rootAbs);
       try {
         await pruneLocalIndexEntriesMissingOnDisk(supabase, rootAbs, 300);
       } catch (e) {
@@ -1120,7 +1126,7 @@ async function main() {
     root: rootAbs,
     cwd: process.cwd(),
     note:
-      'scan interval + workerTuning from system_settings.bom_scanner; downloads bom_download_jobs; ext bom_ext_sync_jobs; feishu upload bom_feishu_upload_jobs; feishu scan bom_feishu_scan_jobs',
+      'scan interval + workerTuning from system_settings.bom_scanner; downloads bom_download_jobs; ext bom_ext_sync_jobs; feishu upload bom_feishu_upload_jobs; feishu scan bom_feishu_scan_jobs; feishu manifest bom_feishu_manifest_jobs; feishu version sheet bom_feishu_version_sheet_jobs',
   });
 
   await logItArtifactoryDbAtStartup(supabase);
@@ -1147,12 +1153,16 @@ async function main() {
       await failStaleExtSyncJobs(supabase, JOB_STALE_SECONDS);
       await failStaleFeishuUploadJobs(supabase, JOB_STALE_SECONDS);
       await failStaleFeishuScanJobs(supabase, SCAN_STALE_SECONDS);
+      await failStaleFeishuManifestJobs(supabase, SCAN_STALE_SECONDS);
+      await failStaleFeishuVersionSheetJobs(supabase, SCAN_STALE_SECONDS);
       await failStaleDownloadJobs(supabase, JOB_STALE_SECONDS);
       await failStaleScanJobs(supabase, SCAN_STALE_SECONDS);
       await drainWebDownloadJobs(supabase, rootAbs, tuning);
       await drainExtSyncJobs(supabase, rootAbs, tuning);
       await drainFeishuUploadJobs(supabase, rootAbs, tuning);
       await drainFeishuScanJobs(supabase);
+      await drainFeishuManifestJobs(supabase, rootAbs);
+      await drainFeishuVersionSheetJobs(supabase, rootAbs);
 
       try {
         await pruneLocalIndexEntriesMissingOnDisk(supabase, rootAbs);

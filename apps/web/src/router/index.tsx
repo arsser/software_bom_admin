@@ -8,6 +8,8 @@ import { BomMaster } from '../components/BomMaster';
 import { BomDetail } from '../components/BomDetail';
 import { BomDistributePage } from '../components/BomDistributePage';
 import { BomDownloadJobsPage } from '../components/BomDownloadJobsPage';
+import { BomComparePage } from '../components/BomComparePage';
+import { FeishuPackageManifestPage } from '../components/FeishuPackageManifestPage';
 import { LoginPage } from '../pages/LoginPage';
 
 export const router = createBrowserRouter([
@@ -29,8 +31,10 @@ export const router = createBrowserRouter([
       { path: 'bom', element: <BomMaster /> },
       { path: 'bom/new', element: <BomDetail /> },
       { path: 'bom/jobs', element: <BomDownloadJobsPage /> },
+      { path: 'bom/compare', element: <BomComparePage /> },
       { path: 'bom/:batchId/distribute', element: <BomDistributePage /> },
       { path: 'bom/:batchId', element: <BomDetail /> },
+      { path: 'feishu-manifest', element: <FeishuPackageManifestPage /> },
       { path: 'settings', element: <Settings /> }
     ]
   },

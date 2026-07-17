@@ -46,10 +46,18 @@ import {
   type BomJobDetailKind,
   type BomJobRowDetailLine,
 } from '../lib/bomJobRowSnapshots';
+import {
+  computeJobTransferLiveStats,
+  formatSpeedLabel,
+  type BomJobByteProgress,
+  type JobTransferLiveStats,
+} from '../lib/bomJobTransferStats';
 
 const PAGE_STEP = 20;
 
 type StatusFilter = 'all' | BomDownloadJobStatus | BomExtSyncJobStatus | BomFeishuUploadJobStatus;
+
+type SpeedSample = { t: number; bytes: number; speedBps: number | null };
 
 function formatElapsedLabel(seconds: number): string {
   const s = Math.max(0, Math.floor(seconds));
@@ -67,6 +75,41 @@ function parseMsOrNull(iso: string | null | undefined): number | null {
   return Number.isFinite(n) ? n : null;
 }
 
+function renderJobTimeCell(opts: {
+  createdAt: string;
+  startedAt: string | null;
+  finishedAt: string | null;
+  status: string;
+  elapsedSec: number | null;
+  live: JobTransferLiveStats | undefined;
+}) {
+  const { createdAt, startedAt, finishedAt, status, elapsedSec, live } = opts;
+  const showTransfer = status === 'running';
+  return (
+    <td className="px-3 py-2 text-xs text-slate-500 whitespace-nowrap">
+      <div>创建 {new Date(createdAt).toLocaleString()}</div>
+      {startedAt ? <div>开始 {new Date(startedAt).toLocaleString()}</div> : null}
+      {finishedAt ? <div>结束 {new Date(finishedAt).toLocaleString()}</div> : null}
+      <div>
+        已用时{' '}
+        {elapsedSec != null ? formatElapsedLabel(elapsedSec) : status === 'queued' ? '排队中' : '—'}
+      </div>
+      {showTransfer ? (
+        <>
+          <div>
+            速度{' '}
+            {live?.speedBps != null && live.speedBps > 0 ? formatSpeedLabel(live.speedBps) : '—'}
+          </div>
+          <div>
+            ETA{' '}
+            {live?.etaSec != null ? formatElapsedLabel(live.etaSec) : '—'}
+          </div>
+        </>
+      ) : null}
+    </td>
+  );
+}
+
 export const BomDownloadJobsPage: React.FC = () => {
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
@@ -82,6 +125,8 @@ export const BomDownloadJobsPage: React.FC = () => {
   const [nowMs, setNowMs] = useState(() => Date.now());
   const [expandedMessageKeys, setExpandedMessageKeys] = useState<Record<string, boolean>>({});
   const [copiedMessageKey, setCopiedMessageKey] = useState<string | null>(null);
+  const speedSamplesRef = useRef<Record<string, SpeedSample>>({});
+  const [liveStatsById, setLiveStatsById] = useState<Record<string, JobTransferLiveStats>>({});
 
   const [sectionItOpen, setSectionItOpen] = useState(true);
   const [sectionExtOpen, setSectionExtOpen] = useState(false);
@@ -209,6 +254,30 @@ export const BomDownloadJobsPage: React.FC = () => {
     const id = window.setInterval(() => setNowMs(Date.now()), 1000);
     return () => window.clearInterval(id);
   }, [hasRunningJob]);
+
+  useEffect(() => {
+    const now = Date.now();
+    const next: Record<string, JobTransferLiveStats> = {};
+    const touch = (job: BomJobByteProgress & { id: string }, runningAlreadyInTotal: boolean) => {
+      const prev = speedSamplesRef.current[job.id];
+      const { stats, nextSample } = computeJobTransferLiveStats(
+        job,
+        runningAlreadyInTotal,
+        prev,
+        now,
+      );
+      if (job.status === 'running') {
+        speedSamplesRef.current[job.id] = nextSample;
+        next[job.id] = stats;
+      } else {
+        delete speedSamplesRef.current[job.id];
+      }
+    };
+    for (const j of jobs) touch(j, false);
+    for (const j of extJobs) touch(j, false);
+    for (const j of feishuJobs) touch(j, true);
+    setLiveStatsById(next);
+  }, [jobs, extJobs, feishuJobs]);
 
   const handleCancel = async (jobId: string) => {
     setCancelBusy(jobId);
@@ -537,19 +606,14 @@ export const BomDownloadJobsPage: React.FC = () => {
                     <td className="px-3 py-2 text-xs text-slate-600 max-w-[20rem]">
                       {renderMessageCell(`it-${j.id}`, j.lastMessage)}
                     </td>
-                    <td className="px-3 py-2 text-xs text-slate-500 whitespace-nowrap">
-                      <div>创建 {new Date(j.createdAt).toLocaleString()}</div>
-                      {j.startedAt ? <div>开始 {new Date(j.startedAt).toLocaleString()}</div> : null}
-                      {j.finishedAt ? <div>结束 {new Date(j.finishedAt).toLocaleString()}</div> : null}
-                      <div>
-                        已用时{' '}
-                        {elapsedSec != null
-                          ? formatElapsedLabel(elapsedSec)
-                          : j.status === 'queued'
-                            ? '排队中'
-                            : '—'}
-                      </div>
-                    </td>
+                    {renderJobTimeCell({
+                      createdAt: j.createdAt,
+                      startedAt: j.startedAt,
+                      finishedAt: j.finishedAt,
+                      status: j.status,
+                      elapsedSec,
+                      live: liveStatsById[j.id],
+                    })}
                     <td className="px-3 py-2 text-right whitespace-nowrap">
                       {j.rowIds.length > 0 ? (
                         <button
@@ -695,19 +759,14 @@ export const BomDownloadJobsPage: React.FC = () => {
                     <td className="px-3 py-2 text-xs text-slate-600 max-w-[20rem]">
                       {renderMessageCell(`ext-${j.id}`, j.lastMessage)}
                     </td>
-                    <td className="px-3 py-2 text-xs text-slate-500 whitespace-nowrap">
-                      <div>创建 {new Date(j.createdAt).toLocaleString()}</div>
-                      {j.startedAt ? <div>开始 {new Date(j.startedAt).toLocaleString()}</div> : null}
-                      {j.finishedAt ? <div>结束 {new Date(j.finishedAt).toLocaleString()}</div> : null}
-                      <div>
-                        已用时{' '}
-                        {elapsedSec != null
-                          ? formatElapsedLabel(elapsedSec)
-                          : j.status === 'queued'
-                            ? '排队中'
-                            : '—'}
-                      </div>
-                    </td>
+                    {renderJobTimeCell({
+                      createdAt: j.createdAt,
+                      startedAt: j.startedAt,
+                      finishedAt: j.finishedAt,
+                      status: j.status,
+                      elapsedSec,
+                      live: liveStatsById[j.id],
+                    })}
                     <td className="px-3 py-2 text-right whitespace-nowrap">
                       {j.rowIds.length > 0 ? (
                         <button
@@ -853,19 +912,14 @@ export const BomDownloadJobsPage: React.FC = () => {
                     <td className="px-3 py-2 text-xs text-slate-600 max-w-[20rem]">
                       {renderMessageCell(`feishu-${j.id}`, j.lastMessage)}
                     </td>
-                    <td className="px-3 py-2 text-xs text-slate-500 whitespace-nowrap">
-                      <div>创建 {new Date(j.createdAt).toLocaleString()}</div>
-                      {j.startedAt ? <div>开始 {new Date(j.startedAt).toLocaleString()}</div> : null}
-                      {j.finishedAt ? <div>结束 {new Date(j.finishedAt).toLocaleString()}</div> : null}
-                      <div>
-                        已用时{' '}
-                        {elapsedSec != null
-                          ? formatElapsedLabel(elapsedSec)
-                          : j.status === 'queued'
-                            ? '排队中'
-                            : '—'}
-                      </div>
-                    </td>
+                    {renderJobTimeCell({
+                      createdAt: j.createdAt,
+                      startedAt: j.startedAt,
+                      finishedAt: j.finishedAt,
+                      status: j.status,
+                      elapsedSec,
+                      live: liveStatsById[j.id],
+                    })}
                     <td className="px-3 py-2 text-right whitespace-nowrap">
                       {j.rowIds.length > 0 ? (
                         <button

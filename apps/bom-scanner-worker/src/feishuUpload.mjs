@@ -17,6 +17,14 @@ import {
   clearBomRowFeishuMultipartState,
 } from './bomRowStatusJson.mjs';
 import { reportBomLocalRootRuntime } from './workerRuntimeReport.mjs';
+import {
+  buildFeishuPackageRelPath,
+  findPackageManifestHit,
+  loadFeishuPackageManifest,
+  saveFeishuPackageManifestIfDirty,
+  upsertPackageManifestEntry,
+} from './feishuPackageManifest.mjs';
+import { generateVersionPackageSheetForBatch } from './feishuVersionSheet.mjs';
 
 function log(...args) {
   console.log(new Date().toISOString(), ...args);
@@ -875,10 +883,21 @@ export async function executeFeishuUploadJob(supabase, rootAbs, job, tuning) {
     const feishuToken = createFeishuTokenManager(appId, appSecret);
     const getToken = () => feishuToken.getAccessToken();
 
+    /** @type {Awaited<ReturnType<typeof loadFeishuPackageManifest>> | null} */
+    let packageManifest = null;
+    try {
+      const tokenForManifest = await getToken();
+      packageManifest = await loadFeishuPackageManifest(tokenForManifest, rootFolder);
+    } catch (e) {
+      log('WARN feishu-manifest load failed, continue without dedup', e instanceof Error ? e.message : e);
+      packageManifest = null;
+    }
+
     let completed = 0;
     let nOk = 0;
     let nFail = 0;
     let nSkip = 0;
+    let nDedup = 0;
     let bytesDoneTotal = 0;
     /** @type {string[]} */
     const failSamples = [];
@@ -1026,6 +1045,47 @@ export async function executeFeishuUploadJob(supabase, rootAbs, job, tuning) {
       const fileName = safeFlatFilename(path.basename(diskAbs));
       const middleDir = resolveMiddleDirFromRow(bomRow, keyMap);
       const pathSegments = middleDir ? [batchDir, middleDir] : [batchDir];
+      const packageRelPath = buildFeishuPackageRelPath(pathSegments, fileName);
+
+      // 清单去重：同文件名 + md5 + size 已存在则跳过实际上传
+      if (packageManifest) {
+        const hit = findPackageManifestHit(packageManifest, {
+          fileName,
+          md5: md5Lower,
+          sizeBytes: rowTotalBytes,
+          relPath: packageRelPath,
+        });
+        if (hit) {
+          await patchBomRowFeishuAfterUpload(supabase, rowId, {
+            fileToken: hit.file_token,
+            fileName: hit.file_name || fileName,
+            sizeBytes: hit.size_bytes,
+          });
+          nOk += 1;
+          nDedup += 1;
+          completed += 1;
+          bytesDoneTotal += hit.size_bytes;
+          lastJobMessage = `${completed}/${total} 跳过（清单已存在） 文件：${fileName}`;
+          log('feishu-upload dedup skip', {
+            jobId,
+            rowId,
+            fileName,
+            md5: md5Lower,
+            manifestRelPath: hit.rel_path,
+            expectedRelPath: packageRelPath,
+          });
+          await patchFeishuUploadJob(supabase, jobId, {
+            progress_current: completed,
+            bytes_downloaded_total: bytesDoneTotal,
+            running_row_id: null,
+            running_bytes_downloaded: 0,
+            running_bytes_total: null,
+            heartbeat_at: new Date().toISOString(),
+            last_message: lastJobMessage,
+          });
+          continue;
+        }
+      }
 
       log('feishu-upload row start', {
         jobId,
@@ -1109,6 +1169,16 @@ export async function executeFeishuUploadJob(supabase, rootAbs, job, tuning) {
             sizeBytes,
           });
 
+          if (packageManifest) {
+            upsertPackageManifestEntry(packageManifest, {
+              relPath: packageRelPath,
+              fileName,
+              md5: md5Lower,
+              sizeBytes,
+              fileToken,
+            });
+          }
+
           nOk += 1;
           completed += 1;
           bytesDoneTotal += sizeBytes;
@@ -1171,11 +1241,20 @@ export async function executeFeishuUploadJob(supabase, rootAbs, job, tuning) {
       if (userCancelled) break;
     }
 
+    if (packageManifest?.dirty) {
+      try {
+        const token = await getToken();
+        await saveFeishuPackageManifestIfDirty(token, rootFolder, packageManifest);
+      } catch (e) {
+        log('WARN feishu-manifest save failed', e instanceof Error ? e.message : e);
+      }
+    }
+
     if (userCancelled) {
       await patchFeishuUploadJob(supabase, jobId, {
         status: 'cancelled',
         finished_at: new Date().toISOString(),
-        last_message: `用户取消（已完成 ${completed}/${total}）`.slice(0, 2000),
+        last_message: `用户取消（已完成 ${completed}/${total}，清单去重 ${nDedup}）`.slice(0, 2000),
         cancel_requested: false,
         running_row_id: null,
         running_bytes_downloaded: 0,
@@ -1188,15 +1267,36 @@ export async function executeFeishuUploadJob(supabase, rootAbs, job, tuning) {
     }
 
     let finalStatus = 'succeeded';
-    let summary = `完成：成功 ${nOk}，失败 ${nFail}，跳过 ${nSkip}`;
+    let summary = `完成：成功 ${nOk}，失败 ${nFail}，跳过 ${nSkip}，清单去重 ${nDedup}`;
     if (nOk === 0 && nFail > 0) {
       finalStatus = 'failed';
-      summary = `失败：成功 ${nOk}，失败 ${nFail}，跳过 ${nSkip}`;
+      summary = `失败：成功 ${nOk}，失败 ${nFail}，跳过 ${nSkip}，清单去重 ${nDedup}`;
     } else if (nOk > 0 && nFail > 0) {
-      summary = `部分失败：成功 ${nOk}，失败 ${nFail}，跳过 ${nSkip}`;
+      summary = `部分失败：成功 ${nOk}，失败 ${nFail}，跳过 ${nSkip}，清单去重 ${nDedup}`;
     }
     if (nFail > 0 && failSamples.length > 0) {
       summary = `${summary}；原因示例：${failSamples.join(' | ')}`.slice(0, 2000);
+    }
+
+    // 有成功行时，在版本目录生成/覆盖「软件包清单」电子表格
+    if (nOk > 0) {
+      try {
+        lastJobMessage = '正在生成版本目录软件包清单表格…';
+        await patchFeishuUploadJob(supabase, jobId, {
+          last_message: lastJobMessage,
+          heartbeat_at: new Date().toISOString(),
+        });
+        const token = await getToken();
+        const sheet = await generateVersionPackageSheetForBatch(supabase, token, job.batch_id, {
+          packageManifest,
+        });
+        summary = `${summary}；已生成版本清单表 ${sheet.rowCount} 行`.slice(0, 2000);
+        log('feishu-upload version sheet ok', jobId, { url: sheet.url, rows: sheet.rowCount });
+      } catch (e) {
+        const em = e instanceof Error ? e.message : String(e);
+        log('WARN feishu-upload version sheet failed', jobId, em);
+        summary = `${summary}；版本清单表生成失败：${em}`.slice(0, 2000);
+      }
     }
 
     await patchFeishuUploadJob(supabase, jobId, {

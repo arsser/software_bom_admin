@@ -56,7 +56,7 @@ pnpm exec supabase functions serve artifactory-api-info --no-verify-jwt
 本地也可一次拉起多个函数目录（按需增删名称）：
 
 ```bash
-pnpm exec supabase functions serve artifactory-api-info bom-feishu-scan feishu-auth-test --no-verify-jwt
+pnpm exec supabase functions serve artifactory-api-info bom-feishu-scan feishu-auth-test feishu-package-manifest bom-feishu-version-sheet --no-verify-jwt
 ```
 
 **把本仓库里的函数更新到已 link 的 Supabase 项目（云端 / 托管）**：在项目根或 `apps/supabase` 下执行（需已 `supabase login` 且对本仓库执行过 `supabase link`）：
@@ -66,13 +66,17 @@ cd apps/supabase
 # 单个函数
 pnpm exec supabase functions deploy feishu-auth-test
 pnpm exec supabase functions deploy bom-feishu-scan
+pnpm exec supabase functions deploy feishu-package-manifest
+pnpm exec supabase functions deploy bom-feishu-version-sheet
 # 或部署全部（以 CLI 实际支持为准，常见为不传名则部署 functions 下全部）
 pnpm exec supabase functions deploy
 ```
 
-部署后 Kong 才会路由到对应函数；未部署的函数名在网页里 `invoke` 会得到 **HTTP 404 Function not found**。
+部署后 Kong 才会路由到对应函数；未部署的函数名在网页里 `invoke` 会得到 **HTTP 404 Function not found**。若目录已同步但缺少 `index.ts`（空目录），可能返回 **HTTP 500 InvalidWorkerCreation / could not find an appropriate entrypoint**——需重新执行同步/部署并确认目标机存在 `volumes/functions/feishu-package-manifest/index.ts`。
 
 **自建 Docker Supabase**（与本仓库 `deploy/production/scripts/sync-edge-functions.sh` 一致）：将 `apps/supabase/functions/` 同步到宿主机 `SUPABASE_DIR/volumes/functions/` 后，在该目录执行 `docker compose up -d functions`（或脚本内已包含的重启步骤）。
+
+新增/修改过的函数（例如「飞书软件包清单」页依赖的 `feishu-package-manifest`）**必须同步并重启 functions**，否则页面 `invoke` 会 500。
 
 ### 1.5 在网页设置中配置 Artifactory
 

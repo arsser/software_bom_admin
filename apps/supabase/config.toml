@@ -351,6 +351,12 @@ verify_jwt = true
 [functions.feishu-auth-test]
 verify_jwt = true
 
+[functions.feishu-package-manifest]
+verify_jwt = true
+
+[functions.bom-feishu-version-sheet]
+verify_jwt = true
+
 [edge_runtime]
 enabled = true
 # Supported request policies: `oneshot`, `per_worker`.

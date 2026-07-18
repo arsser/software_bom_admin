@@ -185,14 +185,42 @@ async function listFolderPage(accessToken: string, folderToken: string, pageToke
 }
 
 async function listAllInFolder(accessToken: string, folderToken: string) {
-  const out: Array<{ name?: string; token?: string; type?: string }> = []
+  const out: Array<{
+    name?: string
+    token?: string
+    type?: string
+    created_time?: string
+    modified_time?: string
+  }> = []
   let pageToken: string | undefined
   do {
     const page = await listFolderPage(accessToken, folderToken, pageToken)
-    out.push(...(page.files as Array<{ name?: string; token?: string; type?: string }>))
+    out.push(
+      ...(page.files as Array<{
+        name?: string
+        token?: string
+        type?: string
+        created_time?: string
+        modified_time?: string
+      }>),
+    )
     pageToken = page.has_more && page.page_token ? page.page_token : undefined
   } while (pageToken)
   return out
+}
+
+/** 飞书秒级/毫秒时间戳 → ISO；无效则 null */
+function feishuUnixToIso(raw: unknown): string | null {
+  const s = safeTrim(raw)
+  if (!s) return null
+  const n = Number(s)
+  if (!Number.isFinite(n) || n <= 0) return null
+  const ms = n > 1e12 ? n : n * 1000
+  try {
+    return new Date(ms).toISOString()
+  } catch {
+    return null
+  }
 }
 
 function findChildFolderToken(
@@ -432,6 +460,7 @@ serve(async (req) => {
         name: string
         folderToken: string
         folderUrl: string | null
+        createdAt: string | null
         batchId: string | null
         batchName: string | null
         sheetToken: string | null
@@ -480,6 +509,7 @@ serve(async (req) => {
           name,
           folderToken,
           folderUrl: buildFeishuFolderWebUrl(folderToken, webBaseUrl),
+          createdAt: feishuUnixToIso(it.created_time),
           batchId: batch?.id ?? null,
           batchName: batch?.name ?? null,
           sheetToken,
@@ -490,7 +520,12 @@ serve(async (req) => {
         })
       }
 
-      dirs.sort((a, b) => a.name.localeCompare(b.name, 'zh'))
+      dirs.sort((a, b) => {
+        const ta = a.createdAt ? Date.parse(a.createdAt) : 0
+        const tb = b.createdAt ? Date.parse(b.createdAt) : 0
+        if (ta !== tb) return tb - ta
+        return a.name.localeCompare(b.name, 'zh')
+      })
       return jsonResponse({
         ok: true,
         productId,

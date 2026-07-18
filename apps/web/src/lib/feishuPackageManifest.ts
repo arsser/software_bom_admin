@@ -140,6 +140,8 @@ export type FeishuProductVersionDir = {
   name: string;
   folderToken: string;
   folderUrl: string | null;
+  /** 飞书目录创建时间（ISO），可能为空 */
+  createdAt: string | null;
   batchId: string | null;
   batchName: string | null;
   sheetToken: string | null;
@@ -200,10 +202,17 @@ export async function fetchFeishuProductVersionDirs(
         const sheetToken = x.sheetToken != null && String(x.sheetToken) ? String(x.sheetToken) : null;
         const existingSheetUrl = x.sheetUrl != null && String(x.sheetUrl) ? String(x.sheetUrl) : null;
         const existingFolderUrl = x.folderUrl != null && String(x.folderUrl) ? String(x.folderUrl) : null;
+        const createdAtRaw =
+          typeof x.createdAt === 'string'
+            ? x.createdAt
+            : typeof x.created_at === 'string'
+              ? x.created_at
+              : '';
         return {
           name: String(x.name ?? ''),
           folderToken,
           folderUrl: existingFolderUrl || (folderToken ? buildFeishuFolderWebUrl(folderToken, webBaseUrl) : null),
+          createdAt: createdAtRaw.trim() || null,
           batchId: x.batchId != null && String(x.batchId) ? String(x.batchId) : null,
           batchName: x.batchName != null && String(x.batchName) ? String(x.batchName) : null,
           sheetToken,

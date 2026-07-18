@@ -95,21 +95,23 @@ const META_PANEL_MIN_H = 200;
 const META_PANEL_MAX_H = 900;
 const META_PANEL_DEFAULT_H = 360;
 
-const DIR_COL_KEYS = ['name', 'batch', 'sheet', 'latest_job', 'actions'] as const;
+const DIR_COL_KEYS = ['name', 'created_at', 'batch', 'sheet', 'latest_job', 'actions'] as const;
 type DirColKey = (typeof DIR_COL_KEYS)[number];
 
 const DIR_COL_DEFAULT_WIDTHS: Record<DirColKey, number> = {
-  name: 160,
-  batch: 140,
+  name: 150,
+  created_at: 150,
+  batch: 130,
   sheet: 100,
-  latest_job: 220,
-  actions: 320,
+  latest_job: 200,
+  actions: 300,
 };
 
 const DIR_COL_MIN_WIDTH = 64;
 
 const DIR_COL_LABELS: Record<DirColKey, string> = {
   name: '一级目录',
+  created_at: '创建时间',
   batch: '关联批次',
   sheet: 'BOM 表',
   latest_job: '最近任务',
@@ -175,8 +177,8 @@ export const FeishuPackageManifestPage: React.FC = () => {
   const [dirColWidths, setDirColWidths] = useState<Record<DirColKey, number>>(() => ({
     ...DIR_COL_DEFAULT_WIDTHS,
   }));
-  const [dirSortKey, setDirSortKey] = useState<DirColKey | null>(null);
-  const [dirSortDir, setDirSortDir] = useState<TableSortDir>('asc');
+  const [dirSortKey, setDirSortKey] = useState<DirColKey | null>('created_at');
+  const [dirSortDir, setDirSortDir] = useState<TableSortDir>('desc');
   const [dirPanelHeight, setDirPanelHeight] = useState(DIR_PANEL_DEFAULT_H);
   const metaResizeRef = useRef<{
     key: MetaColKey;
@@ -653,6 +655,13 @@ export const FeishuPackageManifestPage: React.FC = () => {
           va = a.name;
           vb = b.name;
           break;
+        case 'created_at': {
+          const ta = a.createdAt ? Date.parse(a.createdAt) : NaN;
+          const tb = b.createdAt ? Date.parse(b.createdAt) : NaN;
+          va = Number.isFinite(ta) ? ta : -1;
+          vb = Number.isFinite(tb) ? tb : -1;
+          break;
+        }
         case 'batch':
           va = a.batchName || a.batchId || '';
           vb = b.batchName || b.batchId || '';
@@ -1045,14 +1054,14 @@ export const FeishuPackageManifestPage: React.FC = () => {
             <tbody>
               {loadingDirs ? (
                 <tr>
-                  <td colSpan={5} className="px-3 py-8 text-center text-slate-500">
+                  <td colSpan={6} className="px-3 py-8 text-center text-slate-500">
                     <Loader2 className="inline animate-spin mr-2" size={16} />
                     加载目录中…
                   </td>
                 </tr>
               ) : sortedDirs.length === 0 ? (
                 <tr>
-                  <td colSpan={5} className="px-3 py-8 text-center text-slate-400">
+                  <td colSpan={6} className="px-3 py-8 text-center text-slate-400">
                     {dirs.length === 0 ? '暂无一级子目录（或未配置飞书根目录）' : '无匹配筛选结果'}
                   </td>
                 </tr>
@@ -1067,6 +1076,9 @@ export const FeishuPackageManifestPage: React.FC = () => {
                     <tr key={d.folderToken || d.name} className="border-t border-gray-100 hover:bg-slate-50/80">
                       <td className="px-3 py-1.5 font-medium text-slate-800 truncate" title={d.name}>
                         {d.name}
+                      </td>
+                      <td className="px-3 py-1.5 text-slate-600 text-xs whitespace-nowrap truncate" title={d.createdAt || undefined}>
+                        {formatTime(d.createdAt)}
                       </td>
                       <td className="px-3 py-1.5 text-slate-600 text-xs truncate">
                         {d.batchId ? (

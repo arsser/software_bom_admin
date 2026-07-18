@@ -54,9 +54,16 @@ function buildFeishuFileWebUrl(fileToken: string, webBaseUrl: string): string {
 
 function buildFeishuSheetWebUrl(sheetToken: string, webBaseUrl: string): string {
   const tok = safeTrim(sheetToken)
-  const base = normalizeFeishuWebBaseUrl(webBaseUrl)
-  if (!tok || !base) return ''
+  if (!tok) return ''
+  const base = normalizeFeishuWebBaseUrl(webBaseUrl) || 'https://feishu.cn'
   return `${base}/sheets/${encodeURIComponent(tok)}`
+}
+
+function buildFeishuFolderWebUrl(folderToken: string, webBaseUrl: string): string {
+  const tok = safeTrim(folderToken)
+  if (!tok) return ''
+  const base = normalizeFeishuWebBaseUrl(webBaseUrl) || 'https://feishu.cn'
+  return `${base}/drive/folder/${encodeURIComponent(tok)}`
 }
 
 /** 与 worker safePathSegment 对齐，用于批次名 ↔ 一级目录名匹配 */
@@ -195,6 +202,25 @@ async function downloadFileText(accessToken: string, fileToken: string): Promise
   return await res.text()
 }
 
+async function deleteDriveNode(accessToken: string, fileToken: string, nodeType: string): Promise<void> {
+  const u = new URL(`https://open.feishu.cn/open-apis/drive/v1/files/${encodeURIComponent(fileToken)}`)
+  u.searchParams.set('type', nodeType)
+  const res = await fetch(u.toString(), {
+    method: 'DELETE',
+    headers: { Authorization: `Bearer ${accessToken}` },
+  })
+  const text = await res.text()
+  let body: { code?: number; msg?: string }
+  try {
+    body = JSON.parse(text)
+  } catch {
+    throw new Error(`删除节点响应非 JSON：${text.slice(0, 200)}`)
+  }
+  if (!res.ok || body.code !== 0) {
+    throw new Error(`删除飞书文件失败 HTTP ${res.status}：${body.msg || text.slice(0, 200)}`)
+  }
+}
+
 function normalizeManifestJson(
   rawText: string,
   webBaseUrl = '',
@@ -266,10 +292,19 @@ serve(async (req) => {
 
   let action = 'get'
   let productId = ''
+  let folderTokenReq = ''
+  let sheetTokenReq = ''
   try {
-    const body = (await req.json()) as { action?: string; productId?: string }
+    const body = (await req.json()) as {
+      action?: string
+      productId?: string
+      folderToken?: string
+      sheetToken?: string
+    }
     action = safeTrim(body.action || 'get').toLowerCase() || 'get'
     productId = safeTrim(body.productId)
+    folderTokenReq = safeTrim(body.folderToken)
+    sheetTokenReq = safeTrim(body.sheetToken)
     if (!productId) throw new Error('缺少 productId')
   } catch (e) {
     return jsonResponse({ ok: false, error: e instanceof Error ? e.message : '请求体无效' }, 400)
@@ -377,6 +412,7 @@ serve(async (req) => {
       const dirs: Array<{
         name: string
         folderToken: string
+        folderUrl: string | null
         batchId: string | null
         batchName: string | null
         sheetToken: string | null
@@ -406,6 +442,7 @@ serve(async (req) => {
         dirs.push({
           name,
           folderToken,
+          folderUrl: buildFeishuFolderWebUrl(folderToken, webBaseUrl),
           batchId: batch?.id ?? null,
           batchName: batch?.name ?? null,
           sheetToken,
@@ -431,8 +468,96 @@ serve(async (req) => {
     }
   }
 
+  if (action === 'delete_version_sheet') {
+    if (!folderTokenReq && !sheetTokenReq) {
+      return jsonResponse({ ok: false, error: '缺少 folderToken 或 sheetToken' }, 400)
+    }
+    try {
+      const accessToken = await feishuTenantToken(appId, appSecret)
+      const rootItems = await listAllInFolder(accessToken, rootFolder)
+      const wantSheet = VERSION_PACKAGE_SHEET_TITLE.normalize('NFKC')
+
+      let targetFolderToken = folderTokenReq
+      let dirName = ''
+      if (targetFolderToken) {
+        const folder = rootItems.find(
+          (it) =>
+            safeTrim(it.type) === 'folder' &&
+            safeTrim(it.token) === targetFolderToken &&
+            safeTrim(it.name).normalize('NFKC') !== META_DIR.normalize('NFKC'),
+        )
+        if (!folder) {
+          return jsonResponse({ ok: false, error: '目录不在当前产品飞书根下，或无权删除' }, 403)
+        }
+        dirName = safeTrim(folder.name)
+      } else {
+        // 仅传 sheetToken：在一级子目录中定位所属文件夹
+        for (const it of rootItems) {
+          if (safeTrim(it.type) !== 'folder') continue
+          const name = safeTrim(it.name).normalize('NFKC')
+          const ft = safeTrim(it.token)
+          if (!name || !ft || name === META_DIR.normalize('NFKC')) continue
+          const children = await listAllInFolder(accessToken, ft)
+          const hit = children.find((c) => safeTrim(c.token) === sheetTokenReq)
+          if (hit) {
+            targetFolderToken = ft
+            dirName = safeTrim(it.name)
+            break
+          }
+        }
+        if (!targetFolderToken) {
+          return jsonResponse({ ok: false, error: '未在产品一级子目录中找到该表格' }, 404)
+        }
+      }
+
+      const children = await listAllInFolder(accessToken, targetFolderToken)
+      let deleted = false
+      let deletedToken: string | null = null
+      for (const child of children) {
+        const t = safeTrim(child.type)
+        if (t !== 'sheet' && t !== 'file') continue
+        const n = safeTrim(child.name).normalize('NFKC')
+        const tok = safeTrim(child.token)
+        if (!tok) continue
+        const matchByToken = sheetTokenReq && tok === sheetTokenReq
+        const matchByName = n === wantSheet
+        if (!matchByToken && !matchByName) continue
+        // 若同时传了 sheetToken，必须一致，防止误删其它同名文件
+        if (sheetTokenReq && tok !== sheetTokenReq) continue
+        if (!sheetTokenReq && !matchByName) continue
+        await deleteDriveNode(accessToken, tok, t === 'sheet' ? 'sheet' : 'file')
+        deleted = true
+        deletedToken = tok
+        break
+      }
+      if (!deleted) {
+        return jsonResponse({
+          ok: false,
+          error: `目录「${dirName || targetFolderToken}」下未找到「${VERSION_PACKAGE_SHEET_TITLE}」`,
+        }, 404)
+      }
+      return jsonResponse({
+        ok: true,
+        productId,
+        folderToken: targetFolderToken,
+        sheetToken: deletedToken,
+        dirName,
+        sheetTitle: VERSION_PACKAGE_SHEET_TITLE,
+        message: `已删除「${dirName}」下的「${VERSION_PACKAGE_SHEET_TITLE}」`,
+      })
+    } catch (e) {
+      return jsonResponse({
+        ok: false,
+        error: e instanceof Error ? e.message : String(e),
+      }, 200)
+    }
+  }
+
   if (action !== 'get') {
-    return jsonResponse({ ok: false, error: `未知 action：${action}（支持 get / refresh / list_dirs）` }, 400)
+    return jsonResponse({
+      ok: false,
+      error: `未知 action：${action}（支持 get / refresh / list_dirs / delete_version_sheet）`,
+    }, 400)
   }
 
   try {

@@ -24,8 +24,6 @@ import {
   saveFeishuPackageManifestIfDirty,
   upsertPackageManifestEntry,
 } from './feishuPackageManifest.mjs';
-import { generateVersionPackageSheetForBatch } from './feishuVersionSheet.mjs';
-
 function log(...args) {
   console.log(new Date().toISOString(), ...args);
 }
@@ -1284,26 +1282,7 @@ export async function executeFeishuUploadJob(supabase, rootAbs, job, tuning) {
       summary = `${summary}；原因示例：${failSamples.join(' | ')}`.slice(0, 2000);
     }
 
-    // 有成功行时，在版本目录生成/覆盖「软件包清单」电子表格
-    if (nOk > 0) {
-      try {
-        lastJobMessage = '正在生成版本目录软件包清单表格…';
-        await patchFeishuUploadJob(supabase, jobId, {
-          last_message: lastJobMessage,
-          heartbeat_at: new Date().toISOString(),
-        });
-        const token = await getToken();
-        const sheet = await generateVersionPackageSheetForBatch(supabase, token, job.batch_id, {
-          packageManifest,
-        });
-        summary = `${summary}；已生成版本清单表 ${sheet.rowCount} 行`.slice(0, 2000);
-        log('feishu-upload version sheet ok', jobId, { url: sheet.url, rows: sheet.rowCount });
-      } catch (e) {
-        const em = e instanceof Error ? e.message : String(e);
-        log('WARN feishu-upload version sheet failed', jobId, em);
-        summary = `${summary}；版本清单表生成失败：${em}`.slice(0, 2000);
-      }
-    }
+    // 版本目录 BOM 表改为清单页/分发页手动生成，上传成功后不再自动生成
 
     await patchFeishuUploadJob(supabase, jobId, {
       status: finalStatus,

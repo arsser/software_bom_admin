@@ -37,6 +37,22 @@ export function buildFeishuFileWebUrl(fileToken: string, webBaseUrl: string): st
   return `${base}/file/${encodeURIComponent(tok)}`;
 }
 
+/** 飞书电子表格网页链接；未配置企业域名时回退 feishu.cn */
+export function buildFeishuSheetWebUrl(sheetToken: string, webBaseUrl = ''): string {
+  const tok = String(sheetToken ?? '').trim();
+  if (!tok) return '';
+  const base = normalizeFeishuWebBaseUrl(webBaseUrl) || 'https://feishu.cn';
+  return `${base}/sheets/${encodeURIComponent(tok)}`;
+}
+
+/** 飞书云盘文件夹网页链接；未配置企业域名时回退 feishu.cn */
+export function buildFeishuFolderWebUrl(folderToken: string, webBaseUrl = ''): string {
+  const tok = String(folderToken ?? '').trim();
+  if (!tok) return '';
+  const base = normalizeFeishuWebBaseUrl(webBaseUrl) || 'https://feishu.cn';
+  return `${base}/drive/folder/${encodeURIComponent(tok)}`;
+}
+
 export async function fetchFeishuSettings(): Promise<FeishuConfig | null> {
   const { data, error } = await supabase
     .from('system_settings')

@@ -2,6 +2,8 @@ import { supabase } from './supabase';
 import { formatFunctionsInvokeError } from './supabaseFunctionsInvokeError';
 import {
   buildFeishuFileWebUrl,
+  buildFeishuFolderWebUrl,
+  buildFeishuSheetWebUrl,
   fetchFeishuSettings,
   normalizeFeishuWebBaseUrl,
 } from './feishuSettings';
@@ -137,6 +139,7 @@ export async function requestFeishuPackageManifestRefresh(
 export type FeishuProductVersionDir = {
   name: string;
   folderToken: string;
+  folderUrl: string | null;
   batchId: string | null;
   batchName: string | null;
   sheetToken: string | null;
@@ -170,6 +173,15 @@ export async function fetchFeishuProductVersionDirs(
   if (!data.ok) {
     return { ok: false, error: String(data.error ?? '列出目录失败') };
   }
+  let webBaseUrl = normalizeFeishuWebBaseUrl(data.webBaseUrl);
+  if (!webBaseUrl) {
+    try {
+      const cfg = await fetchFeishuSettings();
+      webBaseUrl = cfg?.webBaseUrl ?? '';
+    } catch {
+      /* ignore */
+    }
+  }
   const dirsRaw = Array.isArray(data.dirs) ? data.dirs : [];
   return {
     ok: true,
@@ -178,14 +190,58 @@ export async function fetchFeishuProductVersionDirs(
     sheetTitle: typeof data.sheetTitle === 'string' ? data.sheetTitle : '软件包清单',
     dirs: dirsRaw
       .filter((x): x is Record<string, unknown> => !!x && typeof x === 'object' && !Array.isArray(x))
-      .map((x) => ({
-        name: String(x.name ?? ''),
-        folderToken: String(x.folderToken ?? ''),
-        batchId: x.batchId != null && String(x.batchId) ? String(x.batchId) : null,
-        batchName: x.batchName != null && String(x.batchName) ? String(x.batchName) : null,
-        sheetToken: x.sheetToken != null && String(x.sheetToken) ? String(x.sheetToken) : null,
-        sheetUrl: x.sheetUrl != null && String(x.sheetUrl) ? String(x.sheetUrl) : null,
-        hasSheet: Boolean(x.hasSheet),
-      })),
+      .map((x) => {
+        const folderToken = String(x.folderToken ?? '');
+        const sheetToken = x.sheetToken != null && String(x.sheetToken) ? String(x.sheetToken) : null;
+        const existingSheetUrl = x.sheetUrl != null && String(x.sheetUrl) ? String(x.sheetUrl) : null;
+        const existingFolderUrl = x.folderUrl != null && String(x.folderUrl) ? String(x.folderUrl) : null;
+        return {
+          name: String(x.name ?? ''),
+          folderToken,
+          folderUrl: existingFolderUrl || (folderToken ? buildFeishuFolderWebUrl(folderToken, webBaseUrl) : null),
+          batchId: x.batchId != null && String(x.batchId) ? String(x.batchId) : null,
+          batchName: x.batchName != null && String(x.batchName) ? String(x.batchName) : null,
+          sheetToken,
+          sheetUrl:
+            existingSheetUrl ||
+            (sheetToken ? buildFeishuSheetWebUrl(sheetToken, webBaseUrl) : null),
+          hasSheet: Boolean(x.hasSheet) || Boolean(sheetToken),
+        };
+      }),
+  };
+}
+
+export type FeishuDeleteVersionSheetResult =
+  | { ok: true; message?: string; dirName?: string; sheetToken?: string }
+  | { ok: false; error: string };
+
+/** 删除版本目录下的「软件包清单」飞书电子表格 */
+export async function deleteFeishuVersionSheet(params: {
+  productId: string;
+  folderToken: string;
+  sheetToken?: string | null;
+}): Promise<FeishuDeleteVersionSheetResult> {
+  const { data, error } = await supabase.functions.invoke<Record<string, unknown>>('feishu-package-manifest', {
+    body: {
+      action: 'delete_version_sheet',
+      productId: params.productId,
+      folderToken: params.folderToken,
+      sheetToken: params.sheetToken || undefined,
+    },
+  });
+  if (error) {
+    return { ok: false, error: await formatFunctionsInvokeError(error) };
+  }
+  if (!data || typeof data !== 'object' || typeof data.ok !== 'boolean') {
+    return { ok: false, error: '删除请求返回格式异常' };
+  }
+  if (!data.ok) {
+    return { ok: false, error: String(data.error ?? '删除失败') };
+  }
+  return {
+    ok: true,
+    message: typeof data.message === 'string' ? data.message : undefined,
+    dirName: typeof data.dirName === 'string' ? data.dirName : undefined,
+    sheetToken: typeof data.sheetToken === 'string' ? data.sheetToken : undefined,
   };
 }

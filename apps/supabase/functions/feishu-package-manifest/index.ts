@@ -8,8 +8,27 @@ const corsHeaders: Record<string, string> = {
 
 const META_DIR = 'meta'
 const MANIFEST_FILE_NAME = 'package-manifest.json'
-/** 与 bom-scanner-worker feishuVersionSheet.VERSION_PACKAGE_SHEET_TITLE 一致 */
-const VERSION_PACKAGE_SHEET_TITLE = '软件包清单'
+/** 与 bom-scanner-worker feishuVersionSheet.VERSION_PACKAGE_SHEET_TITLE_SUFFIX 一致 */
+const VERSION_PACKAGE_SHEET_TITLE_SUFFIX = '软件包清单'
+
+function buildVersionPackageSheetTitle(productName: string, versionName: string): string {
+  const p = safePathSegment(productName || 'product')
+  const v = safePathSegment(versionName || 'version')
+  const title = `${p}-${v}-${VERSION_PACKAGE_SHEET_TITLE_SUFFIX}`
+  if (title.length <= 100) return title
+  const suffix = `-${VERSION_PACKAGE_SHEET_TITLE_SUFFIX}`
+  const budget = Math.max(8, 100 - suffix.length)
+  return `${title.slice(0, budget)}${suffix}`
+}
+
+/** 识别版本 BOM 表：新名 `{产品}-{版本}-软件包清单`，或旧名恰好「软件包清单」 */
+function isVersionPackageSheetName(name: string, expectedTitle?: string): boolean {
+  const n = safeTrim(name).normalize('NFKC')
+  if (!n) return false
+  if (expectedTitle && n === expectedTitle.normalize('NFKC')) return true
+  if (n === VERSION_PACKAGE_SHEET_TITLE_SUFFIX.normalize('NFKC')) return true
+  return n.endsWith(`-${VERSION_PACKAGE_SHEET_TITLE_SUFFIX}`.normalize('NFKC'))
+}
 const FEISHU_LIST_FOLDER_PAGE_SIZE = 50
 const TIMEOUT_MS = 30000
 
@@ -408,7 +427,7 @@ serve(async (req) => {
         if (!batchByDir.has(key)) batchByDir.set(key, { id, name })
       }
 
-      const wantSheet = VERSION_PACKAGE_SHEET_TITLE.normalize('NFKC')
+      const productName = safeTrim(product.name)
       const dirs: Array<{
         name: string
         folderToken: string
@@ -417,6 +436,8 @@ serve(async (req) => {
         batchName: string | null
         sheetToken: string | null
         sheetUrl: string | null
+        sheetTitle: string | null
+        expectedSheetTitle: string
         hasSheet: boolean
       }> = []
 
@@ -427,15 +448,31 @@ serve(async (req) => {
         if (!name || !folderToken) continue
         if (name === META_DIR.normalize('NFKC')) continue
 
+        const expectedSheetTitle = buildVersionPackageSheetTitle(productName, name)
         const children = await listAllInFolder(accessToken, folderToken)
         let sheetToken: string | null = null
+        let sheetTitleFound: string | null = null
+        // 优先精确匹配新名，再匹配任意 *-软件包清单 / 旧名
         for (const child of children) {
           const t = safeTrim(child.type)
           if (t !== 'sheet' && t !== 'file') continue
           const n = safeTrim(child.name).normalize('NFKC')
-          if (n === wantSheet && child.token) {
+          if (n === expectedSheetTitle.normalize('NFKC') && child.token) {
             sheetToken = safeTrim(child.token)
+            sheetTitleFound = n
             break
+          }
+        }
+        if (!sheetToken) {
+          for (const child of children) {
+            const t = safeTrim(child.type)
+            if (t !== 'sheet' && t !== 'file') continue
+            const n = safeTrim(child.name)
+            if (isVersionPackageSheetName(n) && child.token) {
+              sheetToken = safeTrim(child.token)
+              sheetTitleFound = safeTrim(child.name).normalize('NFKC')
+              break
+            }
           }
         }
         const batch = batchByDir.get(safePathSegment(name).normalize('NFKC')) ?? null
@@ -447,6 +484,8 @@ serve(async (req) => {
           batchName: batch?.name ?? null,
           sheetToken,
           sheetUrl: sheetToken ? buildFeishuSheetWebUrl(sheetToken, webBaseUrl) : null,
+          sheetTitle: sheetTitleFound,
+          expectedSheetTitle,
           hasSheet: Boolean(sheetToken),
         })
       }
@@ -456,7 +495,8 @@ serve(async (req) => {
         ok: true,
         productId,
         productName: product.name,
-        sheetTitle: VERSION_PACKAGE_SHEET_TITLE,
+        sheetTitle: VERSION_PACKAGE_SHEET_TITLE_SUFFIX,
+        sheetTitlePattern: `{产品}-{版本}-${VERSION_PACKAGE_SHEET_TITLE_SUFFIX}`,
         webBaseUrl: webBaseUrl || undefined,
         dirs,
       })
@@ -475,7 +515,7 @@ serve(async (req) => {
     try {
       const accessToken = await feishuTenantToken(appId, appSecret)
       const rootItems = await listAllInFolder(accessToken, rootFolder)
-      const wantSheet = VERSION_PACKAGE_SHEET_TITLE.normalize('NFKC')
+      const productName = safeTrim(product.name)
 
       let targetFolderToken = folderTokenReq
       let dirName = ''
@@ -510,30 +550,31 @@ serve(async (req) => {
         }
       }
 
+      const expectedSheetTitle = buildVersionPackageSheetTitle(productName, dirName)
       const children = await listAllInFolder(accessToken, targetFolderToken)
       let deleted = false
       let deletedToken: string | null = null
+      let deletedTitle = ''
       for (const child of children) {
         const t = safeTrim(child.type)
         if (t !== 'sheet' && t !== 'file') continue
         const n = safeTrim(child.name).normalize('NFKC')
         const tok = safeTrim(child.token)
         if (!tok) continue
-        const matchByToken = sheetTokenReq && tok === sheetTokenReq
-        const matchByName = n === wantSheet
+        const matchByToken = Boolean(sheetTokenReq && tok === sheetTokenReq)
+        const matchByName = isVersionPackageSheetName(n, expectedSheetTitle)
         if (!matchByToken && !matchByName) continue
-        // 若同时传了 sheetToken，必须一致，防止误删其它同名文件
         if (sheetTokenReq && tok !== sheetTokenReq) continue
-        if (!sheetTokenReq && !matchByName) continue
         await deleteDriveNode(accessToken, tok, t === 'sheet' ? 'sheet' : 'file')
         deleted = true
         deletedToken = tok
+        deletedTitle = n
         break
       }
       if (!deleted) {
         return jsonResponse({
           ok: false,
-          error: `目录「${dirName || targetFolderToken}」下未找到「${VERSION_PACKAGE_SHEET_TITLE}」`,
+          error: `目录「${dirName || targetFolderToken}」下未找到版本 BOM 表（期望「${expectedSheetTitle}」）`,
         }, 404)
       }
       return jsonResponse({
@@ -542,8 +583,8 @@ serve(async (req) => {
         folderToken: targetFolderToken,
         sheetToken: deletedToken,
         dirName,
-        sheetTitle: VERSION_PACKAGE_SHEET_TITLE,
-        message: `已删除「${dirName}」下的「${VERSION_PACKAGE_SHEET_TITLE}」`,
+        sheetTitle: deletedTitle || expectedSheetTitle,
+        message: `已删除「${dirName}」下的「${deletedTitle || expectedSheetTitle}」`,
       })
     } catch (e) {
       return jsonResponse({

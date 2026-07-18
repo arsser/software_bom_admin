@@ -157,7 +157,7 @@ export const FeishuPackageManifestPage: React.FC = () => {
   const [entries, setEntries] = useState<FeishuPackageManifestEntry[]>([]);
   const [jobs, setJobs] = useState<BomFeishuManifestJob[]>([]);
   const [dirs, setDirs] = useState<FeishuProductVersionDir[]>([]);
-  const [sheetTitle, setSheetTitle] = useState('软件包清单');
+  const [sheetTitle, setSheetTitle] = useState('{产品}-{版本}-软件包清单');
   const [query, setQuery] = useState('');
   const [copiedToken, setCopiedToken] = useState<string | null>(null);
   const [generatingBatchId, setGeneratingBatchId] = useState<string | null>(null);
@@ -470,7 +470,7 @@ export const FeishuPackageManifestPage: React.FC = () => {
           setDirs([]);
           return;
         }
-        setSheetTitle(res.sheetTitle);
+        setSheetTitle(res.sheetTitlePattern || res.sheetTitle || '{产品}-{版本}-软件包清单');
         setDirs(res.dirs);
         await loadVersionSheetJobsForDirs(res.dirs);
       } catch (e) {
@@ -571,7 +571,10 @@ export const FeishuPackageManifestPage: React.FC = () => {
         setError(r.error);
         return;
       }
-      setInfo(r.message || `已排队生成「${sheetTitle}」：${dir.name}`);
+      setInfo(
+        r.message ||
+          `已排队生成「${dir.expectedSheetTitle || `${dir.name}-软件包清单`}」`,
+      );
       await loadVersionSheetJobsForDirs(dirs);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -583,7 +586,8 @@ export const FeishuPackageManifestPage: React.FC = () => {
   const handleDeleteVersionSheet = async (dir: FeishuProductVersionDir) => {
     if (!productId || !dir.folderToken || !dir.hasSheet) return;
     if (deletingFolderToken) return;
-    const ok = window.confirm(`确定删除目录「${dir.name}」下的「${sheetTitle}」？此操作不可恢复。`);
+    const titleHint = dir.sheetTitle || dir.expectedSheetTitle || '软件包清单';
+    const ok = window.confirm(`确定删除目录「${dir.name}」下的「${titleHint}」？此操作不可恢复。`);
     if (!ok) return;
     setDeletingFolderToken(dir.folderToken);
     setError(null);
@@ -598,7 +602,7 @@ export const FeishuPackageManifestPage: React.FC = () => {
         setError(r.error);
         return;
       }
-      setInfo(r.message || `已删除「${dir.name}」下的「${sheetTitle}」`);
+      setInfo(r.message || `已删除「${dir.name}」下的「${titleHint}」`);
       await loadDirs(productId);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -1055,9 +1059,10 @@ export const FeishuPackageManifestPage: React.FC = () => {
               ) : (
                 sortedDirs.map((d) => {
                   const latest = latestJobForBatch(d.batchId);
-                  const busy =
-                    Boolean(d.batchId && activeVersionSheetBatchIds.has(d.batchId)) ||
-                    generatingBatchId === d.batchId;
+                  const busy = Boolean(
+                    d.batchId &&
+                      (activeVersionSheetBatchIds.has(d.batchId) || generatingBatchId === d.batchId),
+                  );
                   return (
                     <tr key={d.folderToken || d.name} className="border-t border-gray-100 hover:bg-slate-50/80">
                       <td className="px-3 py-1.5 font-medium text-slate-800 truncate" title={d.name}>
@@ -1072,9 +1077,20 @@ export const FeishuPackageManifestPage: React.FC = () => {
                       </td>
                       <td className="px-3 py-1.5 overflow-hidden">
                         {d.hasSheet ? (
-                          <span className="text-emerald-700 text-xs">已有表</span>
+                          <span
+                            className="text-emerald-700 text-xs truncate block"
+                            title={d.sheetTitle || d.expectedSheetTitle || undefined}
+                          >
+                            已有表
+                            {d.sheetTitle ? ` · ${d.sheetTitle}` : ''}
+                          </span>
                         ) : (
-                          <span className="text-slate-400 text-xs">尚未生成</span>
+                          <span
+                            className="text-slate-400 text-xs truncate block"
+                            title={d.expectedSheetTitle || undefined}
+                          >
+                            尚未生成
+                          </span>
                         )}
                       </td>
                       <td className="px-3 py-1.5 text-xs text-slate-500 truncate">

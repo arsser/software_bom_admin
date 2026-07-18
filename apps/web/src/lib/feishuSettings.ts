@@ -32,8 +32,8 @@ export function normalizeFeishuWebBaseUrl(raw: unknown): string {
 /** 飞书云空间文件网页链接（浏览器可打开预览/下载；需账号有权限） */
 export function buildFeishuFileWebUrl(fileToken: string, webBaseUrl: string): string {
   const tok = String(fileToken ?? '').trim();
-  const base = normalizeFeishuWebBaseUrl(webBaseUrl);
-  if (!tok || !base) return '';
+  if (!tok) return '';
+  const base = normalizeFeishuWebBaseUrl(webBaseUrl) || 'https://feishu.cn';
   return `${base}/file/${encodeURIComponent(tok)}`;
 }
 

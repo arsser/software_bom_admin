@@ -144,6 +144,8 @@ export type FeishuProductVersionDir = {
   batchName: string | null;
   sheetToken: string | null;
   sheetUrl: string | null;
+  sheetTitle: string | null;
+  expectedSheetTitle: string | null;
   hasSheet: boolean;
 };
 
@@ -153,6 +155,7 @@ export type FeishuProductVersionDirsResult =
       productId: string;
       productName?: string;
       sheetTitle: string;
+      sheetTitlePattern?: string;
       dirs: FeishuProductVersionDir[];
     }
   | { ok: false; error: string };
@@ -188,6 +191,8 @@ export async function fetchFeishuProductVersionDirs(
     productId: String(data.productId ?? productId),
     productName: typeof data.productName === 'string' ? data.productName : undefined,
     sheetTitle: typeof data.sheetTitle === 'string' ? data.sheetTitle : '软件包清单',
+    sheetTitlePattern:
+      typeof data.sheetTitlePattern === 'string' ? data.sheetTitlePattern : undefined,
     dirs: dirsRaw
       .filter((x): x is Record<string, unknown> => !!x && typeof x === 'object' && !Array.isArray(x))
       .map((x) => {
@@ -205,6 +210,11 @@ export async function fetchFeishuProductVersionDirs(
           sheetUrl:
             existingSheetUrl ||
             (sheetToken ? buildFeishuSheetWebUrl(sheetToken, webBaseUrl) : null),
+          sheetTitle: x.sheetTitle != null && String(x.sheetTitle) ? String(x.sheetTitle) : null,
+          expectedSheetTitle:
+            x.expectedSheetTitle != null && String(x.expectedSheetTitle)
+              ? String(x.expectedSheetTitle)
+              : null,
           hasSheet: Boolean(x.hasSheet) || Boolean(sheetToken),
         };
       }),

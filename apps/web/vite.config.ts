@@ -3,7 +3,9 @@ import react from '@vitejs/plugin-react';
 import { readFileSync } from 'fs';
 import { join } from 'path';
 
-const pkg = JSON.parse(readFileSync(join(__dirname, 'package.json'), 'utf-8'));
+const pkg = JSON.parse(
+  readFileSync(join(__dirname, 'package.json'), 'utf-8').replace(/^\uFEFF/, ''),
+);
 const formatDateTime = (date: Date) => {
   const pad = (n: number) => String(n).padStart(2, '0');
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())} UTC`;

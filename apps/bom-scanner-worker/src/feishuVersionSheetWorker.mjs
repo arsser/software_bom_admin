@@ -108,7 +108,7 @@ export async function executeFeishuVersionSheetJob(supabase, rootAbs, job) {
     await patchJob(supabase, jobId, {
       status: 'succeeded',
       finished_at: new Date().toISOString(),
-      message: `已生成软件包清单：${result.rowCount} 行`,
+      message: `已生成「${result.sheetTitle || '软件包清单'}」：${result.rowCount} 行`,
       sheet_url: result.url || null,
       row_count: result.rowCount,
       heartbeat_at: new Date().toISOString(),

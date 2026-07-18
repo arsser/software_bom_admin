@@ -16,8 +16,26 @@ import {
   resolvePackageManifestDownloadUrl,
 } from './feishuPackageManifest.mjs';
 
-/** 版本目录下固定表格标题（覆盖更新时按此名查找并删除旧表） */
-export const VERSION_PACKAGE_SHEET_TITLE = '软件包清单';
+/** 版本目录 BOM 表标题后缀：完整名为 `{产品}-{版本}-软件包清单` */
+export const VERSION_PACKAGE_SHEET_TITLE_SUFFIX = '软件包清单';
+
+/**
+ * @param {string} productName
+ * @param {string} versionName 版本目录名 / 批次名
+ */
+export function buildVersionPackageSheetTitle(productName, versionName) {
+  const p = safePathSegment(productName || 'product');
+  const v = safePathSegment(versionName || 'version');
+  const title = `${p}-${v}-${VERSION_PACKAGE_SHEET_TITLE_SUFFIX}`;
+  // 飞书标题过长时截断，保留后缀可识别
+  if (title.length <= 100) return title;
+  const suffix = `-${VERSION_PACKAGE_SHEET_TITLE_SUFFIX}`;
+  const budget = Math.max(8, 100 - suffix.length);
+  return `${title.slice(0, budget)}${suffix}`;
+}
+
+/** @deprecated 仅兼容旧文案；实际表名请用 buildVersionPackageSheetTitle */
+export const VERSION_PACKAGE_SHEET_TITLE = VERSION_PACKAGE_SHEET_TITLE_SUFFIX;
 
 const FEISHU_LIST_FOLDER_PAGE_SIZE = 50;
 
@@ -335,8 +353,12 @@ function readFeishuPresentMeta(status) {
   };
 }
 
-/** 追加在完整 BOM 列之后的清单扩展列（避免与 bom_row 键冲突时改用带前缀名） */
-const EXTRA_SHEET_HEADERS = ['文件大小', '相对路径', '下载链接', '上传时间'];
+/**
+ * 清单扩展列（放在表头最前，避免 BOM 列过多时需横向滚动才看得见）。
+ * 飞书单次写入上限 100 列，扩展列优先占位。
+ */
+const EXTRA_SHEET_HEADERS = ['文件大小', '相对路径', '下载地址', '上传时间'];
+const FEISHU_VALUES_MAX_COLS = 100;
 
 /**
  * 0-based 列索引 → Excel/飞书列字母（A, B, …, Z, AA, …）
@@ -401,23 +423,28 @@ function collectBomColumnKeys(keyMap, bomRows) {
 }
 
 /**
- * 根据当前批次已对齐飞书的行，在版本目录下覆盖生成「软件包清单」电子表格。
- * 列 = 完整 bom_row 列 + 文件大小 + 相对路径 + 下载链接（meta）+ 上传时间。
+ * 根据当前批次已对齐飞书的行，在版本目录下覆盖生成「{产品}-{版本}-软件包清单」电子表格。
+ * 列 = 文件大小 + 相对路径 + 下载地址 + 上传时间 + 完整 bom_row 列。
  *
  * @param {object} p
  * @param {string} p.accessToken
  * @param {string} p.rootFolderToken
  * @param {string} p.batchDir
+ * @param {string} [p.productName]
+ * @param {string} [p.sheetTitle]
  * @param {ReturnType<typeof mergeKeyMap>} p.keyMap
  * @param {Array<{ bom_row?: unknown, status?: unknown }>} p.rows
  * @param {Awaited<ReturnType<typeof loadFeishuPackageManifest>> | null} [p.packageManifest]
  * @param {string} [p.webBaseUrl]
- * @returns {Promise<{ spreadsheetToken: string, url: string, rowCount: number }>}
+ * @returns {Promise<{ spreadsheetToken: string, url: string, rowCount: number, sheetTitle: string }>}
  */
 export async function generateVersionPackageSheet(p) {
   const { accessToken, rootFolderToken, batchDir, keyMap, rows, packageManifest, webBaseUrl } = p;
+  const sheetTitle =
+    safeTrim(p.sheetTitle) ||
+    buildVersionPackageSheetTitle(p.productName || '', batchDir);
   const versionFolder = await ensureFolderPath(accessToken, rootFolderToken, [batchDir]);
-  await removeSameNameSheetIfAny(accessToken, versionFolder, VERSION_PACKAGE_SHEET_TITLE);
+  await removeSameNameSheetIfAny(accessToken, versionFolder, sheetTitle);
 
   /** @type {Array<{ bomRow: Record<string, unknown>, meta: NonNullable<ReturnType<typeof readFeishuPresentMeta>> }>} */
   const present = [];
@@ -435,11 +462,21 @@ export async function generateVersionPackageSheet(p) {
     throw new Error('当前版本没有 feishu=present 的行，无法生成软件包清单');
   }
 
-  const bomKeys = collectBomColumnKeys(
+  const bomKeysAll = collectBomColumnKeys(
     keyMap,
     present.map((x) => x.bomRow),
   );
-  const header = [...bomKeys, ...EXTRA_SHEET_HEADERS];
+  const bomKeyBudget = Math.max(0, FEISHU_VALUES_MAX_COLS - EXTRA_SHEET_HEADERS.length);
+  const bomKeys = bomKeysAll.slice(0, bomKeyBudget);
+  if (bomKeysAll.length > bomKeys.length) {
+    log('WARN feishu-version-sheet bom cols truncated', {
+      total: bomKeysAll.length,
+      kept: bomKeys.length,
+      maxCols: FEISHU_VALUES_MAX_COLS,
+    });
+  }
+  // 扩展列置前，保证「下载地址」等无需横滚即可看见
+  const header = [...EXTRA_SHEET_HEADERS, ...bomKeys];
   /** @type {unknown[][]} */
   const values = [header];
 
@@ -468,20 +505,21 @@ export async function generateVersionPackageSheet(p) {
     const uploadedAt = typeof manifestHit?.uploaded_at === 'string' ? manifestHit.uploaded_at : '';
 
     /** @type {unknown[]} */
-    const rowCells = bomKeys.map((k) => cellFromBomValue(bomRow[k]));
-    rowCells.push(
+    const rowCells = [
       sizeBytes,
       relPath,
-      downloadUrl ? { type: 'url', text: '下载', link: downloadUrl } : '',
+      // 写入完整 URL 文本，便于复制；飞书会识别为可点击链接
+      downloadUrl || '',
       uploadedAt,
-    );
+      ...bomKeys.map((k) => cellFromBomValue(bomRow[k])),
+    ];
     values.push(rowCells);
   }
 
   const { spreadsheetToken, url } = await createSpreadsheet(
     accessToken,
     versionFolder,
-    VERSION_PACKAGE_SHEET_TITLE,
+    sheetTitle,
   );
   const sheetId = await queryFirstSheetId(accessToken, spreadsheetToken);
   const endRow = values.length;
@@ -491,11 +529,12 @@ export async function generateVersionPackageSheet(p) {
 
   log('feishu-version-sheet generated', {
     batchDir,
+    sheetTitle,
     rowCount: present.length,
     cols: header.length,
     spreadsheetToken: spreadsheetToken.slice(0, 12),
   });
-  return { spreadsheetToken, url, rowCount: present.length };
+  return { spreadsheetToken, url, rowCount: present.length, sheetTitle };
 }
 
 /**
@@ -516,6 +555,8 @@ export async function generateVersionPackageSheetForBatch(supabase, accessToken,
   const batchNameRaw = batchProdCfg.batchName;
   const batchNameFallback = `batch-${String(batchId).replace(/-/g, '').slice(0, 8)}`;
   const batchDir = safePathSegment(batchNameRaw || batchNameFallback);
+  const productName = safeTrim(batchProdCfg.productName) || 'product';
+  const sheetTitle = buildVersionPackageSheetTitle(productName, batchDir);
 
   const { data: rowList, error: rowsErr } = await supabase
     .from('bom_rows')
@@ -540,6 +581,8 @@ export async function generateVersionPackageSheetForBatch(supabase, accessToken,
     accessToken,
     rootFolderToken: rootFolder,
     batchDir,
+    productName,
+    sheetTitle,
     keyMap,
     rows: rowList ?? [],
     packageManifest,

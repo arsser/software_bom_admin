@@ -48,13 +48,13 @@ export function normalizeFeishuWebBaseUrl(raw) {
  */
 export function buildFeishuFileWebUrl(fileToken, webBaseUrl) {
   const tok = safeTrim(fileToken);
-  const base = normalizeFeishuWebBaseUrl(webBaseUrl);
-  if (!tok || !base) return '';
+  if (!tok) return '';
+  const base = normalizeFeishuWebBaseUrl(webBaseUrl) || 'https://feishu.cn';
   return `${base}/file/${encodeURIComponent(tok)}`;
 }
 
 /**
- * 清单/表格展示用链接：优先企业网页链接；未配置域名时回退空（勿写 OpenAPI download）。
+ * 清单/表格展示用链接：优先企业网页链接；未配置域名时回退 feishu.cn（勿写 OpenAPI download）。
  * @param {string} fileToken
  * @param {string} [webBaseUrl]
  * @param {string} [existingUrl]

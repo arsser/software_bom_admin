@@ -436,7 +436,28 @@ async function deployFileFixed(rootUrl, repo, relPath, fileAbs, apiKey, signal, 
 /** @param {string} rootUrl @param {string} repo @param {string} relPath */
 export function buildArtifactoryDownloadUrl(rootUrl, repo, relPath) {
   const base = rootUrl.replace(/\/+$/, '');
-  return `${base}/${repo}/${relPath.replace(/^\/+/, '')}`;
+  const encodeSeg = (seg) => {
+    const t = String(seg ?? '').trim();
+    if (!t) return '';
+    try {
+      return encodeURIComponent(decodeURIComponent(t));
+    } catch {
+      return encodeURIComponent(t);
+    }
+  };
+  const repoPart = String(repo ?? '')
+    .replace(/^\/+|\/+$/g, '')
+    .split('/')
+    .filter(Boolean)
+    .map(encodeSeg)
+    .join('/');
+  const pathPart = String(relPath ?? '')
+    .replace(/^\/+/, '')
+    .split('/')
+    .filter(Boolean)
+    .map(encodeSeg)
+    .join('/');
+  return `${base}/${repoPart}/${pathPart}`;
 }
 
 /**

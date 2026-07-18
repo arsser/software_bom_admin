@@ -454,6 +454,127 @@ function cellFromBomValue(v) {
 }
 
 /**
+ * 对 http(s) URL 的 path 段做 percent-encode（先 decode 再 encode，避免双重编码）。
+ * 飞书对含中文的明文 URL 自动识别超链接会截断到首个非 ASCII 段之前。
+ * @param {string} rawUrl
+ */
+export function encodeHttpUrlPathSegments(rawUrl) {
+  const s = safeTrim(rawUrl);
+  if (!/^https?:\/\//i.test(s)) return s;
+  try {
+    const u = new URL(s);
+    u.pathname = u.pathname
+      .split('/')
+      .map((seg) => {
+        if (!seg) return seg;
+        try {
+          return encodeURIComponent(decodeURIComponent(seg));
+        } catch {
+          return encodeURIComponent(seg);
+        }
+      })
+      .join('/');
+    return u.toString();
+  } catch {
+    return s;
+  }
+}
+
+/**
+ * 展示用：把 path 中的 percent-encoding 还原为可读中文（不经 URL.toString，避免再次编码）。
+ * @param {string} rawUrl
+ */
+export function decodeHttpUrlPathForDisplay(rawUrl) {
+  const s = safeTrim(rawUrl);
+  if (!/^https?:\/\//i.test(s)) return s;
+  try {
+    const u = new URL(s);
+    const path = u.pathname
+      .split('/')
+      .map((seg) => {
+        if (!seg) return '';
+        try {
+          return decodeURIComponent(seg);
+        } catch {
+          return seg;
+        }
+      })
+      .join('/');
+    return `${u.protocol}//${u.host}${path}${u.search}${u.hash}`;
+  } catch {
+    return s;
+  }
+}
+
+/**
+ * 写入飞书单元格：http(s) 用 url 类型；text 显示可读中文 URL，link 为编码后完整地址。
+ * @param {unknown} v
+ */
+function cellForSheetValue(v) {
+  if (v == null) return '';
+  if (typeof v === 'number' || typeof v === 'boolean') return v;
+  if (typeof v === 'object' && v && /** @type {{ type?: string }} */ (v).type === 'url') {
+    const o = /** @type {{ text?: string, link?: string, type: string }} */ (v);
+    const raw = safeTrim(o.link || o.text);
+    if (!raw) return v;
+    return {
+      type: 'url',
+      text: decodeHttpUrlPathForDisplay(safeTrim(o.text) || raw),
+      link: encodeHttpUrlPathSegments(raw),
+    };
+  }
+  const s = typeof v === 'string' ? v.trim() : String(v ?? '').trim();
+  if (!/^https?:\/\//i.test(s)) return cellFromBomValue(v);
+  return {
+    type: 'url',
+    text: decodeHttpUrlPathForDisplay(s),
+    link: encodeHttpUrlPathSegments(s),
+  };
+}
+
+/**
+ * 表头行：水平居中 + 加粗
+ * @param {string} accessToken
+ * @param {string} spreadsheetToken
+ * @param {string} sheetId
+ * @param {number} colCount
+ */
+async function setHeaderRowCenterBold(accessToken, spreadsheetToken, sheetId, colCount) {
+  const endCol = colIndexToLetters(Math.max(0, colCount - 1));
+  const range = `${sheetId}!A1:${endCol}1`;
+  const res = await fetch(
+    `https://open.feishu.cn/open-apis/sheets/v2/spreadsheets/${encodeURIComponent(spreadsheetToken)}/style`,
+    {
+      method: 'PUT',
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        'Content-Type': 'application/json; charset=utf-8',
+      },
+      body: JSON.stringify({
+        appendStyle: {
+          range,
+          style: {
+            hAlign: 1,
+            vAlign: 1,
+            font: { bold: true },
+          },
+        },
+      }),
+    },
+  );
+  const text = await res.text();
+  let parsed;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    throw new Error(`设置表头样式响应非 JSON：${text.slice(0, 300)}`);
+  }
+  if (!res.ok || parsed.code !== 0) {
+    throw new Error(feishuApiFailDetail('sheets_style_put', res.status, parsed, text));
+  }
+}
+
+/**
  * 根据当前批次已对齐飞书的行，在版本目录下覆盖生成「{产品}-{版本}-软件包清单」电子表格。
  * 列顺序来自 bom_scanner.versionSheetColumns（可配置）。
  *
@@ -533,8 +654,8 @@ export async function generateVersionPackageSheet(p) {
     /** @type {unknown[]} */
     const rowCells = header.map((col) => {
       const kind = extraColumnKind(col);
-      if (kind) return extras[kind] ?? '';
-      return cellFromBomValue(resolveBomCellByHeader(bomRow, keyMap, col));
+      if (kind) return cellForSheetValue(extras[kind] ?? '');
+      return cellForSheetValue(resolveBomCellByHeader(bomRow, keyMap, col));
     });
     values.push(rowCells);
   }
@@ -549,6 +670,11 @@ export async function generateVersionPackageSheet(p) {
   const endCol = colIndexToLetters(header.length - 1);
   const range = `${sheetId}!A1:${endCol}${endRow}`;
   await putSheetValues(accessToken, spreadsheetToken, range, values);
+  try {
+    await setHeaderRowCenterBold(accessToken, spreadsheetToken, sheetId, header.length);
+  } catch (e) {
+    log('WARN feishu-version-sheet header style', e instanceof Error ? e.message : e);
+  }
 
   log('feishu-version-sheet generated', {
     batchDir,

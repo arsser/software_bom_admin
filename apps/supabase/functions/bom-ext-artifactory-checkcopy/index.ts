@@ -149,8 +149,28 @@ function parseArtifactoryStorageUri(storageUri: string | null | undefined): { re
 
 function getDownloadUrl(baseUrl: string, repo: string, relPath: string): string {
   const base = baseUrl.replace(/\/+$/, '')
-  const rp = relPath.replace(/^\/+/, '')
-  return `${base}/${repo}/${rp}`
+  const encodeSeg = (seg: string) => {
+    const t = seg.trim()
+    if (!t) return ''
+    try {
+      return encodeURIComponent(decodeURIComponent(t))
+    } catch {
+      return encodeURIComponent(t)
+    }
+  }
+  const repoPart = repo
+    .replace(/^\/+|\/+$/g, '')
+    .split('/')
+    .filter(Boolean)
+    .map(encodeSeg)
+    .join('/')
+  const pathPart = relPath
+    .replace(/^\/+/, '')
+    .split('/')
+    .filter(Boolean)
+    .map(encodeSeg)
+    .join('/')
+  return `${base}/${repoPart}/${pathPart}`
 }
 
 const STORAGE_FETCH_MS = 15000

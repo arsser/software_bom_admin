@@ -99,12 +99,12 @@ const DIR_COL_KEYS = ['name', 'created_at', 'batch', 'sheet', 'latest_job', 'act
 type DirColKey = (typeof DIR_COL_KEYS)[number];
 
 const DIR_COL_DEFAULT_WIDTHS: Record<DirColKey, number> = {
-  name: 150,
-  created_at: 150,
-  batch: 130,
-  sheet: 100,
-  latest_job: 200,
-  actions: 300,
+  name: 140,
+  created_at: 140,
+  batch: 120,
+  sheet: 90,
+  latest_job: 180,
+  actions: 360,
 };
 
 const DIR_COL_MIN_WIDTH = 64;
@@ -254,16 +254,17 @@ export const FeishuPackageManifestPage: React.FC = () => {
     [metaPanelHeight],
   );
 
-  const toggleMetaSort = useCallback((key: MetaColKey) => {
-    setMetaSortKey((prev) => {
-      if (prev !== key) {
+  const toggleMetaSort = useCallback(
+    (key: MetaColKey) => {
+      if (metaSortKey === key) {
+        setMetaSortDir(metaSortDir === 'asc' ? 'desc' : 'asc');
+      } else {
+        setMetaSortKey(key);
         setMetaSortDir('asc');
-        return key;
       }
-      setMetaSortDir((d) => (d === 'asc' ? 'desc' : 'asc'));
-      return key;
-    });
-  }, []);
+    },
+    [metaSortKey, metaSortDir],
+  );
 
   const onDirColResizeStart = useCallback((key: DirColKey, e: React.MouseEvent) => {
     e.preventDefault();
@@ -317,16 +318,17 @@ export const FeishuPackageManifestPage: React.FC = () => {
     [dirPanelHeight],
   );
 
-  const toggleDirSort = useCallback((key: DirColKey) => {
-    setDirSortKey((prev) => {
-      if (prev !== key) {
+  const toggleDirSort = useCallback(
+    (key: DirColKey) => {
+      if (dirSortKey === key) {
+        setDirSortDir(dirSortDir === 'asc' ? 'desc' : 'asc');
+      } else {
+        setDirSortKey(key);
         setDirSortDir('asc');
-        return key;
       }
-      setDirSortDir((d) => (d === 'asc' ? 'desc' : 'asc'));
-      return key;
-    });
-  }, []);
+    },
+    [dirSortKey, dirSortDir],
+  );
 
   const selectedProduct = useMemo(
     () => products.find((p) => p.id === productId) ?? null,
@@ -564,6 +566,13 @@ export const FeishuPackageManifestPage: React.FC = () => {
       return;
     }
     if (generatingBatchId || activeVersionSheetBatchIds.has(dir.batchId)) return;
+    if (dir.hasSheet) {
+      const titleHint = dir.sheetTitle || dir.expectedSheetTitle || '软件包清单';
+      const ok = window.confirm(
+        `确定重新生成目录「${dir.name}」下的「${titleHint}」？\n将覆盖现有飞书表格内容。`,
+      );
+      if (!ok) return;
+    }
     setGeneratingBatchId(dir.batchId);
     setError(null);
     setInfo(null);
@@ -1121,16 +1130,18 @@ export const FeishuPackageManifestPage: React.FC = () => {
                         )}
                       </td>
                       <td className="px-3 py-1.5">
-                        <div className="flex flex-wrap items-center gap-1">
+                        <div className="flex flex-nowrap items-center gap-1 whitespace-nowrap">
                           <button
                             type="button"
                             onClick={() => void handleGenerateVersionSheet(d)}
                             disabled={!d.batchId || busy}
-                            className="inline-flex items-center gap-1 px-2 py-1 text-xs font-medium rounded-lg bg-violet-600 text-white hover:bg-violet-700 disabled:opacity-50"
+                            className="inline-flex items-center justify-center gap-1 min-w-[5.25rem] px-2 py-1 text-xs font-medium rounded-lg bg-violet-600 text-white hover:bg-violet-700 disabled:opacity-50"
                             title={
                               !d.batchId
                                 ? '需有同名 BOM 批次才能生成'
-                                : '手动生成/覆盖完整 BOM + meta 下载链接'
+                                : d.hasSheet
+                                  ? '覆盖重新生成完整 BOM + meta 下载链接'
+                                  : '手动生成完整 BOM + meta 下载链接'
                             }
                           >
                             {busy ? <Loader2 size={13} className="animate-spin" /> : <Table2 size={13} />}

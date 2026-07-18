@@ -115,7 +115,7 @@ export const Settings: React.FC = () => {
   const [showJsonKeyMap, setShowJsonKeyMap] = useState(false);
   const [showMainApiKey, setShowMainApiKey] = useState(false);
   const [showExtApiKey, setShowExtApiKey] = useState(false);
-  const [feishu, setFeishu] = useState<FeishuConfig>({ appId: '', appSecret: '' });
+  const [feishu, setFeishu] = useState<FeishuConfig>({ appId: '', appSecret: '', webBaseUrl: '' });
   const [feishuLoading, setFeishuLoading] = useState(false);
   const [feishuSaveStatus, setFeishuSaveStatus] = useState<'idle' | 'success' | 'error'>('idle');
   const [feishuTestLoading, setFeishuTestLoading] = useState(false);
@@ -200,6 +200,7 @@ export const Settings: React.FC = () => {
       const next: FeishuConfig = {
         appId: feishu.appId.trim(),
         appSecret: feishu.appSecret,
+        webBaseUrl: feishu.webBaseUrl.trim(),
       };
       await saveFeishuSettings(next);
       setFeishuSaveStatus('success');
@@ -568,6 +569,21 @@ export const Settings: React.FC = () => {
                 {showFeishuSecret ? <EyeOff size={18} aria-hidden /> : <Eye size={18} aria-hidden />}
               </button>
             </div>
+          </div>
+          <div className="md:col-span-2">
+            <label className="block text-sm font-medium text-slate-700 mb-1">飞书网页域名</label>
+            <input
+              type="text"
+              value={feishu.webBaseUrl}
+              onChange={(e) => setFeishu((f) => ({ ...f, webBaseUrl: e.target.value }))}
+              placeholder="https://your-company.feishu.cn"
+              autoComplete="off"
+              className="w-full px-4 py-2 border border-gray-200 rounded-lg font-mono text-sm focus:outline-none focus:ring-2 focus:ring-violet-500/20 focus:border-violet-500"
+            />
+            <p className="mt-1 text-xs text-slate-500">
+              用于生成可分享的文件页链接（形如 <code className="bg-slate-100 px-1 rounded">域名/file/&#123;token&#125;</code>
+              ）。在浏览器打开任意云空间文件，从地址栏复制域名即可；不要填 open.feishu.cn。
+            </p>
           </div>
         </div>
 

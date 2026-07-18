@@ -6,7 +6,36 @@ export const FEISHU_SETTINGS_KEY = 'feishu_config';
 export type FeishuConfig = {
   appId: string;
   appSecret: string;
+  /**
+   * 企业飞书网页域名，用于生成可分享的文件页链接（如 https://xxx.feishu.cn）。
+   * 勿填 open.feishu.cn。
+   */
+  webBaseUrl: string;
 };
+
+/** 规范化企业网页域名；非法或 open.* 主机返回空串 */
+export function normalizeFeishuWebBaseUrl(raw: unknown): string {
+  let s = String(raw ?? '')
+    .trim()
+    .replace(/\/+$/, '');
+  if (!s) return '';
+  if (!/^https?:\/\//i.test(s)) s = `https://${s}`;
+  try {
+    const u = new URL(s);
+    if (/^open\./i.test(u.hostname)) return '';
+    return `${u.protocol}//${u.host}`;
+  } catch {
+    return '';
+  }
+}
+
+/** 飞书云空间文件网页链接（浏览器可打开预览/下载；需账号有权限） */
+export function buildFeishuFileWebUrl(fileToken: string, webBaseUrl: string): string {
+  const tok = String(fileToken ?? '').trim();
+  const base = normalizeFeishuWebBaseUrl(webBaseUrl);
+  if (!tok || !base) return '';
+  return `${base}/file/${encodeURIComponent(tok)}`;
+}
 
 export async function fetchFeishuSettings(): Promise<FeishuConfig | null> {
   const { data, error } = await supabase
@@ -24,6 +53,7 @@ export async function fetchFeishuSettings(): Promise<FeishuConfig | null> {
   return {
     appId: typeof value.appId === 'string' ? value.appId.trim() : '',
     appSecret: typeof value.appSecret === 'string' ? value.appSecret : '',
+    webBaseUrl: normalizeFeishuWebBaseUrl(value.webBaseUrl ?? value.web_base_url),
   };
 }
 
@@ -34,6 +64,7 @@ export async function saveFeishuSettings(config: FeishuConfig): Promise<void> {
       value: {
         appId: config.appId?.trim() ?? '',
         appSecret: config.appSecret ?? '',
+        webBaseUrl: normalizeFeishuWebBaseUrl(config.webBaseUrl),
       },
     },
     { onConflict: 'key' },

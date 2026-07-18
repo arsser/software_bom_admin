@@ -161,17 +161,22 @@ function resolveMiddleDirFromRow(bomRow, keyMap) {
 async function loadFeishuAppCreds(supabase) {
   const envId = safeTrim(process.env.FEISHU_APP_ID);
   const envSecret = safeTrim(process.env.FEISHU_APP_SECRET);
-  if (envId && envSecret) return { appId: envId, appSecret: envSecret };
+  const envWeb = safeTrim(process.env.FEISHU_WEB_BASE_URL);
   const { data, error } = await supabase.from('system_settings').select('value').eq('key', 'feishu_config').maybeSingle();
   if (error) {
     log('WARN load feishu_config', error.message);
-    return { appId: '', appSecret: '' };
   }
   const v = (data?.value ?? {}) instanceof Object ? /** @type {Record<string, unknown>} */ (data.value) : {};
-  return {
-    appId: typeof v.appId === 'string' ? v.appId.trim() : '',
-    appSecret: typeof v.appSecret === 'string' ? String(v.appSecret).trim() : '',
-  };
+  const appId = envId || (typeof v.appId === 'string' ? v.appId.trim() : '');
+  const appSecret = envSecret || (typeof v.appSecret === 'string' ? String(v.appSecret).trim() : '');
+  const webBaseUrl =
+    envWeb ||
+    (typeof v.webBaseUrl === 'string'
+      ? v.webBaseUrl.trim()
+      : typeof v.web_base_url === 'string'
+        ? v.web_base_url.trim()
+        : '');
+  return { appId, appSecret, webBaseUrl };
 }
 
 /**
@@ -819,7 +824,7 @@ export async function executeFeishuUploadJob(supabase, rootAbs, job, tuning) {
     return;
   }
 
-  const { appId, appSecret } = await loadFeishuAppCreds(supabase);
+  const { appId, appSecret, webBaseUrl } = await loadFeishuAppCreds(supabase);
   if (!appId || !appSecret) {
     await patchFeishuUploadJob(supabase, jobId, {
       status: 'failed',
@@ -1176,6 +1181,7 @@ export async function executeFeishuUploadJob(supabase, rootAbs, job, tuning) {
               md5: md5Lower,
               sizeBytes,
               fileToken,
+              webBaseUrl,
             });
           }
 

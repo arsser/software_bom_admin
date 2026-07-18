@@ -11,9 +11,9 @@ import {
   safePathSegment,
 } from './extArtifactorySync.mjs';
 import {
-  buildFeishuFileDownloadUrl,
   buildFeishuPackageRelPath,
   loadFeishuPackageManifest,
+  resolvePackageManifestDownloadUrl,
 } from './feishuPackageManifest.mjs';
 
 /** 版本目录下固定表格标题（覆盖更新时按此名查找并删除旧表） */
@@ -335,8 +335,74 @@ function readFeishuPresentMeta(status) {
   };
 }
 
+/** 追加在完整 BOM 列之后的清单扩展列（避免与 bom_row 键冲突时改用带前缀名） */
+const EXTRA_SHEET_HEADERS = ['文件大小', '相对路径', '下载链接', '上传时间'];
+
+/**
+ * 0-based 列索引 → Excel/飞书列字母（A, B, …, Z, AA, …）
+ * @param {number} index0
+ */
+function colIndexToLetters(index0) {
+  let n = Math.trunc(index0) + 1;
+  if (!Number.isFinite(n) || n < 1) return 'A';
+  let s = '';
+  while (n > 0) {
+    const r = (n - 1) % 26;
+    s = String.fromCharCode(65 + r) + s;
+    n = Math.floor((n - 1) / 26);
+  }
+  return s;
+}
+
+/**
+ * @param {unknown} v
+ */
+function cellFromBomValue(v) {
+  if (v == null) return '';
+  if (typeof v === 'string' || typeof v === 'number' || typeof v === 'boolean') return v;
+  try {
+    return JSON.stringify(v);
+  } catch {
+    return String(v);
+  }
+}
+
+/**
+ * 汇总完整 BOM 列：jsonKeyMap 规范首键优先，其余按行出现顺序追加。
+ * @param {ReturnType<typeof mergeKeyMap>} keyMap
+ * @param {Array<Record<string, unknown>>} bomRows
+ * @returns {string[]}
+ */
+function collectBomColumnKeys(keyMap, bomRows) {
+  const reserved = new Set(EXTRA_SHEET_HEADERS);
+  /** @type {string[]} */
+  const ordered = [];
+  const seen = new Set();
+
+  const prefer = [];
+  for (const aliases of Object.values(keyMap || {})) {
+    if (!Array.isArray(aliases) || !aliases.length) continue;
+    const first = safeTrim(aliases[0]);
+    if (first) prefer.push(first);
+  }
+  for (const k of prefer) {
+    if (reserved.has(k) || seen.has(k)) continue;
+    seen.add(k);
+    ordered.push(k);
+  }
+  for (const row of bomRows) {
+    for (const k of Object.keys(row)) {
+      if (!k || reserved.has(k) || seen.has(k)) continue;
+      seen.add(k);
+      ordered.push(k);
+    }
+  }
+  return ordered;
+}
+
 /**
  * 根据当前批次已对齐飞书的行，在版本目录下覆盖生成「软件包清单」电子表格。
+ * 列 = 完整 bom_row 列 + 文件大小 + 相对路径 + 下载链接（meta）+ 上传时间。
  *
  * @param {object} p
  * @param {string} p.accessToken
@@ -345,23 +411,39 @@ function readFeishuPresentMeta(status) {
  * @param {ReturnType<typeof mergeKeyMap>} p.keyMap
  * @param {Array<{ bom_row?: unknown, status?: unknown }>} p.rows
  * @param {Awaited<ReturnType<typeof loadFeishuPackageManifest>> | null} [p.packageManifest]
+ * @param {string} [p.webBaseUrl]
  * @returns {Promise<{ spreadsheetToken: string, url: string, rowCount: number }>}
  */
 export async function generateVersionPackageSheet(p) {
-  const { accessToken, rootFolderToken, batchDir, keyMap, rows, packageManifest } = p;
+  const { accessToken, rootFolderToken, batchDir, keyMap, rows, packageManifest, webBaseUrl } = p;
   const versionFolder = await ensureFolderPath(accessToken, rootFolderToken, [batchDir]);
   await removeSameNameSheetIfAny(accessToken, versionFolder, VERSION_PACKAGE_SHEET_TITLE);
 
-  const header = ['序号', '模块/组件', '文件名', 'MD5', '大小(字节)', '下载链接', '说明'];
-  /** @type {unknown[][]} */
-  const values = [header];
-  let seq = 0;
-
+  /** @type {Array<{ bomRow: Record<string, unknown>, meta: NonNullable<ReturnType<typeof readFeishuPresentMeta>> }>} */
+  const present = [];
   for (const r of rows) {
     const meta = readFeishuPresentMeta(r.status);
     if (!meta) continue;
     const bomRow =
-      r.bom_row && typeof r.bom_row === 'object' ? /** @type {Record<string, unknown>} */ (r.bom_row) : {};
+      r.bom_row && typeof r.bom_row === 'object' && !Array.isArray(r.bom_row)
+        ? /** @type {Record<string, unknown>} */ (r.bom_row)
+        : {};
+    present.push({ bomRow, meta });
+  }
+
+  if (!present.length) {
+    throw new Error('当前版本没有 feishu=present 的行，无法生成软件包清单');
+  }
+
+  const bomKeys = collectBomColumnKeys(
+    keyMap,
+    present.map((x) => x.bomRow),
+  );
+  const header = [...bomKeys, ...EXTRA_SHEET_HEADERS];
+  /** @type {unknown[][]} */
+  const values = [header];
+
+  for (const { bomRow, meta } of present) {
     const md5Raw = firstNonEmptyByKeysRelaxed(bomRow, keyMap.expectedMd5);
     const md5 = md5Raw && isValidMd5Hex(md5Raw) ? md5Raw.trim().toLowerCase() : '';
     const middleDir = resolveMiddleDirFromRow(bomRow, keyMap);
@@ -369,37 +451,31 @@ export async function generateVersionPackageSheet(p) {
       middleDir ? [batchDir, middleDir] : [batchDir],
       meta.fileName,
     );
-    const downloadUrl = buildFeishuFileDownloadUrl(meta.fileToken);
+    const byName = packageManifest?.byFileName?.get(meta.fileName.normalize('NFKC')) ?? null;
     const manifestHit =
-      packageManifest && md5
-        ? packageManifest.byFileName.get(meta.fileName.normalize('NFKC'))
-        : null;
-    let note = '本版本目录';
-    if (manifestHit?.rel_path) {
-      const mRel = manifestHit.rel_path.normalize('NFKC');
-      if (mRel !== expectedRel.normalize('NFKC') && !mRel.startsWith(`${batchDir}/`)) {
-        note = `复用前序：${mRel}`;
-      } else if (mRel !== expectedRel.normalize('NFKC')) {
-        note = `清单路径：${mRel}`;
-      }
-    }
+      byName && (!md5 || !byName.md5 || byName.md5 === md5) ? byName : byName || null;
 
-    seq += 1;
-    values.push([
-      seq,
-      middleDir || '',
-      meta.fileName,
-      md5 || '',
-      meta.sizeBytes,
-      downloadUrl
-        ? { type: 'url', text: '下载', link: downloadUrl }
-        : '',
-      note,
-    ]);
-  }
+    const sizeBytes =
+      manifestHit && Number.isFinite(manifestHit.size_bytes) && manifestHit.size_bytes >= 0
+        ? manifestHit.size_bytes
+        : meta.sizeBytes;
+    const relPath = (manifestHit?.rel_path || expectedRel || '').normalize('NFKC');
+    const downloadUrl = resolvePackageManifestDownloadUrl(
+      meta.fileToken,
+      webBaseUrl,
+      manifestHit?.download_url,
+    );
+    const uploadedAt = typeof manifestHit?.uploaded_at === 'string' ? manifestHit.uploaded_at : '';
 
-  if (seq === 0) {
-    throw new Error('当前版本没有 feishu=present 的行，无法生成软件包清单');
+    /** @type {unknown[]} */
+    const rowCells = bomKeys.map((k) => cellFromBomValue(bomRow[k]));
+    rowCells.push(
+      sizeBytes,
+      relPath,
+      downloadUrl ? { type: 'url', text: '下载', link: downloadUrl } : '',
+      uploadedAt,
+    );
+    values.push(rowCells);
   }
 
   const { spreadsheetToken, url } = await createSpreadsheet(
@@ -409,15 +485,17 @@ export async function generateVersionPackageSheet(p) {
   );
   const sheetId = await queryFirstSheetId(accessToken, spreadsheetToken);
   const endRow = values.length;
-  const range = `${sheetId}!A1:G${endRow}`;
+  const endCol = colIndexToLetters(header.length - 1);
+  const range = `${sheetId}!A1:${endCol}${endRow}`;
   await putSheetValues(accessToken, spreadsheetToken, range, values);
 
   log('feishu-version-sheet generated', {
     batchDir,
-    rowCount: seq,
+    rowCount: present.length,
+    cols: header.length,
     spreadsheetToken: spreadsheetToken.slice(0, 12),
   });
-  return { spreadsheetToken, url, rowCount: seq };
+  return { spreadsheetToken, url, rowCount: present.length };
 }
 
 /**
@@ -426,7 +504,7 @@ export async function generateVersionPackageSheet(p) {
  * @param {import('@supabase/supabase-js').SupabaseClient} supabase
  * @param {string} accessToken
  * @param {string} batchId
- * @param {{ packageManifest?: Awaited<ReturnType<typeof loadFeishuPackageManifest>> | null }} [opts]
+ * @param {{ packageManifest?: Awaited<ReturnType<typeof loadFeishuPackageManifest>> | null, webBaseUrl?: string }} [opts]
  */
 export async function generateVersionPackageSheetForBatch(supabase, accessToken, batchId, opts = {}) {
   const scannerVal = await fetchBomScannerValue(supabase);
@@ -465,5 +543,6 @@ export async function generateVersionPackageSheetForBatch(supabase, accessToken,
     keyMap,
     rows: rowList ?? [],
     packageManifest,
+    webBaseUrl: opts.webBaseUrl,
   });
 }

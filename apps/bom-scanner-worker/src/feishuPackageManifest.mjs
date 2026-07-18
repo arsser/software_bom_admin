@@ -13,13 +13,58 @@ const FEISHU_SIZE_FETCH_GAP_MS = 280;
 const FEISHU_SIZE_BACKOFF_MS = [700, 1400, 2800];
 
 /**
- * 飞书开放平台文件下载 URL（需 Bearer token 才能实际下载）。
+ * 飞书开放平台文件下载 URL（需 Bearer token；仅供服务端 API 拉取，不可给浏览器直接打开）。
  * @param {string} fileToken
  */
 export function buildFeishuFileDownloadUrl(fileToken) {
   const tok = safeTrim(fileToken);
   if (!tok) return '';
   return `https://open.feishu.cn/open-apis/drive/v1/files/${encodeURIComponent(tok)}/download`;
+}
+
+/**
+ * 规范化企业飞书网页域名（如 https://xxx.feishu.cn）；拒绝 open.* 主机。
+ * @param {unknown} raw
+ */
+export function normalizeFeishuWebBaseUrl(raw) {
+  let s = String(raw ?? '')
+    .trim()
+    .replace(/\/+$/, '');
+  if (!s) return '';
+  if (!/^https?:\/\//i.test(s)) s = `https://${s}`;
+  try {
+    const u = new URL(s);
+    if (/^open\./i.test(u.hostname)) return '';
+    return `${u.protocol}//${u.host}`;
+  } catch {
+    return '';
+  }
+}
+
+/**
+ * 飞书云空间文件网页链接（用户可分享、浏览器打开后预览/下载；需账号有权限）。
+ * @param {string} fileToken
+ * @param {string} [webBaseUrl]
+ */
+export function buildFeishuFileWebUrl(fileToken, webBaseUrl) {
+  const tok = safeTrim(fileToken);
+  const base = normalizeFeishuWebBaseUrl(webBaseUrl);
+  if (!tok || !base) return '';
+  return `${base}/file/${encodeURIComponent(tok)}`;
+}
+
+/**
+ * 清单/表格展示用链接：优先企业网页链接；未配置域名时回退空（勿写 OpenAPI download）。
+ * @param {string} fileToken
+ * @param {string} [webBaseUrl]
+ * @param {string} [existingUrl]
+ */
+export function resolvePackageManifestDownloadUrl(fileToken, webBaseUrl, existingUrl) {
+  const web = buildFeishuFileWebUrl(fileToken, webBaseUrl);
+  if (web) return web;
+  const existing = safeTrim(existingUrl);
+  if (existing && !/open\.feishu\.cn\/open-apis\//i.test(existing)) return existing;
+  return '';
 }
 
 function sleep(ms) {
@@ -287,9 +332,10 @@ export function buildFeishuPackageRelPath(pathSegments, fileName) {
 
 /**
  * @param {unknown} raw
+ * @param {string} [webBaseUrl]
  * @returns {FeishuPackageManifestEntry | null}
  */
-function normalizeEntry(raw) {
+function normalizeEntry(raw, webBaseUrl) {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
   const o = /** @type {Record<string, unknown>} */ (raw);
   const fileName = safeFlatFilename(safeTrim(o.file_name || o.fileName)).normalize('NFKC');
@@ -308,7 +354,7 @@ function normalizeEntry(raw) {
     md5,
     size_bytes: Math.trunc(sizeBytes),
     file_token: fileToken,
-    download_url: downloadUrlRaw || buildFeishuFileDownloadUrl(fileToken),
+    download_url: resolvePackageManifestDownloadUrl(fileToken, webBaseUrl, downloadUrlRaw),
     uploaded_at:
       typeof o.uploaded_at === 'string'
         ? o.uploaded_at
@@ -320,9 +366,10 @@ function normalizeEntry(raw) {
 
 /**
  * @param {string} [jsonText]
+ * @param {string} [webBaseUrl]
  * @returns {FeishuPackageManifestState}
  */
-export function createEmptyPackageManifest(jsonText) {
+export function createEmptyPackageManifest(jsonText, webBaseUrl) {
   /** @type {FeishuPackageManifestEntry[]} */
   const entries = [];
   if (jsonText && jsonText.trim()) {
@@ -336,7 +383,7 @@ export function createEmptyPackageManifest(jsonText) {
             ? parsed
             : [];
       for (const item of list) {
-        const e = normalizeEntry(item);
+        const e = normalizeEntry(item, webBaseUrl);
         if (e) entries.push(e);
       }
     } catch (err) {
@@ -437,7 +484,7 @@ export function findPackageManifestHit(state, q) {
 
 /**
  * @param {FeishuPackageManifestState} state
- * @param {{ relPath: string, fileName: string, md5: string, sizeBytes: number, fileToken: string }} p
+ * @param {{ relPath: string, fileName: string, md5: string, sizeBytes: number, fileToken: string, webBaseUrl?: string }} p
  */
 export function upsertPackageManifestEntry(state, p) {
   const fileName = safeFlatFilename(p.fileName).normalize('NFKC');
@@ -461,7 +508,7 @@ export function upsertPackageManifestEntry(state, p) {
     md5,
     size_bytes: sizeBytes,
     file_token: fileToken,
-    download_url: buildFeishuFileDownloadUrl(fileToken),
+    download_url: resolvePackageManifestDownloadUrl(fileToken, p.webBaseUrl),
     uploaded_at: new Date().toISOString(),
   };
   state.byFileName.set(fileName, entry);
@@ -603,12 +650,14 @@ async function walkDriveFiles(accessToken, folderToken, prefix, out, opts = {}) 
  * @param {string} rootFolderToken
  * @param {{
  *   localByFileName?: Map<string, { md5: string, sizeBytes: number }>,
+ *   webBaseUrl?: string,
  *   onProgress?: (info: { scanned: number, total: number, message: string }) => void | Promise<void>,
  * }} [opts]
  * @returns {Promise<{ state: FeishuPackageManifestState, filesFound: number, withMd5: number, withoutMd5: number }>}
  */
 export async function rebuildFeishuPackageManifestFromDrive(accessToken, rootFolderToken, opts = {}) {
   const localByFileName = opts.localByFileName instanceof Map ? opts.localByFileName : new Map();
+  const webBaseUrl = normalizeFeishuWebBaseUrl(opts.webBaseUrl);
   const prev = await loadFeishuPackageManifest(accessToken, rootFolderToken);
 
   /** @type {Array<{ relPath: string, fileName: string, fileToken: string }>} */
@@ -662,7 +711,7 @@ export async function rebuildFeishuPackageManifestFromDrive(accessToken, rootFol
       md5,
       size_bytes: sizeBytes,
       file_token: f.fileToken,
-      download_url: buildFeishuFileDownloadUrl(f.fileToken),
+      download_url: resolvePackageManifestDownloadUrl(f.fileToken, webBaseUrl, old?.download_url),
       uploaded_at: old?.uploaded_at || new Date().toISOString(),
     };
     next.byFileName.set(entry.file_name, entry);

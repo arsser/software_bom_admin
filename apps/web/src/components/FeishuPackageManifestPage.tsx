@@ -1,19 +1,28 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Link } from 'react-router-dom';
 import {
   AlertCircle,
+  ArrowDown,
+  ArrowUp,
   CheckCircle2,
+  ChevronsUpDown,
   ClipboardCopy,
   ExternalLink,
   FileJson,
+  FolderOpen,
+  GripHorizontal,
   Loader2,
   RefreshCw,
   Search,
+  Table2,
 } from 'lucide-react';
 import { fetchProducts, type Product } from '../lib/products';
 import {
   fetchFeishuPackageManifest,
+  fetchFeishuProductVersionDirs,
   requestFeishuPackageManifestRefresh,
   type FeishuPackageManifestEntry,
+  type FeishuProductVersionDir,
 } from '../lib/feishuPackageManifest';
 import {
   BOM_FEISHU_MANIFEST_JOB_STATUS_LABEL,
@@ -21,6 +30,13 @@ import {
   feishuManifestJobIsActive,
   type BomFeishuManifestJob,
 } from '../lib/feishuPackageManifestJobs';
+import {
+  BOM_FEISHU_VERSION_SHEET_JOB_STATUS_LABEL,
+  fetchBomFeishuVersionSheetJobsForBatch,
+  feishuVersionSheetJobIsActive,
+  requestBomFeishuVersionSheet,
+  type BomFeishuVersionSheetJob,
+} from '../lib/bomFeishuVersionSheet';
 
 function formatBytes(n: number): string {
   if (!Number.isFinite(n) || n < 0) return '-';
@@ -39,11 +55,72 @@ function formatTime(iso: string | null | undefined): string {
   }
 }
 
+const META_COL_KEYS = [
+  'rel_path',
+  'file_name',
+  'md5',
+  'size',
+  'download_url',
+  'file_token',
+  'uploaded_at',
+] as const;
+type MetaColKey = (typeof META_COL_KEYS)[number];
+
+const META_COL_DEFAULT_WIDTHS: Record<MetaColKey, number> = {
+  rel_path: 220,
+  file_name: 160,
+  md5: 240,
+  size: 90,
+  download_url: 280,
+  file_token: 120,
+  uploaded_at: 150,
+};
+
+const META_COL_MIN_WIDTH = 64;
+
+const META_COL_LABELS: Record<MetaColKey, string> = {
+  rel_path: '相对路径',
+  file_name: '文件名',
+  md5: 'MD5',
+  size: '大小',
+  download_url: '文件链接',
+  file_token: 'file_token',
+  uploaded_at: '上传时间',
+};
+
+const META_PANEL_MIN_H = 200;
+const META_PANEL_MAX_H = 900;
+const META_PANEL_DEFAULT_H = 360;
+
+type MetaSortDir = 'asc' | 'desc';
+
+function entrySortValue(e: FeishuPackageManifestEntry, key: MetaColKey): string | number {
+  switch (key) {
+    case 'rel_path':
+      return e.rel_path || '';
+    case 'file_name':
+      return e.file_name || '';
+    case 'md5':
+      return e.md5 || '';
+    case 'size':
+      return Number.isFinite(e.size_bytes) ? e.size_bytes : -1;
+    case 'download_url':
+      return e.download_url || '';
+    case 'file_token':
+      return e.file_token || '';
+    case 'uploaded_at':
+      return e.uploaded_at || '';
+    default:
+      return '';
+  }
+}
+
 export const FeishuPackageManifestPage: React.FC = () => {
   const [products, setProducts] = useState<Product[]>([]);
   const [productId, setProductId] = useState('');
   const [loadingProducts, setLoadingProducts] = useState(true);
   const [loadingManifest, setLoadingManifest] = useState(false);
+  const [loadingDirs, setLoadingDirs] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [info, setInfo] = useState<string | null>(null);
@@ -51,8 +128,94 @@ export const FeishuPackageManifestPage: React.FC = () => {
   const [updatedAt, setUpdatedAt] = useState<string | null>(null);
   const [entries, setEntries] = useState<FeishuPackageManifestEntry[]>([]);
   const [jobs, setJobs] = useState<BomFeishuManifestJob[]>([]);
+  const [dirs, setDirs] = useState<FeishuProductVersionDir[]>([]);
+  const [sheetTitle, setSheetTitle] = useState('软件包清单');
   const [query, setQuery] = useState('');
   const [copiedToken, setCopiedToken] = useState<string | null>(null);
+  const [generatingBatchId, setGeneratingBatchId] = useState<string | null>(null);
+  const [versionSheetJobsByBatch, setVersionSheetJobsByBatch] = useState<
+    Record<string, BomFeishuVersionSheetJob[]>
+  >({});
+  const [metaColWidths, setMetaColWidths] = useState<Record<MetaColKey, number>>(() => ({
+    ...META_COL_DEFAULT_WIDTHS,
+  }));
+  const [metaSortKey, setMetaSortKey] = useState<MetaColKey | null>(null);
+  const [metaSortDir, setMetaSortDir] = useState<MetaSortDir>('asc');
+  const [metaPanelHeight, setMetaPanelHeight] = useState(META_PANEL_DEFAULT_H);
+  const metaResizeRef = useRef<{
+    key: MetaColKey;
+    startX: number;
+    startW: number;
+  } | null>(null);
+  const metaHeightResizeRef = useRef<{ startY: number; startH: number } | null>(null);
+
+  const metaTableWidth = useMemo(
+    () => META_COL_KEYS.reduce((sum, k) => sum + metaColWidths[k], 0),
+    [metaColWidths],
+  );
+
+  const onMetaColResizeStart = useCallback((key: MetaColKey, e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    metaResizeRef.current = { key, startX: e.clientX, startW: metaColWidths[key] };
+    const onMove = (ev: MouseEvent) => {
+      const cur = metaResizeRef.current;
+      if (!cur) return;
+      const next = Math.max(META_COL_MIN_WIDTH, cur.startW + (ev.clientX - cur.startX));
+      setMetaColWidths((prev) => (prev[cur.key] === next ? prev : { ...prev, [cur.key]: next }));
+    };
+    const onUp = () => {
+      metaResizeRef.current = null;
+      document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('mouseup', onUp);
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+    };
+    document.body.style.cursor = 'col-resize';
+    document.body.style.userSelect = 'none';
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
+  }, [metaColWidths]);
+
+  const onMetaPanelHeightResizeStart = useCallback(
+    (e: React.MouseEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+      metaHeightResizeRef.current = { startY: e.clientY, startH: metaPanelHeight };
+      const onMove = (ev: MouseEvent) => {
+        const cur = metaHeightResizeRef.current;
+        if (!cur) return;
+        const next = Math.min(
+          META_PANEL_MAX_H,
+          Math.max(META_PANEL_MIN_H, cur.startH + (ev.clientY - cur.startY)),
+        );
+        setMetaPanelHeight(next);
+      };
+      const onUp = () => {
+        metaHeightResizeRef.current = null;
+        document.removeEventListener('mousemove', onMove);
+        document.removeEventListener('mouseup', onUp);
+        document.body.style.cursor = '';
+        document.body.style.userSelect = '';
+      };
+      document.body.style.cursor = 'row-resize';
+      document.body.style.userSelect = 'none';
+      document.addEventListener('mousemove', onMove);
+      document.addEventListener('mouseup', onUp);
+    },
+    [metaPanelHeight],
+  );
+
+  const toggleMetaSort = useCallback((key: MetaColKey) => {
+    setMetaSortKey((prev) => {
+      if (prev !== key) {
+        setMetaSortDir('asc');
+        return key;
+      }
+      setMetaSortDir((d) => (d === 'asc' ? 'desc' : 'asc'));
+      return key;
+    });
+  }, []);
 
   const selectedProduct = useMemo(
     () => products.find((p) => p.id === productId) ?? null,
@@ -72,7 +235,39 @@ export const FeishuPackageManifestPage: React.FC = () => {
     });
   }, [entries, query]);
 
+  const sortedEntries = useMemo(() => {
+    if (!metaSortKey) return filteredEntries;
+    const dir = metaSortDir === 'asc' ? 1 : -1;
+    const key = metaSortKey;
+    return [...filteredEntries].sort((a, b) => {
+      const va = entrySortValue(a, key);
+      const vb = entrySortValue(b, key);
+      if (typeof va === 'number' && typeof vb === 'number') {
+        if (va === vb) return 0;
+        return va < vb ? -dir : dir;
+      }
+      return String(va).localeCompare(String(vb), 'zh', { numeric: true, sensitivity: 'base' }) * dir;
+    });
+  }, [filteredEntries, metaSortKey, metaSortDir]);
+
+  const filteredSizeTotal = useMemo(
+    () =>
+      filteredEntries.reduce(
+        (sum, e) => sum + (Number.isFinite(e.size_bytes) && e.size_bytes > 0 ? e.size_bytes : 0),
+        0,
+      ),
+    [filteredEntries],
+  );
+
   const activeJob = useMemo(() => jobs.find((j) => feishuManifestJobIsActive(j.status)) ?? null, [jobs]);
+
+  const activeVersionSheetBatchIds = useMemo(() => {
+    const ids = new Set<string>();
+    for (const [batchId, list] of Object.entries(versionSheetJobsByBatch)) {
+      if (list.some((j) => feishuVersionSheetJobIsActive(j.status))) ids.add(batchId);
+    }
+    return ids;
+  }, [versionSheetJobsByBatch]);
 
   const loadProducts = useCallback(async () => {
     setLoadingProducts(true);
@@ -124,13 +319,59 @@ export const FeishuPackageManifestPage: React.FC = () => {
       setExists(res.exists);
       setUpdatedAt(res.updated_at);
       setEntries(res.entries);
-      setInfo(res.message ?? null);
+      if (res.message) setInfo(res.message);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
       setLoadingManifest(false);
     }
   }, []);
+
+  const loadVersionSheetJobsForDirs = useCallback(async (dirList: FeishuProductVersionDir[]) => {
+    const batchIds = [...new Set(dirList.map((d) => d.batchId).filter((x): x is string => Boolean(x)))];
+    if (!batchIds.length) {
+      setVersionSheetJobsByBatch({});
+      return;
+    }
+    const entriesPairs = await Promise.all(
+      batchIds.map(async (batchId) => {
+        try {
+          const list = await fetchBomFeishuVersionSheetJobsForBatch(batchId, 4);
+          return [batchId, list] as const;
+        } catch {
+          return [batchId, [] as BomFeishuVersionSheetJob[]] as const;
+        }
+      }),
+    );
+    setVersionSheetJobsByBatch(Object.fromEntries(entriesPairs));
+  }, []);
+
+  const loadDirs = useCallback(
+    async (pid: string) => {
+      if (!pid) {
+        setDirs([]);
+        setVersionSheetJobsByBatch({});
+        return;
+      }
+      setLoadingDirs(true);
+      try {
+        const res = await fetchFeishuProductVersionDirs(pid);
+        if (!res.ok) {
+          setError(res.error);
+          setDirs([]);
+          return;
+        }
+        setSheetTitle(res.sheetTitle);
+        setDirs(res.dirs);
+        await loadVersionSheetJobsForDirs(res.dirs);
+      } catch (e) {
+        setError(e instanceof Error ? e.message : String(e));
+      } finally {
+        setLoadingDirs(false);
+      }
+    },
+    [loadVersionSheetJobsForDirs],
+  );
 
   useEffect(() => {
     void loadProducts();
@@ -140,7 +381,8 @@ export const FeishuPackageManifestPage: React.FC = () => {
     if (!productId) return;
     void loadManifest(productId);
     void loadJobs(productId);
-  }, [productId, loadManifest, loadJobs]);
+    void loadDirs(productId);
+  }, [productId, loadManifest, loadJobs, loadDirs]);
 
   useEffect(() => {
     if (!productId || !activeJob) return;
@@ -150,7 +392,16 @@ export const FeishuPackageManifestPage: React.FC = () => {
     return () => window.clearInterval(t);
   }, [productId, activeJob, loadJobs]);
 
+  useEffect(() => {
+    if (!productId || activeVersionSheetBatchIds.size === 0) return;
+    const t = window.setInterval(() => {
+      void loadVersionSheetJobsForDirs(dirs);
+    }, 2500);
+    return () => window.clearInterval(t);
+  }, [productId, activeVersionSheetBatchIds.size, dirs, loadVersionSheetJobsForDirs]);
+
   const [prevActiveJobId, setPrevActiveJobId] = useState<string | null>(null);
+  const [prevActiveVersionKeys, setPrevActiveVersionKeys] = useState<string>('');
 
   useEffect(() => {
     if (!productId) return;
@@ -166,6 +417,15 @@ export const FeishuPackageManifestPage: React.FC = () => {
     }
     setPrevActiveJobId(curActive?.id ?? null);
   }, [jobs, productId, prevActiveJobId, loadManifest]);
+
+  useEffect(() => {
+    const activeKey = [...activeVersionSheetBatchIds].sort().join(',');
+    if (prevActiveVersionKeys && !activeKey) {
+      void loadDirs(productId);
+      setInfo('版本 BOM 表任务已结束，已刷新目录状态');
+    }
+    setPrevActiveVersionKeys(activeKey);
+  }, [activeVersionSheetBatchIds, prevActiveVersionKeys, productId, loadDirs]);
 
   const handleRefreshScan = async () => {
     if (!productId || refreshing || activeJob) return;
@@ -187,6 +447,30 @@ export const FeishuPackageManifestPage: React.FC = () => {
     }
   };
 
+  const handleGenerateVersionSheet = async (dir: FeishuProductVersionDir) => {
+    if (!dir.batchId) {
+      setError(`目录「${dir.name}」未匹配到本产品 BOM 批次，无法生成表格`);
+      return;
+    }
+    if (generatingBatchId || activeVersionSheetBatchIds.has(dir.batchId)) return;
+    setGeneratingBatchId(dir.batchId);
+    setError(null);
+    setInfo(null);
+    try {
+      const r = await requestBomFeishuVersionSheet(dir.batchId);
+      if (!r.ok) {
+        setError(r.error);
+        return;
+      }
+      setInfo(r.message || `已排队生成「${sheetTitle}」：${dir.name}`);
+      await loadVersionSheetJobsForDirs(dirs);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setGeneratingBatchId(null);
+    }
+  };
+
   const copyText = async (text: string, key: string) => {
     try {
       await navigator.clipboard.writeText(text);
@@ -197,157 +481,210 @@ export const FeishuPackageManifestPage: React.FC = () => {
     }
   };
 
+  const latestJobForBatch = (batchId: string | null): BomFeishuVersionSheetJob | null => {
+    if (!batchId) return null;
+    return versionSheetJobsByBatch[batchId]?.[0] ?? null;
+  };
+
   return (
-    <div className="p-6 max-w-[1400px] mx-auto space-y-6">
-      <div className="flex flex-wrap items-start justify-between gap-4">
-        <div>
-          <h1 className="text-2xl font-bold text-slate-800 flex items-center gap-2">
-            <FileJson className="text-blue-600" size={26} />
+    <div className="p-4 max-w-[1400px] mx-auto space-y-4">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="min-w-0">
+          <h1 className="text-xl font-bold text-slate-800 flex items-center gap-2">
+            <FileJson className="text-blue-600 shrink-0" size={22} />
             飞书软件包清单
           </h1>
-          <p className="mt-1 text-sm text-slate-500">
-            可视化产品根目录下 <code className="text-xs bg-slate-100 px-1 rounded">meta/package-manifest.json</code>
-            ，并可扫描云盘刷新去重清单。
+          <p className="mt-0.5 text-xs text-slate-500 truncate">
+            Meta JSON + 版本目录 BOM 表（含 meta 下载链接）
           </p>
         </div>
-        <div className="flex flex-wrap items-center gap-2">
-          <button
-            type="button"
-            onClick={() => productId && void loadManifest(productId)}
-            disabled={!productId || loadingManifest || Boolean(activeJob)}
-            className="inline-flex items-center gap-2 px-3 py-2 text-sm font-medium rounded-lg bg-white border border-gray-300 text-slate-700 hover:bg-gray-50 disabled:opacity-50"
+        <label className="flex items-center gap-2 min-w-[200px]">
+          <span className="text-xs font-medium text-slate-500 shrink-0">产品</span>
+          <select
+            className="flex-1 rounded-lg border border-gray-300 px-3 py-1.5 text-sm bg-white"
+            value={productId}
+            disabled={loadingProducts}
+            onChange={(e) => setProductId(e.target.value)}
           >
-            {loadingManifest ? <Loader2 size={16} className="animate-spin" /> : <RefreshCw size={16} />}
-            重新加载
-          </button>
-          <button
-            type="button"
-            onClick={() => void handleRefreshScan()}
-            disabled={!productId || refreshing || Boolean(activeJob) || !selectedProduct?.feishuDriveRootFolderToken}
-            className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-lg bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50 shadow-sm"
-          >
-            {refreshing || activeJob ? <Loader2 size={16} className="animate-spin" /> : <Search size={16} />}
-            {activeJob ? '扫描进行中…' : '扫描并刷新清单'}
-          </button>
-        </div>
+            {!products.length ? <option value="">暂无产品</option> : null}
+            {products.map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.name}
+                {!p.feishuDriveRootFolderToken ? '（未配置飞书根目录）' : ''}
+              </option>
+            ))}
+          </select>
+        </label>
       </div>
 
-      <div className="bg-white border border-gray-200 rounded-xl p-4 shadow-sm space-y-4">
-        <div className="flex flex-wrap gap-4 items-end">
-          <label className="flex flex-col gap-1 min-w-[220px]">
-            <span className="text-xs font-medium text-slate-500">产品</span>
-            <select
-              className="rounded-lg border border-gray-300 px-3 py-2 text-sm bg-white"
-              value={productId}
-              disabled={loadingProducts}
-              onChange={(e) => setProductId(e.target.value)}
-            >
-              {!products.length ? <option value="">暂无产品</option> : null}
-              {products.map((p) => (
-                <option key={p.id} value={p.id}>
-                  {p.name}
-                  {!p.feishuDriveRootFolderToken ? '（未配置飞书根目录）' : ''}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label className="flex flex-col gap-1 flex-1 min-w-[200px]">
-            <span className="text-xs font-medium text-slate-500">筛选</span>
+      {error ? (
+        <div className="flex items-start gap-2 text-sm text-red-700 bg-red-50 border border-red-100 rounded-lg px-3 py-2">
+          <AlertCircle size={16} className="mt-0.5 shrink-0" />
+          <span>{error}</span>
+        </div>
+      ) : null}
+      {info && !error ? (
+        <div className="flex items-start gap-2 text-sm text-slate-600 bg-slate-50 border border-slate-100 rounded-lg px-3 py-2">
+          <CheckCircle2 size={16} className="mt-0.5 shrink-0 text-emerald-600" />
+          <span>{info}</span>
+        </div>
+      ) : null}
+
+      {/* Meta JSON */}
+      <section
+        className="relative bg-white border border-gray-200 rounded-xl shadow-sm overflow-hidden flex flex-col"
+        style={{ height: metaPanelHeight }}
+      >
+        <div className="px-3 py-2 border-b border-gray-100 flex flex-wrap items-center justify-between gap-2 shrink-0">
+          <div className="min-w-0 flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
+            <h2 className="text-sm font-semibold text-slate-800 flex items-center gap-1.5">
+              <FileJson size={16} className="text-blue-600" />
+              Meta 清单（JSON）
+            </h2>
+            <p className="text-xs text-slate-500">
+              <code className="bg-slate-100 px-1 rounded">meta/package-manifest.json</code>
+              {exists ? (
+                <>
+                  {' '}
+                  · <span className="font-medium text-slate-700">{entries.length}</span> 条
+                  {query.trim() ? (
+                    <>
+                      {' '}
+                      · 筛选 <span className="font-medium text-slate-700">{filteredEntries.length}</span>
+                    </>
+                  ) : null}
+                  {updatedAt ? ` · ${formatTime(updatedAt)}` : ''}
+                </>
+              ) : (
+                ' · 尚未创建'
+              )}
+            </p>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
             <input
-              className="rounded-lg border border-gray-300 px-3 py-2 text-sm"
-              placeholder="文件名 / 路径 / MD5 / token"
+              className="w-44 sm:w-56 rounded-lg border border-gray-300 px-2.5 py-1.5 text-xs"
+              placeholder="筛选文件名 / 路径 / MD5"
               value={query}
               onChange={(e) => setQuery(e.target.value)}
             />
-          </label>
-          <div className="text-sm text-slate-500 pb-2">
-            {exists ? (
-              <span>
-                共 <span className="font-semibold text-slate-700">{entries.length}</span> 条
-                {updatedAt ? ` · 更新于 ${formatTime(updatedAt)}` : ''}
-              </span>
-            ) : (
-              <span>清单尚未创建</span>
-            )}
+            <button
+              type="button"
+              onClick={() => productId && void loadManifest(productId)}
+              disabled={!productId || loadingManifest || Boolean(activeJob)}
+              className="inline-flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium rounded-lg bg-white border border-gray-300 text-slate-700 hover:bg-gray-50 disabled:opacity-50"
+            >
+              {loadingManifest ? <Loader2 size={14} className="animate-spin" /> : <RefreshCw size={14} />}
+              加载
+            </button>
+            <button
+              type="button"
+              onClick={() => void handleRefreshScan()}
+              disabled={!productId || refreshing || Boolean(activeJob) || !selectedProduct?.feishuDriveRootFolderToken}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50 shadow-sm"
+            >
+              {refreshing || activeJob ? <Loader2 size={14} className="animate-spin" /> : <Search size={14} />}
+              {activeJob ? '扫描中…' : '扫描刷新'}
+            </button>
           </div>
         </div>
 
-        {error ? (
-          <div className="flex items-start gap-2 text-sm text-red-700 bg-red-50 border border-red-100 rounded-lg px-3 py-2">
-            <AlertCircle size={16} className="mt-0.5 shrink-0" />
-            <span>{error}</span>
-          </div>
-        ) : null}
-        {info && !error ? (
-          <div className="flex items-start gap-2 text-sm text-slate-600 bg-slate-50 border border-slate-100 rounded-lg px-3 py-2">
-            <CheckCircle2 size={16} className="mt-0.5 shrink-0 text-emerald-600" />
-            <span>{info}</span>
-          </div>
-        ) : null}
-
         {activeJob ? (
-          <div className="text-sm text-blue-800 bg-blue-50 border border-blue-100 rounded-lg px-3 py-2">
-            任务 {BOM_FEISHU_MANIFEST_JOB_STATUS_LABEL[activeJob.status]}
+          <div className="mx-3 mt-2 shrink-0 text-xs text-blue-800 bg-blue-50 border border-blue-100 rounded-lg px-2.5 py-1.5 truncate">
+            {BOM_FEISHU_MANIFEST_JOB_STATUS_LABEL[activeJob.status]}
             {activeJob.message ? `：${activeJob.message}` : ''}
           </div>
         ) : null}
-      </div>
 
-      <div className="bg-white border border-gray-200 rounded-xl shadow-sm overflow-hidden">
-        <div className="overflow-x-auto">
-          <table className="min-w-full text-sm">
-            <thead className="bg-slate-50 text-slate-600 text-left">
+        <div className="overflow-auto flex-1 min-h-0 border-t border-gray-100">
+          <table className="text-sm table-fixed" style={{ width: metaTableWidth, minWidth: metaTableWidth }}>
+            <colgroup>
+              {META_COL_KEYS.map((k) => (
+                <col key={k} style={{ width: metaColWidths[k] }} />
+              ))}
+            </colgroup>
+            <thead className="bg-slate-50 text-slate-600 text-left sticky top-0 z-10 shadow-sm">
               <tr>
-                <th className="px-4 py-3 font-medium whitespace-nowrap">相对路径</th>
-                <th className="px-4 py-3 font-medium whitespace-nowrap">文件名</th>
-                <th className="px-4 py-3 font-medium whitespace-nowrap">MD5</th>
-                <th className="px-4 py-3 font-medium whitespace-nowrap">大小</th>
-                <th className="px-4 py-3 font-medium whitespace-nowrap">下载 URL</th>
-                <th className="px-4 py-3 font-medium whitespace-nowrap">file_token</th>
-                <th className="px-4 py-3 font-medium whitespace-nowrap">上传时间</th>
+                {META_COL_KEYS.map((k) => {
+                  const active = metaSortKey === k;
+                  return (
+                    <th
+                      key={k}
+                      className="relative px-3 py-2 font-medium whitespace-nowrap overflow-hidden text-ellipsis select-none"
+                      title="点击排序；拖动右缘调列宽"
+                    >
+                      <button
+                        type="button"
+                        onClick={() => toggleMetaSort(k)}
+                        className="inline-flex items-center gap-1 max-w-[calc(100%-6px)] hover:text-slate-900"
+                      >
+                        <span className="truncate">{META_COL_LABELS[k]}</span>
+                        {active ? (
+                          metaSortDir === 'asc' ? (
+                            <ArrowUp size={12} className="shrink-0 text-blue-600" />
+                          ) : (
+                            <ArrowDown size={12} className="shrink-0 text-blue-600" />
+                          )
+                        ) : (
+                          <ChevronsUpDown size={12} className="shrink-0 text-slate-300" />
+                        )}
+                      </button>
+                      <span
+                        role="separator"
+                        aria-orientation="vertical"
+                        aria-label={`调整「${META_COL_LABELS[k]}」列宽`}
+                        onMouseDown={(e) => onMetaColResizeStart(k, e)}
+                        className="absolute top-0 right-0 h-full w-1.5 cursor-col-resize hover:bg-blue-400/50 active:bg-blue-500/60"
+                      />
+                    </th>
+                  );
+                })}
               </tr>
             </thead>
             <tbody>
               {loadingManifest ? (
                 <tr>
-                  <td colSpan={7} className="px-4 py-10 text-center text-slate-500">
+                  <td colSpan={7} className="px-3 py-8 text-center text-slate-500">
                     <Loader2 className="inline animate-spin mr-2" size={16} />
                     加载清单中…
                   </td>
                 </tr>
-              ) : filteredEntries.length === 0 ? (
+              ) : sortedEntries.length === 0 ? (
                 <tr>
-                  <td colSpan={7} className="px-4 py-10 text-center text-slate-400">
-                    {entries.length === 0 ? '暂无条目，可点击「扫描并刷新清单」' : '无匹配筛选结果'}
+                  <td colSpan={7} className="px-3 py-8 text-center text-slate-400">
+                    {entries.length === 0 ? '暂无条目，可点击「扫描刷新」' : '无匹配筛选结果'}
                   </td>
                 </tr>
               ) : (
-                filteredEntries.map((e) => (
+                sortedEntries.map((e) => (
                   <tr key={`${e.rel_path}|${e.file_token}`} className="border-t border-gray-100 hover:bg-slate-50/80">
-                    <td className="px-4 py-3 font-mono text-xs text-slate-700 max-w-[280px] truncate" title={e.rel_path}>
+                    <td className="px-3 py-1.5 font-mono text-xs text-slate-700 truncate" title={e.rel_path}>
                       {e.rel_path || '-'}
                     </td>
-                    <td className="px-4 py-3 text-slate-800 whitespace-nowrap">{e.file_name || '-'}</td>
-                    <td className="px-4 py-3 font-mono text-xs text-slate-600 whitespace-nowrap">
+                    <td className="px-3 py-1.5 text-slate-800 truncate" title={e.file_name}>
+                      {e.file_name || '-'}
+                    </td>
+                    <td className="px-3 py-1.5 font-mono text-xs text-slate-600 truncate" title={e.md5 || undefined}>
                       {e.md5 || <span className="text-amber-600">缺失</span>}
                     </td>
-                    <td className="px-4 py-3 whitespace-nowrap text-slate-600">{formatBytes(e.size_bytes)}</td>
-                    <td className="px-4 py-3 max-w-[260px]">
+                    <td className="px-3 py-1.5 whitespace-nowrap text-slate-600 truncate">
+                      {formatBytes(e.size_bytes)}
+                    </td>
+                    <td className="px-3 py-1.5 overflow-hidden">
                       {e.download_url ? (
-                        <div className="flex items-center gap-1">
+                        <div className="flex items-center gap-1 min-w-0">
                           <a
                             href={e.download_url}
                             target="_blank"
                             rel="noreferrer"
-                            className="text-blue-600 hover:underline truncate text-xs"
-                            title={`${e.download_url}\n（需飞书 access token 才能下载）`}
+                            className="text-blue-600 hover:underline truncate text-xs min-w-0"
+                            title={`${e.download_url}\n（打开飞书文件页，登录后可预览/下载）`}
                           >
                             {e.download_url}
                           </a>
                           <button
                             type="button"
-                            className="p-1 text-slate-400 hover:text-slate-700"
-                            title="复制 URL"
+                            className="p-1 text-slate-400 hover:text-slate-700 shrink-0"
+                            title="复制链接"
                             onClick={() => void copyText(e.download_url, `url-${e.file_token}`)}
                           >
                             {copiedToken === `url-${e.file_token}` ? (
@@ -359,47 +696,188 @@ export const FeishuPackageManifestPage: React.FC = () => {
                           <ExternalLink size={12} className="text-slate-300 shrink-0" />
                         </div>
                       ) : (
-                        '-'
+                        <span
+                          className="text-amber-600 text-xs"
+                          title="系统设置 → 飞书 →「飞书网页域名」（如 https://xxx.feishu.cn），用于拼文件页链接"
+                        >
+                          未配置域名
+                          <Link to="/settings" className="ml-1 text-blue-600 hover:underline">
+                            去设置
+                          </Link>
+                        </span>
                       )}
                     </td>
-                    <td className="px-4 py-3 font-mono text-xs text-slate-500">
+                    <td className="px-3 py-1.5 font-mono text-xs text-slate-500 truncate">
                       <button
                         type="button"
-                        className="hover:text-slate-800"
-                        title="复制 token"
+                        className="hover:text-slate-800 truncate max-w-full"
+                        title={e.file_token}
                         onClick={() => void copyText(e.file_token, `tok-${e.file_token}`)}
                       >
                         {copiedToken === `tok-${e.file_token}` ? '已复制' : `${e.file_token.slice(0, 10)}…`}
                       </button>
                     </td>
-                    <td className="px-4 py-3 whitespace-nowrap text-slate-500">{formatTime(e.uploaded_at)}</td>
+                    <td className="px-3 py-1.5 whitespace-nowrap text-slate-500 text-xs truncate">
+                      {formatTime(e.uploaded_at)}
+                    </td>
                   </tr>
                 ))
               )}
             </tbody>
           </table>
         </div>
-      </div>
 
-      {jobs.length > 0 ? (
-        <div className="bg-white border border-gray-200 rounded-xl p-4 shadow-sm">
-          <h2 className="text-sm font-semibold text-slate-700 mb-3">最近扫描任务</h2>
-          <ul className="space-y-2">
-            {jobs.map((j) => (
-              <li key={j.id} className="text-sm text-slate-600 flex flex-wrap gap-x-3 gap-y-1 border-b border-gray-50 pb-2 last:border-0">
-                <span className="font-medium text-slate-800">{BOM_FEISHU_MANIFEST_JOB_STATUS_LABEL[j.status]}</span>
-                <span className="text-slate-400">{formatTime(j.requestedAt)}</span>
-                <span className="truncate flex-1 min-w-[200px]">{j.message || '-'}</span>
-                {j.status === 'succeeded' ? (
-                  <span className="text-xs text-slate-500">
-                    文件 {j.filesTotal} · MD5 {j.filesWithMd5}/{j.filesTotal}
-                  </span>
-                ) : null}
-              </li>
-            ))}
-          </ul>
+        <div className="px-3 py-1.5 border-t border-gray-100 bg-slate-50/80 shrink-0 flex flex-wrap items-center justify-between gap-2 text-xs text-slate-600">
+          <span>
+            当前列表合计大小{' '}
+            <span className="font-semibold text-slate-800">{formatBytes(filteredSizeTotal)}</span>
+            {query.trim() ? '（筛选后）' : ''}
+            {' · '}
+            {filteredEntries.length} 条
+          </span>
+          {jobs.length > 0 ? (
+            <span className="truncate text-[11px] text-slate-500 max-w-[50%]" title={jobs[0]?.message || ''}>
+              最近任务：{BOM_FEISHU_MANIFEST_JOB_STATUS_LABEL[jobs[0].status]}
+              {jobs[0].message ? ` · ${jobs[0].message}` : ''}
+            </span>
+          ) : null}
         </div>
-      ) : null}
+
+        <div
+          role="separator"
+          aria-orientation="horizontal"
+          aria-label="拖动调整 Meta 清单高度"
+          title="拖动调整高度"
+          onMouseDown={onMetaPanelHeightResizeStart}
+          className="absolute -bottom-px left-0 right-0 h-4 cursor-row-resize flex items-end justify-center pb-0.5 group z-20"
+        >
+          <span className="pointer-events-none inline-flex items-center justify-center h-3.5 w-14 rounded-md border border-slate-300 bg-white text-slate-500 shadow-sm group-hover:border-blue-400 group-hover:text-blue-600 group-active:bg-blue-50">
+            <GripHorizontal size={16} strokeWidth={2.25} />
+          </span>
+        </div>
+      </section>
+
+      {/* Version dirs BOM sheets */}
+      <section className="bg-white border border-gray-200 rounded-xl shadow-sm overflow-hidden flex flex-col max-h-[min(36vh,320px)]">
+        <div className="px-3 py-2 border-b border-gray-100 flex flex-wrap items-center justify-between gap-2 shrink-0">
+          <div className="min-w-0 flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
+            <h2 className="text-sm font-semibold text-slate-800 flex items-center gap-1.5">
+              <FolderOpen size={16} className="text-violet-600" />
+              版本目录 BOM 表
+            </h2>
+            <p className="text-xs text-slate-500 truncate">
+              「{sheetTitle}」· 完整 BOM + 大小/路径/下载链接/上传时间
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={() => productId && void loadDirs(productId)}
+            disabled={!productId || loadingDirs || !selectedProduct?.feishuDriveRootFolderToken}
+            className="inline-flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium rounded-lg bg-white border border-gray-300 text-slate-700 hover:bg-gray-50 disabled:opacity-50"
+          >
+            {loadingDirs ? <Loader2 size={14} className="animate-spin" /> : <RefreshCw size={14} />}
+            刷新目录
+          </button>
+        </div>
+
+        <div className="overflow-auto flex-1 min-h-0">
+          <table className="min-w-full text-sm">
+            <thead className="bg-slate-50 text-slate-600 text-left sticky top-0 z-10 shadow-sm">
+              <tr>
+                <th className="px-3 py-2 font-medium whitespace-nowrap">一级目录</th>
+                <th className="px-3 py-2 font-medium whitespace-nowrap">关联批次</th>
+                <th className="px-3 py-2 font-medium whitespace-nowrap">BOM 表</th>
+                <th className="px-3 py-2 font-medium whitespace-nowrap">最近任务</th>
+                <th className="px-3 py-2 font-medium whitespace-nowrap">操作</th>
+              </tr>
+            </thead>
+            <tbody>
+              {loadingDirs ? (
+                <tr>
+                  <td colSpan={5} className="px-3 py-8 text-center text-slate-500">
+                    <Loader2 className="inline animate-spin mr-2" size={16} />
+                    加载目录中…
+                  </td>
+                </tr>
+              ) : dirs.length === 0 ? (
+                <tr>
+                  <td colSpan={5} className="px-3 py-8 text-center text-slate-400">
+                    暂无一级子目录（或未配置飞书根目录）
+                  </td>
+                </tr>
+              ) : (
+                dirs.map((d) => {
+                  const latest = latestJobForBatch(d.batchId);
+                  const busy =
+                    Boolean(d.batchId && activeVersionSheetBatchIds.has(d.batchId)) ||
+                    generatingBatchId === d.batchId;
+                  return (
+                    <tr key={d.folderToken || d.name} className="border-t border-gray-100 hover:bg-slate-50/80">
+                      <td className="px-3 py-1.5 font-medium text-slate-800 whitespace-nowrap">{d.name}</td>
+                      <td className="px-3 py-1.5 text-slate-600 text-xs">
+                        {d.batchId ? (
+                          <span title={d.batchId}>{d.batchName || d.batchId.slice(0, 8)}</span>
+                        ) : (
+                          <span className="text-amber-600">未匹配批次</span>
+                        )}
+                      </td>
+                      <td className="px-3 py-1.5">
+                        {d.hasSheet && d.sheetUrl ? (
+                          <a
+                            href={d.sheetUrl}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="inline-flex items-center gap-1 text-blue-600 hover:underline text-xs"
+                          >
+                            <Table2 size={14} />
+                            打开表格
+                            <ExternalLink size={12} className="text-slate-300" />
+                          </a>
+                        ) : d.hasSheet ? (
+                          <span className="text-slate-500 text-xs">已有表（未配置网页域名）</span>
+                        ) : (
+                          <span className="text-slate-400 text-xs">尚未生成</span>
+                        )}
+                      </td>
+                      <td className="px-3 py-1.5 text-xs text-slate-500 max-w-[240px] truncate">
+                        {latest ? (
+                          <span title={latest.message || ''}>
+                            {BOM_FEISHU_VERSION_SHEET_JOB_STATUS_LABEL[latest.status]}
+                            {latest.finishedAt || latest.requestedAt
+                              ? ` · ${formatTime(latest.finishedAt || latest.requestedAt)}`
+                              : ''}
+                            {latest.status === 'succeeded' && latest.rowCount
+                              ? ` · ${latest.rowCount} 行`
+                              : ''}
+                          </span>
+                        ) : (
+                          '-'
+                        )}
+                      </td>
+                      <td className="px-3 py-1.5 whitespace-nowrap">
+                        <button
+                          type="button"
+                          onClick={() => void handleGenerateVersionSheet(d)}
+                          disabled={!d.batchId || busy}
+                          className="inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium rounded-lg bg-violet-600 text-white hover:bg-violet-700 disabled:opacity-50"
+                          title={
+                            !d.batchId
+                              ? '需有同名 BOM 批次才能生成'
+                              : '覆盖生成完整 BOM + meta 下载链接'
+                          }
+                        >
+                          {busy ? <Loader2 size={14} className="animate-spin" /> : <Table2 size={14} />}
+                          {busy ? '生成中…' : d.hasSheet ? '重新生成' : '生成 BOM 表'}
+                        </button>
+                      </td>
+                    </tr>
+                  );
+                })
+              )}
+            </tbody>
+          </table>
+        </div>
+      </section>
     </div>
   );
 };

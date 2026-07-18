@@ -8,6 +8,8 @@ const corsHeaders: Record<string, string> = {
 
 const META_DIR = 'meta'
 const MANIFEST_FILE_NAME = 'package-manifest.json'
+/** 与 bom-scanner-worker feishuVersionSheet.VERSION_PACKAGE_SHEET_TITLE 一致 */
+const VERSION_PACKAGE_SHEET_TITLE = '软件包清单'
 const FEISHU_LIST_FOLDER_PAGE_SIZE = 50
 const TIMEOUT_MS = 30000
 
@@ -28,26 +30,83 @@ function buildFeishuFileDownloadUrl(fileToken: string): string {
   return `https://open.feishu.cn/open-apis/drive/v1/files/${encodeURIComponent(tok)}/download`
 }
 
+function normalizeFeishuWebBaseUrl(raw: unknown): string {
+  let s = String(raw ?? '')
+    .trim()
+    .replace(/\/+$/, '')
+  if (!s) return ''
+  if (!/^https?:\/\//i.test(s)) s = `https://${s}`
+  try {
+    const u = new URL(s)
+    if (/^open\./i.test(u.hostname)) return ''
+    return `${u.protocol}//${u.host}`
+  } catch {
+    return ''
+  }
+}
+
+function buildFeishuFileWebUrl(fileToken: string, webBaseUrl: string): string {
+  const tok = safeTrim(fileToken)
+  const base = normalizeFeishuWebBaseUrl(webBaseUrl)
+  if (!tok || !base) return ''
+  return `${base}/file/${encodeURIComponent(tok)}`
+}
+
+function buildFeishuSheetWebUrl(sheetToken: string, webBaseUrl: string): string {
+  const tok = safeTrim(sheetToken)
+  const base = normalizeFeishuWebBaseUrl(webBaseUrl)
+  if (!tok || !base) return ''
+  return `${base}/sheets/${encodeURIComponent(tok)}`
+}
+
+/** 与 worker safePathSegment 对齐，用于批次名 ↔ 一级目录名匹配 */
+function safePathSegment(seg: unknown): string {
+  const t = safeTrim(seg)
+    .normalize('NFKC')
+    .replace(/[/\\?*:|"<>]/g, '_')
+    .replace(/\s+/g, ' ')
+    .slice(0, 160)
+  return t || 'unknown'
+}
+
+function resolvePackageManifestDownloadUrl(
+  fileToken: string,
+  webBaseUrl: string,
+  existingUrl?: string,
+): string {
+  const web = buildFeishuFileWebUrl(fileToken, webBaseUrl)
+  if (web) return web
+  const existing = safeTrim(existingUrl)
+  if (existing && !/open\.feishu\.cn\/open-apis\//i.test(existing)) return existing
+  return ''
+}
+
 async function resolveFeishuAppCreds(
   supabaseUrl: string,
   serviceKey: string,
-): Promise<{ appId: string; appSecret: string }> {
+): Promise<{ appId: string; appSecret: string; webBaseUrl: string }> {
   const envId = safeTrim(Deno.env.get('FEISHU_APP_ID'))
   const envSecret = safeTrim(Deno.env.get('FEISHU_APP_SECRET'))
-  if (envId && envSecret) return { appId: envId, appSecret: envSecret }
+  const envWeb = safeTrim(Deno.env.get('FEISHU_WEB_BASE_URL'))
   const admin = createClient(supabaseUrl, serviceKey, {
     auth: { persistSession: false, autoRefreshToken: false },
   })
   const { data, error } = await admin.from('system_settings').select('value').eq('key', 'feishu_config').maybeSingle()
   if (error) {
     console.warn('read feishu_config:', error.message)
-    return { appId: '', appSecret: '' }
   }
   const v = (data?.value ?? {}) as Record<string, unknown>
-  return {
-    appId: typeof v.appId === 'string' ? v.appId.trim() : '',
-    appSecret: typeof v.appSecret === 'string' ? String(v.appSecret).trim() : '',
-  }
+  const appId = envId || (typeof v.appId === 'string' ? v.appId.trim() : '')
+  const appSecret = envSecret || (typeof v.appSecret === 'string' ? String(v.appSecret).trim() : '')
+  const webBaseUrl = normalizeFeishuWebBaseUrl(
+    envWeb ||
+      (typeof v.webBaseUrl === 'string'
+        ? v.webBaseUrl
+        : typeof v.web_base_url === 'string'
+          ? v.web_base_url
+          : ''),
+  )
+  return { appId, appSecret, webBaseUrl }
 }
 
 async function feishuTenantToken(appId: string, appSecret: string): Promise<string> {
@@ -136,7 +195,10 @@ async function downloadFileText(accessToken: string, fileToken: string): Promise
   return await res.text()
 }
 
-function normalizeManifestJson(rawText: string): {
+function normalizeManifestJson(
+  rawText: string,
+  webBaseUrl = '',
+): {
   version: number
   updated_at: string | null
   entries: Array<Record<string, unknown>>
@@ -161,7 +223,11 @@ function normalizeManifestJson(rawText: string): {
     const o = item as Record<string, unknown>
     const fileToken = safeTrim(o.file_token || o.fileToken)
     if (!fileToken) continue
-    const downloadUrl = safeTrim(o.download_url || o.downloadUrl) || buildFeishuFileDownloadUrl(fileToken)
+    const downloadUrl = resolvePackageManifestDownloadUrl(
+      fileToken,
+      webBaseUrl,
+      safeTrim(o.download_url || o.downloadUrl),
+    )
     entries.push({
       ...o,
       file_token: fileToken,
@@ -232,7 +298,7 @@ serve(async (req) => {
     return jsonResponse({ ok: false, error: '未配置飞书云盘根目录 folder_token（产品分发配置）' }, 400)
   }
 
-  const { appId, appSecret } = await resolveFeishuAppCreds(supabaseUrl, serviceKey)
+  const { appId, appSecret, webBaseUrl } = await resolveFeishuAppCreds(supabaseUrl, serviceKey)
   if (!appId || !appSecret) {
     return jsonResponse({
       ok: false,
@@ -286,8 +352,87 @@ serve(async (req) => {
     })
   }
 
+  if (action === 'list_dirs') {
+    try {
+      const accessToken = await feishuTenantToken(appId, appSecret)
+      const rootItems = await listAllInFolder(accessToken, rootFolder)
+      const { data: batches, error: batchesErr } = await userClient
+        .from('bom_batches')
+        .select('id,name,created_at')
+        .eq('product_id', productId)
+        .order('created_at', { ascending: false })
+      if (batchesErr) {
+        return jsonResponse({ ok: false, error: `读取批次失败：${batchesErr.message}` }, 500)
+      }
+      const batchByDir = new Map<string, { id: string; name: string }>()
+      for (const b of batches ?? []) {
+        const id = safeTrim(b.id)
+        const name = safeTrim(b.name)
+        if (!id || !name) continue
+        const key = safePathSegment(name).normalize('NFKC')
+        if (!batchByDir.has(key)) batchByDir.set(key, { id, name })
+      }
+
+      const wantSheet = VERSION_PACKAGE_SHEET_TITLE.normalize('NFKC')
+      const dirs: Array<{
+        name: string
+        folderToken: string
+        batchId: string | null
+        batchName: string | null
+        sheetToken: string | null
+        sheetUrl: string | null
+        hasSheet: boolean
+      }> = []
+
+      for (const it of rootItems) {
+        if (safeTrim(it.type) !== 'folder') continue
+        const name = safeTrim(it.name).normalize('NFKC')
+        const folderToken = safeTrim(it.token)
+        if (!name || !folderToken) continue
+        if (name === META_DIR.normalize('NFKC')) continue
+
+        const children = await listAllInFolder(accessToken, folderToken)
+        let sheetToken: string | null = null
+        for (const child of children) {
+          const t = safeTrim(child.type)
+          if (t !== 'sheet' && t !== 'file') continue
+          const n = safeTrim(child.name).normalize('NFKC')
+          if (n === wantSheet && child.token) {
+            sheetToken = safeTrim(child.token)
+            break
+          }
+        }
+        const batch = batchByDir.get(safePathSegment(name).normalize('NFKC')) ?? null
+        dirs.push({
+          name,
+          folderToken,
+          batchId: batch?.id ?? null,
+          batchName: batch?.name ?? null,
+          sheetToken,
+          sheetUrl: sheetToken ? buildFeishuSheetWebUrl(sheetToken, webBaseUrl) : null,
+          hasSheet: Boolean(sheetToken),
+        })
+      }
+
+      dirs.sort((a, b) => a.name.localeCompare(b.name, 'zh'))
+      return jsonResponse({
+        ok: true,
+        productId,
+        productName: product.name,
+        sheetTitle: VERSION_PACKAGE_SHEET_TITLE,
+        webBaseUrl: webBaseUrl || undefined,
+        dirs,
+      })
+    } catch (e) {
+      return jsonResponse({
+        ok: false,
+        error: e instanceof Error ? e.message : String(e),
+      }, 200)
+    }
+  }
+
   if (action !== 'get') {
-    return jsonResponse({ ok: false, error: `未知 action：${action}（支持 get / refresh）` }, 400)
+    return jsonResponse({ ok: false, error: `未知 action：${action}（支持 get / refresh / list_dirs）` }, 400)
   }
 
   try {
@@ -330,7 +475,7 @@ serve(async (req) => {
       })
     }
     const text = await downloadFileText(accessToken, fileToken)
-    const manifest = normalizeManifestJson(text)
+    const manifest = normalizeManifestJson(text, webBaseUrl)
     return jsonResponse({
       ok: true,
       productId,
@@ -341,6 +486,7 @@ serve(async (req) => {
       entries: manifest.entries,
       entryCount: manifest.entries.length,
       manifestFileToken: fileToken,
+      webBaseUrl: webBaseUrl || undefined,
     })
   } catch (e) {
     return jsonResponse({

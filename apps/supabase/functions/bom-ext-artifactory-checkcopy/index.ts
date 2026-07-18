@@ -147,30 +147,94 @@ function parseArtifactoryStorageUri(storageUri: string | null | undefined): { re
   return { repo, path: relPath }
 }
 
-function getDownloadUrl(baseUrl: string, repo: string, relPath: string): string {
-  const base = baseUrl.replace(/\/+$/, '')
-  const encodeSeg = (seg: string) => {
-    const t = seg.trim()
-    if (!t) return ''
-    try {
-      return encodeURIComponent(decodeURIComponent(t))
-    } catch {
-      return encodeURIComponent(t)
-    }
+function decodePathSegment(seg: string): string {
+  const t = seg.trim()
+  if (!t) return ''
+  try {
+    return decodeURIComponent(t)
+  } catch {
+    return t
   }
+}
+
+function encodePathSegment(seg: string): string {
+  const t = decodePathSegment(seg)
+  if (!t) return ''
+  return encodeURIComponent(t)
+}
+
+function artifactoryOriginFromBase(baseUrl: string): string {
+  const raw = baseUrl.trim()
+  if (!raw) return ''
+  try {
+    const u = new URL(/^https?:\/\//i.test(raw) ? raw : `https://${raw}`)
+    return u.origin
+  } catch {
+    return ''
+  }
+}
+
+/** Classic REST：`{base}/{repo}/{path}`（API Key / curl） */
+function getRestDownloadUrl(baseUrl: string, repo: string, relPath: string): string {
+  const base = baseUrl.replace(/\/+$/, '')
   const repoPart = repo
     .replace(/^\/+|\/+$/g, '')
     .split('/')
     .filter(Boolean)
-    .map(encodeSeg)
+    .map(encodePathSegment)
     .join('/')
   const pathPart = relPath
     .replace(/^\/+/, '')
     .split('/')
     .filter(Boolean)
-    .map(encodeSeg)
+    .map(encodePathSegment)
     .join('/')
   return `${base}/${repoPart}/${pathPart}`
+}
+
+/**
+ * 浏览器可点下载链（对齐 Native「Download Link」）：
+ * `/ui/api/v1/download?repoKey=&path=<双重 encodeURIComponent>&isNativeBrowsing=false`
+ */
+function getDownloadUrl(baseUrl: string, repo: string, relPath: string): string {
+  const origin = artifactoryOriginFromBase(baseUrl)
+  if (!origin) return getRestDownloadUrl(baseUrl, repo, relPath)
+  const repoKey = repo.replace(/^\/+|\/+$/g, '')
+  const pathJoined = relPath
+    .replace(/^\/+/, '')
+    .split('/')
+    .filter(Boolean)
+    .map(decodePathSegment)
+    .join('/')
+  if (!repoKey || !pathJoined) return getRestDownloadUrl(baseUrl, repo, relPath)
+  const pathTwice = encodeURIComponent(encodeURIComponent(pathJoined))
+  return `${origin}/ui/api/v1/download?repoKey=${encodeURIComponent(repoKey)}&path=${pathTwice}&isNativeBrowsing=false`
+}
+
+/** 解析 UI download URL 的 repoKey + 解码后的相对路径 */
+function parseUiDownloadUrl(rawUrl: string): { origin: string; repoKey: string; path: string } | null {
+  try {
+    const u = new URL(rawUrl)
+    if (!u.pathname.includes('/ui/api/v1/download')) return null
+    const repoKey = (u.searchParams.get('repoKey') || '').trim()
+    let path = u.searchParams.get('path') || ''
+    // Download Link 使用双重编码
+    try {
+      path = decodeURIComponent(path)
+    } catch {
+      /* keep */
+    }
+    try {
+      path = decodeURIComponent(path)
+    } catch {
+      /* keep */
+    }
+    path = path.replace(/^\/+/, '')
+    if (!repoKey || !path) return null
+    return { origin: u.origin, repoKey, path }
+  } catch {
+    return null
+  }
 }
 
 const STORAGE_FETCH_MS = 15000
@@ -179,6 +243,15 @@ function toStorageApiUrl(rawUrl: string): string | null {
   try {
     const u = new URL(rawUrl)
     if (u.pathname.includes('/api/storage/')) return rawUrl
+    const ui = parseUiDownloadUrl(rawUrl)
+    if (ui) {
+      const pathEnc = ui.path
+        .split('/')
+        .filter(Boolean)
+        .map(encodePathSegment)
+        .join('/')
+      return `${ui.origin}/artifactory/api/storage/${encodePathSegment(ui.repoKey)}/${pathEnc}`
+    }
     const artifactoryPrefix = '/artifactory/'
     const pathIdx = u.pathname.indexOf(artifactoryPrefix)
     if (pathIdx === -1) {

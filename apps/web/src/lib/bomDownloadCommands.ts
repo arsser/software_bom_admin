@@ -25,6 +25,75 @@ function normalizeHost(base: string): string | null {
 }
 
 /**
+ * Native「Download Link」UI URL → REST `/artifactory/{repo}/{path}`（供 curl + API Key）。
+ * 非 UI 链原样返回。
+ */
+export function artifactoryUiDownloadToRestUrl(rawUrl: string): string {
+  const s = rawUrl.trim();
+  if (!s) return s;
+  try {
+    const u = new URL(s);
+    if (!u.pathname.includes('/ui/api/v1/download')) return s;
+    const repoKey = (u.searchParams.get('repoKey') || '').trim();
+    let path = u.searchParams.get('path') || '';
+    try {
+      path = decodeURIComponent(path);
+    } catch {
+      /* keep */
+    }
+    try {
+      path = decodeURIComponent(path);
+    } catch {
+      /* keep */
+    }
+    path = path.replace(/^\/+/, '');
+    if (!repoKey || !path) return s;
+    const encodeSeg = (seg: string) => {
+      const t = seg.trim();
+      if (!t) return '';
+      try {
+        return encodeURIComponent(decodeURIComponent(t));
+      } catch {
+        return encodeURIComponent(t);
+      }
+    };
+    const pathEnc = path
+      .split('/')
+      .filter(Boolean)
+      .map(encodeSeg)
+      .join('/');
+    return `${u.origin}/artifactory/${encodeSeg(repoKey)}/${pathEnc}`;
+  } catch {
+    return s;
+  }
+}
+
+function outFileNameFromArtifactoryUrl(url: string): string {
+  try {
+    const u = new URL(url);
+    if (u.pathname.includes('/ui/api/v1/download')) {
+      let path = u.searchParams.get('path') || '';
+      try {
+        path = decodeURIComponent(path);
+      } catch {
+        /* keep */
+      }
+      try {
+        path = decodeURIComponent(path);
+      } catch {
+        /* keep */
+      }
+      const parts = path.replace(/^\/+/, '').split('/').filter(Boolean);
+      if (parts.length) return fileBasename(parts[parts.length - 1]!);
+    }
+  } catch {
+    /* fall through */
+  }
+  const pathOnly = url.split(/[?#]/)[0] ?? url;
+  return fileBasename(pathOnly);
+}
+
+/**
  * 按下载 URL 主机与系统设置中的 Base URL 匹配 Artifactory / Artifactory-ext API Key（与 worker 的 host 校验语义一致）。
  */
 export function pickArtifactoryApiKeyForUrl(
@@ -110,19 +179,19 @@ export function buildCopyCommandsForRows(
       errors.push(`第 ${displayLine} 行：无有效 Artifactory http(s) 链接`);
       continue;
     }
-    const picked = pickArtifactoryApiKeyForUrl(url, cfg);
+    const restUrl = artifactoryUiDownloadToRestUrl(url);
+    const picked = pickArtifactoryApiKeyForUrl(restUrl, cfg);
     if (!picked) {
       errors.push(
         `第 ${displayLine} 行：无法匹配 API Key（请核对系统设置中内部/外部 Base URL 与下载链接主机是否一致）`,
       );
       continue;
     }
-    const pathOnly = url.split(/[?#]/)[0] ?? url;
-    const out = fileBasename(pathOnly);
+    const out = outFileNameFromArtifactoryUrl(url);
     const cmd =
       tool === 'curl'
-        ? buildCurlDownloadCommand(url, picked.apiKey, out)
-        : buildWgetDownloadCommand(url, picked.apiKey, out);
+        ? buildCurlDownloadCommand(restUrl, picked.apiKey, out)
+        : buildWgetDownloadCommand(restUrl, picked.apiKey, out);
     blocks.push(`# 第 ${displayLine} 行 · ${picked.keyKind === 'ext' ? '外部' : '内部'} · ${out}`);
     blocks.push(cmd);
     blocks.push('');
@@ -145,19 +214,19 @@ export function buildCopyCommandsForExtRows(
       errors.push(`第 ${displayLine} 行：无有效 Artifactory-ext http(s) 链接（ext_url / 转存地址）`);
       continue;
     }
-    const picked = pickArtifactoryApiKeyForUrl(url, cfg);
+    const restUrl = artifactoryUiDownloadToRestUrl(url);
+    const picked = pickArtifactoryApiKeyForUrl(restUrl, cfg);
     if (!picked) {
       errors.push(
         `第 ${displayLine} 行：无法匹配 API Key（请核对系统设置中内部/外部 Base URL 与 ext 链接主机是否一致）`,
       );
       continue;
     }
-    const pathOnly = url.split(/[?#]/)[0] ?? url;
-    const out = fileBasename(pathOnly);
+    const out = outFileNameFromArtifactoryUrl(url);
     const cmd =
       tool === 'curl'
-        ? buildCurlDownloadCommand(url, picked.apiKey, out)
-        : buildWgetDownloadCommand(url, picked.apiKey, out);
+        ? buildCurlDownloadCommand(restUrl, picked.apiKey, out)
+        : buildWgetDownloadCommand(restUrl, picked.apiKey, out);
     blocks.push(`# 第 ${displayLine} 行 · ext · ${picked.keyKind === 'ext' ? '外部' : '内部'} · ${out}`);
     blocks.push(cmd);
     blocks.push('');

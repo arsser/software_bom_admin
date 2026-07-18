@@ -482,6 +482,7 @@ export function encodeHttpUrlPathSegments(rawUrl) {
 
 /**
  * 展示用：把 path 中的 percent-encoding 还原为可读中文（不经 URL.toString，避免再次编码）。
+ * UI Download Link（path 双重编码）展示为 `…/ui/api/v1/download?repoKey=…&path=可读路径`。
  * @param {string} rawUrl
  */
 export function decodeHttpUrlPathForDisplay(rawUrl) {
@@ -489,6 +490,23 @@ export function decodeHttpUrlPathForDisplay(rawUrl) {
   if (!/^https?:\/\//i.test(s)) return s;
   try {
     const u = new URL(s);
+    if (u.pathname.includes('/ui/api/v1/download')) {
+      const repoKey = (u.searchParams.get('repoKey') || '').trim();
+      let path = u.searchParams.get('path') || '';
+      try {
+        path = decodeURIComponent(path);
+      } catch {
+        /* keep */
+      }
+      try {
+        path = decodeURIComponent(path);
+      } catch {
+        /* keep */
+      }
+      if (repoKey && path) {
+        return `${u.origin}/ui/api/v1/download?repoKey=${repoKey}&path=${path}`;
+      }
+    }
     const path = u.pathname
       .split('/')
       .map((seg) => {

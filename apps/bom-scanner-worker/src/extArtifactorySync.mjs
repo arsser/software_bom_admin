@@ -433,31 +433,77 @@ async function deployFileFixed(rootUrl, repo, relPath, fileAbs, apiKey, signal, 
   }
 }
 
-/** @param {string} rootUrl @param {string} repo @param {string} relPath */
-export function buildArtifactoryDownloadUrl(rootUrl, repo, relPath) {
-  const base = rootUrl.replace(/\/+$/, '');
-  const encodeSeg = (seg) => {
-    const t = String(seg ?? '').trim();
-    if (!t) return '';
-    try {
-      return encodeURIComponent(decodeURIComponent(t));
-    } catch {
-      return encodeURIComponent(t);
-    }
-  };
+/** @param {string} rootUrl */
+function artifactoryOriginFromBase(rootUrl) {
+  const raw = String(rootUrl ?? '').trim();
+  if (!raw) return '';
+  try {
+    const u = new URL(/^https?:\/\//i.test(raw) ? raw : `https://${raw}`);
+    return u.origin;
+  } catch {
+    return '';
+  }
+}
+
+/** @param {string} seg */
+function decodePathSegment(seg) {
+  const t = String(seg ?? '').trim();
+  if (!t) return '';
+  try {
+    return decodeURIComponent(t);
+  } catch {
+    return t;
+  }
+}
+
+/** @param {string} seg */
+function encodePathSegment(seg) {
+  const t = decodePathSegment(seg);
+  if (!t) return '';
+  return encodeURIComponent(t);
+}
+
+/**
+ * Classic REST 下载 URL：`{base}/{repo}/{path}`（路径段 percent-encode）。
+ * 供 curl / API Key / Storage 转换使用。
+ * @param {string} rootUrl @param {string} repo @param {string} relPath
+ */
+export function buildArtifactoryRestDownloadUrl(rootUrl, repo, relPath) {
+  const base = String(rootUrl ?? '').replace(/\/+$/, '');
   const repoPart = String(repo ?? '')
     .replace(/^\/+|\/+$/g, '')
     .split('/')
     .filter(Boolean)
-    .map(encodeSeg)
+    .map(encodePathSegment)
     .join('/');
   const pathPart = String(relPath ?? '')
     .replace(/^\/+/, '')
     .split('/')
     .filter(Boolean)
-    .map(encodeSeg)
+    .map(encodePathSegment)
     .join('/');
   return `${base}/${repoPart}/${pathPart}`;
+}
+
+/**
+ * 浏览器可点的下载 URL（对齐 Artifacts Native「Download Link」）：
+ * `/ui/api/v1/download?repoKey=…&path=<双重 encodeURIComponent>&isNativeBrowsing=false`
+ * 中文路径下单次编码的 `/artifactory/…` File URL 会 500，双重编码的 UI API 可下。
+ * @param {string} rootUrl @param {string} repo @param {string} relPath
+ */
+export function buildArtifactoryDownloadUrl(rootUrl, repo, relPath) {
+  const origin = artifactoryOriginFromBase(rootUrl);
+  if (!origin) return buildArtifactoryRestDownloadUrl(rootUrl, repo, relPath);
+  const repoKey = String(repo ?? '').replace(/^\/+|\/+$/g, '');
+  const pathJoined = String(relPath ?? '')
+    .replace(/^\/+/, '')
+    .split('/')
+    .filter(Boolean)
+    .map(decodePathSegment)
+    .join('/');
+  if (!repoKey || !pathJoined) return buildArtifactoryRestDownloadUrl(rootUrl, repo, relPath);
+  const pathTwice = encodeURIComponent(encodeURIComponent(pathJoined));
+  return `${origin}/ui/api/v1/download?repoKey=${encodeURIComponent(repoKey)}&path=${pathTwice}&isNativeBrowsing=false`;
 }
 
 /**

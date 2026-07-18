@@ -203,10 +203,54 @@ async function probeCredentials(cfg: DbArtifactoryConfig): Promise<ApiInfoResult
   return results
 }
 
+function encodePathSegment(seg: string): string {
+  const t = seg.trim()
+  if (!t) return ''
+  try {
+    return encodeURIComponent(decodeURIComponent(t))
+  } catch {
+    return encodeURIComponent(t)
+  }
+}
+
+/** Native Download Link：`/ui/api/v1/download?repoKey=&path=<双重编码>` */
+function parseUiDownloadUrl(rawUrl: string): { origin: string; repoKey: string; path: string } | null {
+  try {
+    const u = new URL(rawUrl)
+    if (!u.pathname.includes('/ui/api/v1/download')) return null
+    const repoKey = (u.searchParams.get('repoKey') || '').trim()
+    let path = u.searchParams.get('path') || ''
+    try {
+      path = decodeURIComponent(path)
+    } catch {
+      /* keep */
+    }
+    try {
+      path = decodeURIComponent(path)
+    } catch {
+      /* keep */
+    }
+    path = path.replace(/^\/+/, '')
+    if (!repoKey || !path) return null
+    return { origin: u.origin, repoKey, path }
+  } catch {
+    return null
+  }
+}
+
 function toStorageApiUrl(rawUrl: string): string | null {
   try {
     const u = new URL(rawUrl)
     if (u.pathname.includes('/api/storage/')) return rawUrl
+    const ui = parseUiDownloadUrl(rawUrl)
+    if (ui) {
+      const pathEnc = ui.path
+        .split('/')
+        .filter(Boolean)
+        .map(encodePathSegment)
+        .join('/')
+      return `${ui.origin}/artifactory/api/storage/${encodePathSegment(ui.repoKey)}/${pathEnc}`
+    }
     const artifactoryPrefix = '/artifactory/'
     const pathIdx = u.pathname.indexOf(artifactoryPrefix)
     if (pathIdx === -1) {

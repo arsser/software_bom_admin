@@ -62,6 +62,8 @@ type BomScannerRaw = Partial<{
   scanIntervalSeconds: number;
   scanIntervalMinutes: number;
   jsonKeyMap: BomJsonKeyMap;
+  /** 飞书版本目录「软件包清单」表头顺序（字符串数组） */
+  versionSheetColumns: string[];
   workerTuning: Partial<BomWorkerTuning> | Record<string, unknown>;
   runtime: Partial<{
     workerLocalRoot: string;
@@ -72,10 +74,38 @@ type BomScannerRaw = Partial<{
   }>;
 }>;
 
+/** 飞书版本 BOM 表默认列顺序（与 bom-scanner-worker 一致） */
+export const DEFAULT_VERSION_SHEET_COLUMNS = [
+  '模块',
+  '组件ID',
+  '版本号',
+  '组件名',
+  '组件类型',
+  '文件大小',
+  '相对路径',
+  '下载链接',
+  '上传时间',
+  'MD5',
+  '硬件平台',
+  'ext_url',
+  '备注',
+] as const;
+
+export function normalizeVersionSheetColumns(raw: unknown): string[] {
+  if (!Array.isArray(raw)) return [...DEFAULT_VERSION_SHEET_COLUMNS];
+  const cols = raw
+    .map((x) => String(x ?? '').trim())
+    .filter((x) => x.length > 0)
+    .slice(0, 100);
+  return cols.length > 0 ? cols : [...DEFAULT_VERSION_SHEET_COLUMNS];
+}
+
 export type BomScannerConfig = {
   /** worker 主循环睡眠秒数，与定时入队间隔相同（从 DB 读取） */
   scanIntervalSeconds: number;
   jsonKeyMap: BomJsonKeyMap;
+  /** 飞书版本 BOM 表列顺序 */
+  versionSheetColumns: string[];
   /** 拉取/上传/扫描等间隔，由 worker 每轮读取 */
   workerTuning: BomWorkerTuning;
   /** worker 回报的当前生效本地根目录（仅展示） */
@@ -100,10 +130,10 @@ const defaultJsonKeyMap: BomJsonKeyMap = {
   arch: ['硬件平台', 'arch', 'platform', '架构'],
   /** 读：任一键；ext 查写/Edge 写回：仅规范键 ext_url、ext_size_bytes（见 bom-ext-artifactory-checkcopy） */
   extUrl: ['ext_url', 'extUrl', '转存地址'],
-  releaseVersion: ['版本', 'version', 'releaseVersion', '产品版本'],
+  releaseVersion: ['版本号', '版本', 'version', 'releaseVersion', '产品版本'],
   releaseBatch: ['批次', 'batch', 'releaseBatch', '发布批次'],
-  module: ['分组', 'group', 'groupName', '组别', '模块'],
-  component: ['组件', 'Component', '组件名'],
+  module: ['模块', '分组', 'group', 'groupName', '组别'],
+  component: ['组件名', '组件', 'Component'],
   /** 读：任一键；DB 同步/迁移：仅保留首键为规范列（见 migrations 20260419170000、20260419180000） */
   fileSizeBytes: ['文件大小', 'size_bytes', '远端大小'],
   extFileSizeBytes: ['ext_size_bytes', 'ext文件大小', 'extSize', 'ext大小'],
@@ -113,6 +143,7 @@ const defaultJsonKeyMap: BomJsonKeyMap = {
 const defaultConfig: BomScannerConfig = {
   scanIntervalSeconds: 30,
   jsonKeyMap: defaultJsonKeyMap,
+  versionSheetColumns: [...DEFAULT_VERSION_SHEET_COLUMNS],
   workerTuning: { ...defaultWorkerTuning },
 };
 
@@ -141,6 +172,7 @@ function mergeConfig(raw: BomScannerRaw | null | undefined): BomScannerConfig {
   return {
     scanIntervalSeconds: resolveScanIntervalSeconds(raw),
     workerTuning: mergeWorkerTuning(raw?.workerTuning),
+    versionSheetColumns: normalizeVersionSheetColumns(raw?.versionSheetColumns),
     workerLocalRoot: typeof raw?.runtime?.workerLocalRoot === 'string' ? raw.runtime.workerLocalRoot.trim() : undefined,
     workerReportedAt: typeof raw?.runtime?.workerReportedAt === 'string' ? raw.runtime.workerReportedAt : undefined,
     workerPhase: typeof raw?.runtime?.workerPhase === 'string' ? raw.runtime.workerPhase : undefined,
@@ -225,12 +257,36 @@ export async function saveBomScannerSettings(config: BomScannerConfig): Promise<
         ...cur,
         scanIntervalSeconds: merged.scanIntervalSeconds,
         jsonKeyMap: merged.jsonKeyMap,
+        versionSheetColumns: merged.versionSheetColumns,
         workerTuning: merged.workerTuning,
       },
     },
     { onConflict: 'key' },
   );
   if (error) throw error;
+}
+
+/** 仅更新飞书版本 BOM 表列顺序（保留 bom_scanner 其它字段） */
+export async function saveBomVersionSheetColumns(columns: string[]): Promise<string[]> {
+  const normalized = normalizeVersionSheetColumns(columns);
+  const { data: curData } = await supabase
+    .from('system_settings')
+    .select('value')
+    .eq('key', BOM_SCANNER_SETTINGS_KEY)
+    .maybeSingle();
+  const cur = (curData?.value ?? {}) as Record<string, unknown>;
+  const { error } = await supabase.from('system_settings').upsert(
+    {
+      key: BOM_SCANNER_SETTINGS_KEY,
+      value: {
+        ...cur,
+        versionSheetColumns: normalized,
+      },
+    },
+    { onConflict: 'key' },
+  );
+  if (error) throw error;
+  return normalized;
 }
 
 export { defaultConfig as defaultBomScannerConfig };

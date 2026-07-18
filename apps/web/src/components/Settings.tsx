@@ -25,8 +25,11 @@ import {
 } from '../lib/feishuAuthTest';
 import {
   BOM_JSON_KEY_MAP_REQUIRED_KEYS,
+  DEFAULT_VERSION_SHEET_COLUMNS,
   fetchBomScannerSettings,
   fetchBomScannerSettingsRawView,
+  normalizeVersionSheetColumns,
+  saveBomVersionSheetColumns,
   type BomScannerConfig,
 } from '../lib/bomScannerSettings';
 import { getArtifactoryApiInfo, type ApiInfoResult } from '../lib/artifactoryApi';
@@ -121,6 +124,13 @@ export const Settings: React.FC = () => {
   const [feishuTestLoading, setFeishuTestLoading] = useState(false);
   const [feishuTestResult, setFeishuTestResult] = useState<FeishuAuthTestResult | null>(null);
   const [showFeishuSecret, setShowFeishuSecret] = useState(false);
+  const [versionSheetColumnsText, setVersionSheetColumnsText] = useState(
+    DEFAULT_VERSION_SHEET_COLUMNS.join(', '),
+  );
+  const [versionSheetColumnsLoading, setVersionSheetColumnsLoading] = useState(false);
+  const [versionSheetColumnsSaveStatus, setVersionSheetColumnsSaveStatus] = useState<
+    'idle' | 'success' | 'error'
+  >('idle');
 
   // 与 supabase 客户端一致：优先 window.__APP_CONFIG__，否则 VITE_*
   const { supabaseUrl: envSupabaseUrl } = getAppConfig();
@@ -170,6 +180,7 @@ export const Settings: React.FC = () => {
         setBomScannerSettingsExists(rawView.exists);
         setBomJsonKeyMapMissingKeys(rawView.missingRequiredJsonKeyMapKeys);
         setBomKeyMapJson(JSON.stringify(rawView.jsonKeyMapRaw ?? null, null, 2));
+        setVersionSheetColumnsText(cfg.versionSheetColumns.join(', '));
       } catch (e) {
         console.error(e);
       }
@@ -178,6 +189,28 @@ export const Settings: React.FC = () => {
       cancelled = true;
     };
   }, []);
+
+  const handleSaveVersionSheetColumns = async () => {
+    try {
+      setVersionSheetColumnsLoading(true);
+      const parsed = versionSheetColumnsText
+        .split(/[\n,，\t]+/)
+        .map((s) => s.trim())
+        .filter(Boolean);
+      const saved = await saveBomVersionSheetColumns(parsed);
+      setVersionSheetColumnsText(saved.join(', '));
+      setBomScanner((prev) => (prev ? { ...prev, versionSheetColumns: saved } : prev));
+      setVersionSheetColumnsSaveStatus('success');
+      setTimeout(() => setVersionSheetColumnsSaveStatus('idle'), 3000);
+    } catch (err: unknown) {
+      setVersionSheetColumnsSaveStatus('error');
+      const msg = err instanceof Error ? err.message : String(err);
+      alert('保存版本 BOM 表列顺序失败: ' + msg);
+      setTimeout(() => setVersionSheetColumnsSaveStatus('idle'), 3000);
+    } finally {
+      setVersionSheetColumnsLoading(false);
+    }
+  };
 
   const handleSaveArtifactory = async () => {
     try {
@@ -584,6 +617,58 @@ export const Settings: React.FC = () => {
               用于生成可分享的文件页链接（形如 <code className="bg-slate-100 px-1 rounded">域名/file/&#123;token&#125;</code>
               ）。在浏览器打开任意云空间文件，从地址栏复制域名即可；不要填 open.feishu.cn。
             </p>
+          </div>
+          <div className="md:col-span-2 space-y-2">
+            <label className="block text-sm font-medium text-slate-700">
+              版本 BOM 表列顺序
+            </label>
+            <textarea
+              value={versionSheetColumnsText}
+              onChange={(e) => setVersionSheetColumnsText(e.target.value)}
+              rows={3}
+              spellCheck={false}
+              className="w-full px-4 py-3 border border-gray-200 rounded-lg font-mono text-xs text-slate-800 focus:outline-none focus:ring-2 focus:ring-violet-500/20 focus:border-violet-500"
+              placeholder={DEFAULT_VERSION_SHEET_COLUMNS.join(', ')}
+            />
+            <p className="text-xs text-slate-500">
+              用英文逗号分隔列名（也兼容中文逗号/换行）。特殊列：文件大小 / 相对路径 / 下载链接 /
+              上传时间（来自飞书 meta）；其余列按表头从 BOM 取值。写入{' '}
+              <code className="bg-slate-100 px-1 rounded">bom_scanner.versionSheetColumns</code>
+              ，生成表时由 worker 读取。当前预览{' '}
+              {normalizeVersionSheetColumns(versionSheetColumnsText.split(/[\n,，\t]+/)).length} 列。
+            </p>
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setVersionSheetColumnsText(DEFAULT_VERSION_SHEET_COLUMNS.join(', '))}
+                className="px-3 py-1.5 text-xs font-medium rounded-lg bg-white border border-gray-300 text-slate-700 hover:bg-gray-50"
+              >
+                恢复默认顺序
+              </button>
+              <button
+                type="button"
+                onClick={() => void handleSaveVersionSheetColumns()}
+                disabled={versionSheetColumnsLoading}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg bg-violet-600 text-white hover:bg-violet-700 disabled:opacity-50"
+              >
+                {versionSheetColumnsLoading ? (
+                  <Loader2 size={14} className="animate-spin" />
+                ) : (
+                  <Save size={14} />
+                )}
+                保存列顺序
+              </button>
+              {versionSheetColumnsSaveStatus === 'success' && (
+                <span className="inline-flex items-center gap-1 text-emerald-600 text-xs">
+                  <CheckCircle2 size={14} /> 已保存
+                </span>
+              )}
+              {versionSheetColumnsSaveStatus === 'error' && (
+                <span className="inline-flex items-center gap-1 text-red-600 text-xs">
+                  <AlertCircle size={14} /> 保存失败
+                </span>
+              )}
+            </div>
           </div>
         </div>
 

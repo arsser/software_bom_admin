@@ -353,12 +353,76 @@ function readFeishuPresentMeta(status) {
   };
 }
 
-/**
- * 清单扩展列（放在表头最前，避免 BOM 列过多时需横向滚动才看得见）。
- * 飞书单次写入上限 100 列，扩展列优先占位。
- */
-const EXTRA_SHEET_HEADERS = ['文件大小', '相对路径', '下载地址', '上传时间'];
+/** 飞书版本 BOM 表默认列顺序（与 web bomScannerSettings.DEFAULT_VERSION_SHEET_COLUMNS 一致） */
+export const DEFAULT_VERSION_SHEET_COLUMNS = [
+  '模块',
+  '组件ID',
+  '版本号',
+  '组件名',
+  '组件类型',
+  '文件大小',
+  '相对路径',
+  '下载链接',
+  '上传时间',
+  'MD5',
+  '硬件平台',
+  'ext_url',
+  '备注',
+];
+
 const FEISHU_VALUES_MAX_COLS = 100;
+
+/**
+ * @param {unknown} raw
+ * @returns {string[]}
+ */
+export function normalizeVersionSheetColumns(raw) {
+  if (!Array.isArray(raw)) return [...DEFAULT_VERSION_SHEET_COLUMNS];
+  const cols = raw
+    .map((x) => safeTrim(x))
+    .filter(Boolean)
+    .slice(0, FEISHU_VALUES_MAX_COLS);
+  return cols.length > 0 ? cols : [...DEFAULT_VERSION_SHEET_COLUMNS];
+}
+
+/**
+ * @param {string} header
+ * @returns {'size'|'rel_path'|'download_url'|'uploaded_at'|null}
+ */
+function extraColumnKind(header) {
+  const h = safeTrim(header).normalize('NFKC');
+  if (h === '文件大小') return 'size';
+  if (h === '相对路径') return 'rel_path';
+  if (h === '下载链接' || h === '下载地址') return 'download_url';
+  if (h === '上传时间') return 'uploaded_at';
+  return null;
+}
+
+/**
+ * 按表头从 bom_row 取值（优先 jsonKeyMap，再按常见别名）。
+ * @param {Record<string, unknown>} bomRow
+ * @param {ReturnType<typeof mergeKeyMap> & Record<string, string[]|undefined>} keyMap
+ * @param {string} header
+ */
+function resolveBomCellByHeader(bomRow, keyMap, header) {
+  const h = safeTrim(header).normalize('NFKC');
+  if (!h) return '';
+  /** @type {Record<string, string[]>} */
+  const byHeader = {
+    模块: [...(keyMap.module || []), '模块', '分组', 'group', 'groupName', '组别'],
+    组件ID: ['组件ID', 'componentId', 'component_id'],
+    版本号: [...(keyMap.releaseVersion || []), '版本号', '版本', 'version', 'releaseVersion', '产品版本'],
+    组件名: [...(keyMap.component || []), '组件名', '组件', 'Component'],
+    组件类型: ['组件类型', 'componentType', 'component_type', '类型'],
+    MD5: [...(keyMap.expectedMd5 || []), 'MD5', 'md5', 'checksum'],
+    硬件平台: [...(keyMap.arch || []), '硬件平台', 'arch', 'platform', '架构'],
+    ext_url: [...(keyMap.extUrl || []), 'ext_url', 'extUrl', '转存地址'],
+    备注: [...(keyMap.remark || []), '备注', 'note', 'remark'],
+  };
+  const keys = byHeader[h] || [h];
+  const v = firstNonEmptyByKeysRelaxed(bomRow, keys);
+  return v != null ? v : '';
+}
 
 /**
  * 0-based 列索引 → Excel/飞书列字母（A, B, …, Z, AA, …）
@@ -390,41 +454,8 @@ function cellFromBomValue(v) {
 }
 
 /**
- * 汇总完整 BOM 列：jsonKeyMap 规范首键优先，其余按行出现顺序追加。
- * @param {ReturnType<typeof mergeKeyMap>} keyMap
- * @param {Array<Record<string, unknown>>} bomRows
- * @returns {string[]}
- */
-function collectBomColumnKeys(keyMap, bomRows) {
-  const reserved = new Set(EXTRA_SHEET_HEADERS);
-  /** @type {string[]} */
-  const ordered = [];
-  const seen = new Set();
-
-  const prefer = [];
-  for (const aliases of Object.values(keyMap || {})) {
-    if (!Array.isArray(aliases) || !aliases.length) continue;
-    const first = safeTrim(aliases[0]);
-    if (first) prefer.push(first);
-  }
-  for (const k of prefer) {
-    if (reserved.has(k) || seen.has(k)) continue;
-    seen.add(k);
-    ordered.push(k);
-  }
-  for (const row of bomRows) {
-    for (const k of Object.keys(row)) {
-      if (!k || reserved.has(k) || seen.has(k)) continue;
-      seen.add(k);
-      ordered.push(k);
-    }
-  }
-  return ordered;
-}
-
-/**
  * 根据当前批次已对齐飞书的行，在版本目录下覆盖生成「{产品}-{版本}-软件包清单」电子表格。
- * 列 = 文件大小 + 相对路径 + 下载地址 + 上传时间 + 完整 bom_row 列。
+ * 列顺序来自 bom_scanner.versionSheetColumns（可配置）。
  *
  * @param {object} p
  * @param {string} p.accessToken
@@ -432,6 +463,7 @@ function collectBomColumnKeys(keyMap, bomRows) {
  * @param {string} p.batchDir
  * @param {string} [p.productName]
  * @param {string} [p.sheetTitle]
+ * @param {string[]} [p.columns]
  * @param {ReturnType<typeof mergeKeyMap>} p.keyMap
  * @param {Array<{ bom_row?: unknown, status?: unknown }>} p.rows
  * @param {Awaited<ReturnType<typeof loadFeishuPackageManifest>> | null} [p.packageManifest]
@@ -443,6 +475,7 @@ export async function generateVersionPackageSheet(p) {
   const sheetTitle =
     safeTrim(p.sheetTitle) ||
     buildVersionPackageSheetTitle(p.productName || '', batchDir);
+  const header = normalizeVersionSheetColumns(p.columns);
   const versionFolder = await ensureFolderPath(accessToken, rootFolderToken, [batchDir]);
   await removeSameNameSheetIfAny(accessToken, versionFolder, sheetTitle);
 
@@ -462,21 +495,6 @@ export async function generateVersionPackageSheet(p) {
     throw new Error('当前版本没有 feishu=present 的行，无法生成软件包清单');
   }
 
-  const bomKeysAll = collectBomColumnKeys(
-    keyMap,
-    present.map((x) => x.bomRow),
-  );
-  const bomKeyBudget = Math.max(0, FEISHU_VALUES_MAX_COLS - EXTRA_SHEET_HEADERS.length);
-  const bomKeys = bomKeysAll.slice(0, bomKeyBudget);
-  if (bomKeysAll.length > bomKeys.length) {
-    log('WARN feishu-version-sheet bom cols truncated', {
-      total: bomKeysAll.length,
-      kept: bomKeys.length,
-      maxCols: FEISHU_VALUES_MAX_COLS,
-    });
-  }
-  // 扩展列置前，保证「下载地址」等无需横滚即可看见
-  const header = [...EXTRA_SHEET_HEADERS, ...bomKeys];
   /** @type {unknown[][]} */
   const values = [header];
 
@@ -504,15 +522,20 @@ export async function generateVersionPackageSheet(p) {
     );
     const uploadedAt = typeof manifestHit?.uploaded_at === 'string' ? manifestHit.uploaded_at : '';
 
+    /** @type {Record<string, unknown>} */
+    const extras = {
+      size: sizeBytes,
+      rel_path: relPath,
+      download_url: downloadUrl || '',
+      uploaded_at: uploadedAt,
+    };
+
     /** @type {unknown[]} */
-    const rowCells = [
-      sizeBytes,
-      relPath,
-      // 写入完整 URL 文本，便于复制；飞书会识别为可点击链接
-      downloadUrl || '',
-      uploadedAt,
-      ...bomKeys.map((k) => cellFromBomValue(bomRow[k])),
-    ];
+    const rowCells = header.map((col) => {
+      const kind = extraColumnKind(col);
+      if (kind) return extras[kind] ?? '';
+      return cellFromBomValue(resolveBomCellByHeader(bomRow, keyMap, col));
+    });
     values.push(rowCells);
   }
 
@@ -548,6 +571,7 @@ export async function generateVersionPackageSheet(p) {
 export async function generateVersionPackageSheetForBatch(supabase, accessToken, batchId, opts = {}) {
   const scannerVal = await fetchBomScannerValue(supabase);
   const keyMap = mergeKeyMap(scannerVal);
+  const columns = normalizeVersionSheetColumns(scannerVal?.versionSheetColumns);
   const batchProdCfg = await fetchBatchProductDistributionSettings(supabase, batchId);
   const rootFolder = safeTrim(batchProdCfg.feishuDriveRootFolderToken);
   if (!rootFolder) throw new Error('未配置飞书云盘根目录 folder_token');
@@ -583,6 +607,7 @@ export async function generateVersionPackageSheetForBatch(supabase, accessToken,
     batchDir,
     productName,
     sheetTitle,
+    columns,
     keyMap,
     rows: rowList ?? [],
     packageManifest,

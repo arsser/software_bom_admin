@@ -158,10 +158,11 @@ const DEFAULT_KEY_MAP = {
   arch: ['硬件平台', 'arch', 'platform', '架构'],
   extUrl: ['ext_url', 'extUrl', '转存地址'],
   extFileSizeBytes: ['ext_size_bytes', 'ext文件大小', 'extSize', 'ext大小'],
-  releaseVersion: ['版本', 'version', 'releaseVersion', '产品版本'],
+  releaseVersion: ['版本号', '版本', 'version', 'releaseVersion', '产品版本'],
   releaseBatch: ['批次', 'batch', 'releaseBatch', '发布批次'],
-  module: ['分组', 'group', 'groupName', '组别', '模块'],
-  component: ['组件', 'Component', '组件名'],
+  module: ['模块', '分组', 'group', 'groupName', '组别'],
+  component: ['组件名', '组件', 'Component'],
+  remark: ['备注', 'note', 'remark'],
 };
 
 const CANONICAL_EXT_URL_KEY = 'ext_url';
@@ -206,6 +207,7 @@ export function mergeKeyMap(scannerValue) {
     releaseBatch: arr('releaseBatch', DEFAULT_KEY_MAP.releaseBatch),
     module: arr('module', DEFAULT_KEY_MAP.module),
     component: arr('component', DEFAULT_KEY_MAP.component),
+    remark: arr('remark', DEFAULT_KEY_MAP.remark),
   };
 }
 

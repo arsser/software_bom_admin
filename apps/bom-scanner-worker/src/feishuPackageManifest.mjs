@@ -465,21 +465,31 @@ export function findPackageManifestHit(state, q) {
   const sizeBytes = Math.trunc(Number(q.sizeBytes));
   if (!fileName || !md5 || !Number.isFinite(sizeBytes) || sizeBytes < 0) return null;
 
-  const byName = state.byFileName.get(fileName);
-  if (byName && byName.md5 && byName.md5 === md5 && byName.size_bytes === sizeBytes) {
-    return byName;
-  }
-
   const relPath = q.relPath
     ? safeTrim(q.relPath).replace(/\\/g, '/').replace(/^\/+/, '').normalize('NFKC')
     : '';
+  // 优先按目标相对路径命中（版本目录下的真实位置）
   if (relPath) {
     const byPath = state.byRelPath.get(relPath);
     if (byPath && byPath.md5 && byPath.md5 === md5 && byPath.size_bytes === sizeBytes) {
       return byPath;
     }
   }
+
+  const byName = state.byFileName.get(fileName);
+  if (byName && byName.md5 && byName.md5 === md5 && byName.size_bytes === sizeBytes) {
+    return byName;
+  }
+
   return null;
+}
+
+/** 清单命中是否就是「当前版本期望路径」（跨版本同名同 MD5 不算） */
+export function packageManifestHitIsAtRelPath(hit, expectedRelPath) {
+  if (!hit) return false;
+  const a = safeTrim(hit.rel_path).replace(/\\/g, '/').replace(/^\/+/, '').normalize('NFKC');
+  const b = safeTrim(expectedRelPath).replace(/\\/g, '/').replace(/^\/+/, '').normalize('NFKC');
+  return Boolean(a && b && a === b);
 }
 
 /**

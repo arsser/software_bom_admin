@@ -1050,7 +1050,7 @@ export async function executeFeishuUploadJob(supabase, rootAbs, job, tuning) {
       const pathSegments = middleDir ? [batchDir, middleDir] : [batchDir];
       const packageRelPath = buildFeishuPackageRelPath(pathSegments, fileName);
 
-      // 清单去重：同文件名 + md5 + size 已存在则跳过实际上传
+      // 清单去重：同文件名 + md5 + size 已存在则跳过实际上传（全局去重）
       if (packageManifest) {
         const hit = findPackageManifestHit(packageManifest, {
           fileName,
@@ -1282,7 +1282,29 @@ export async function executeFeishuUploadJob(supabase, rootAbs, job, tuning) {
       summary = `${summary}；原因示例：${failSamples.join(' | ')}`.slice(0, 2000);
     }
 
-    // 版本目录 BOM 表改为清单页/分发页手动生成，上传成功后不再自动生成
+    // 有成功行（含清单去重）时自动入队版本目录「软件包清单」；分批上传靠 needs_rerun 再刷一次
+    if (nOk > 0 && finalStatus !== 'cancelled') {
+      try {
+        const { data: sheetJobId, error: sheetEnqErr } = await supabase.rpc(
+          'bom_enqueue_feishu_version_sheet',
+          {
+            p_batch_id: job.batch_id,
+            p_trigger_source: 'feishu_upload',
+          },
+        );
+        if (sheetEnqErr) {
+          log('WARN enqueue version sheet after upload', jobId, sheetEnqErr.message);
+          summary = `${summary}；清单入队失败：${sheetEnqErr.message}`.slice(0, 2000);
+        } else {
+          log('feishu-upload enqueued version sheet', jobId, { sheetJobId, batchId: job.batch_id });
+          summary = `${summary}；已排队生成软件包清单`.slice(0, 2000);
+        }
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        log('WARN enqueue version sheet after upload', jobId, msg);
+        summary = `${summary}；清单入队异常：${msg}`.slice(0, 2000);
+      }
+    }
 
     await patchFeishuUploadJob(supabase, jobId, {
       status: finalStatus,

@@ -10,6 +10,7 @@ import { BomDistributePage } from '../components/BomDistributePage';
 import { BomDownloadJobsPage } from '../components/BomDownloadJobsPage';
 import { BomComparePage } from '../components/BomComparePage';
 import { BomSearchPage } from '../components/BomSearchPage';
+import { BomPatchUploadPage } from '../components/BomPatchUploadPage';
 import { FeishuPackageManifestPage } from '../components/FeishuPackageManifestPage';
 import { LoginPage } from '../pages/LoginPage';
 
@@ -31,6 +32,7 @@ export const router = createBrowserRouter([
       { path: 'md5', element: <Md5Calculator /> },
       { path: 'bom', element: <BomMaster /> },
       { path: 'bom/new', element: <BomDetail /> },
+      { path: 'bom/patch', element: <BomPatchUploadPage /> },
       { path: 'bom/jobs', element: <BomDownloadJobsPage /> },
       { path: 'bom/search', element: <BomSearchPage /> },
       { path: 'bom/compare', element: <BomComparePage /> },

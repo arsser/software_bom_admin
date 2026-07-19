@@ -640,7 +640,7 @@ export const BomDistributePage: React.FC = () => {
         unlocked.map((r) => r.id),
       );
       alert(
-        `已创建飞书上传任务（排队由 bom-scanner-worker 执行）。任务 ID：${jobId}\n将自动创建版本目录/模块或组件子目录（与扫描规则一致）；≤5MB 整文件上传，>5MB 自动分片上传（支持断点续传）。\n上传结束后将自动在版本目录生成「软件包清单」飞书表格。`,
+        `已创建飞书上传任务（排队由 bom-scanner-worker 执行）。任务 ID：${jobId}\n将自动创建版本目录/模块或组件子目录（与扫描规则一致）；≤5MB 整文件上传，>5MB 自动分片上传（支持断点续传）。\n本批上传成功后会按当前已对齐行自动覆盖生成版本目录「软件包清单」（分批上传会多次刷新；未传完的行暂不入表）。`,
       );
       await load();
     } catch (e) {
@@ -794,7 +794,7 @@ export const BomDistributePage: React.FC = () => {
             扫描：在飞书根目录下按版本名文件夹 +（模块优先、否则组件）+ 本地文件名 查找文件，读取飞书字节数，与{' '}
             <code className="bg-violet-100/80 px-1 rounded text-[10px]">local_file</code> 索引比对文件名与大小；入队后由
             bom-scanner-worker 执行（不用 BOM 行内 MD5 参与飞书路径计算，但需 MD5 对账本地索引）。上传：入队后由 worker 使用
-            upload_all（≤5MB）写入飞书，并自动创建版本/模块或组件目录。上传成功后会在版本目录生成「软件包清单」飞书表格（含去重复用文件的下载链接）。
+            upload_all（≤5MB）写入飞书，并自动创建版本/模块或组件目录。每批上传成功后会按当前已对齐行自动覆盖生成「软件包清单」飞书表格（分批上传多次刷新；含去重复用文件的下载链接）。
           </p>
           <div className="flex flex-wrap items-center gap-2 gap-x-3">
             <button

@@ -1,5 +1,6 @@
 import { supabase } from './supabase';
 import { formatBytesHuman } from './bytesFormat';
+import { formatSupabaseError } from './bomScannerJobs';
 
 export type BomFeishuUploadJobStatus = 'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled';
 
@@ -78,7 +79,15 @@ export async function requestBomFeishuUpload(batchId: string, rowIds?: string[] 
     p_batch_id: batchId,
     p_row_ids: rowIds && rowIds.length > 0 ? rowIds : null,
   });
-  if (error) throw error;
+  if (error) {
+    const msg = formatSupabaseError(error);
+    if (/no eligible rows/i.test(msg)) {
+      throw new Error(
+        '没有可上传到飞书的行（需本地校验通过，且飞书扫描为「不存在/错误」；若飞书已存在该文件则会跳过）。',
+      );
+    }
+    throw new Error(msg || '飞书上传入队失败');
+  }
   if (data == null || typeof data !== 'string') throw new Error('bom_request_feishu_upload 未返回任务 ID');
   return data;
 }

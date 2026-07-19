@@ -1,5 +1,6 @@
 import { supabase } from './supabase';
 import { formatBytesHuman } from './bytesFormat';
+import { formatSupabaseError } from './bomScannerJobs';
 
 export type BomExtSyncJobStatus = 'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled';
 
@@ -78,7 +79,15 @@ export async function requestBomExtSync(batchId: string, rowIds?: string[] | nul
     p_batch_id: batchId,
     p_row_ids: rowIds && rowIds.length > 0 ? rowIds : null,
   });
-  if (error) throw error;
+  if (error) {
+    const msg = formatSupabaseError(error);
+    if (/no eligible rows/i.test(msg)) {
+      throw new Error(
+        '没有可同步到 Artifactory-ext 的行（需本地校验通过且尚未写入 ext_url）。',
+      );
+    }
+    throw new Error(msg || 'Artifactory-ext 同步入队失败');
+  }
   if (data == null || typeof data !== 'string') throw new Error('bom_request_ext_sync 未返回任务 ID');
   return data;
 }

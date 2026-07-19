@@ -7,6 +7,7 @@ import {
   Copy,
   GitCompareArrows,
   Package,
+  PackagePlus,
   Pencil,
   Plus,
   RefreshCcw,
@@ -255,6 +256,15 @@ export const BomMaster: React.FC = () => {
         <div className="flex items-center gap-2">
           <button
             type="button"
+            onClick={() => navigate('/bom/patch')}
+            className="inline-flex items-center gap-2 px-3 py-2 rounded-lg border border-emerald-200 bg-emerald-50 text-emerald-800 hover:bg-emerald-100"
+            title="用 Artifactory 链接新建 Hot fix 版本并自动同步"
+          >
+            <PackagePlus size={16} />
+            Hot fix
+          </button>
+          <button
+            type="button"
             onClick={() => navigate('/bom/search')}
             className="inline-flex items-center gap-2 px-3 py-2 rounded-lg border border-slate-200 bg-white text-slate-700 hover:bg-slate-50"
           >
@@ -363,6 +373,17 @@ export const BomMaster: React.FC = () => {
                     className="text-xs px-3 py-1.5 rounded-lg border border-slate-300 text-slate-700 hover:bg-slate-50"
                   >
                     在此产品下新建
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      navigate(`/bom/patch?productId=${encodeURIComponent(product.id)}`)
+                    }
+                    className="text-xs px-3 py-1.5 rounded-lg border border-emerald-300 text-emerald-800 hover:bg-emerald-50 inline-flex items-center gap-1"
+                    title="新建 Hot fix 版本并自动同步到本地 / Artifactory-ext / 飞书"
+                  >
+                    <PackagePlus size={12} />
+                    Hot fix
                   </button>
                 </div>
               </div>

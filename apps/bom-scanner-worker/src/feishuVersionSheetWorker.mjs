@@ -1,5 +1,5 @@
 /**
- * 手动重生成版本目录「软件包清单」电子表格任务。
+ * 版本目录「软件包清单」电子表格任务（上传成功后自动入队；亦可手动重生成）。
  */
 
 import { generateVersionPackageSheetForBatch } from './feishuVersionSheet.mjs';
@@ -114,6 +114,16 @@ export async function executeFeishuVersionSheetJob(supabase, rootAbs, job) {
       heartbeat_at: new Date().toISOString(),
     });
     log('feishu-version-sheet-job done', jobId, { rows: result.rowCount, url: result.url });
+
+    const { data: rerunId, error: rerunErr } = await supabase.rpc(
+      'bom_finish_feishu_version_sheet_rerun_if_needed',
+      { p_job_id: jobId },
+    );
+    if (rerunErr) {
+      log('WARN version sheet rerun enqueue', jobId, rerunErr.message);
+    } else if (rerunId) {
+      log('feishu-version-sheet scheduled rerun', { afterJobId: jobId, nextJobId: rerunId, batchId });
+    }
   } catch (e) {
     const msg = (e instanceof Error ? e.message : String(e)).slice(0, 2000);
     log('ERROR executeFeishuVersionSheetJob', jobId, msg);
@@ -122,6 +132,16 @@ export async function executeFeishuVersionSheetJob(supabase, rootAbs, job) {
       finished_at: new Date().toISOString(),
       message: msg,
     });
+    // 失败也消化 needs_rerun，避免卡住；分批上传可再触发入队
+    const { data: rerunId, error: rerunErr } = await supabase.rpc(
+      'bom_finish_feishu_version_sheet_rerun_if_needed',
+      { p_job_id: jobId },
+    );
+    if (rerunErr) {
+      log('WARN version sheet rerun after fail', jobId, rerunErr.message);
+    } else if (rerunId) {
+      log('feishu-version-sheet scheduled rerun after fail', { afterJobId: jobId, nextJobId: rerunId });
+    }
   } finally {
     if (hbTimer) clearInterval(hbTimer);
     await reportBomLocalRootRuntime(supabase, rootAbs, { phase: 'idle' });

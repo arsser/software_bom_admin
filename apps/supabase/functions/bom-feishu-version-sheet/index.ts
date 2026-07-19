@@ -54,7 +54,6 @@ serve(async (req) => {
   if (authErr || !authData.user?.id) {
     return jsonResponse({ ok: false, error: '未登录或会话无效' }, 401)
   }
-  const userId = authData.user.id
 
   const { data: batch, error: batchErr } = await userClient
     .from('bom_batches')
@@ -81,45 +80,35 @@ serve(async (req) => {
     return jsonResponse({ ok: false, error: '未配置飞书存储根目录 folder_token（产品分发配置）' }, 400)
   }
 
-  const { data: active } = await svc
-    .from('bom_feishu_version_sheet_jobs')
-    .select('id,status')
-    .eq('batch_id', batchId)
-    .in('status', ['queued', 'running'])
-    .order('requested_at', { ascending: false })
-    .limit(1)
-    .maybeSingle()
-  if (active?.id) {
-    return jsonResponse({
-      ok: true,
-      async: true,
-      jobId: active.id,
-      batchId,
-      reused: true,
-      message: `已有进行中的生成任务（${active.status}）`,
-    })
+  // 与 worker 上传后自动入队同一 RPC：queued 复用；running 则 needs_rerun
+  const { data: jobId, error: enqErr } = await svc.rpc('bom_enqueue_feishu_version_sheet', {
+    p_batch_id: batchId,
+    p_trigger_source: 'edge',
+  })
+  if (enqErr || !jobId) {
+    return jsonResponse({ ok: false, error: enqErr?.message || '无法创建清单任务' }, 500)
   }
 
-  const { data: jobIns, error: jobInsErr } = await svc
+  const { data: jobRow } = await svc
     .from('bom_feishu_version_sheet_jobs')
-    .insert({
-      batch_id: batchId,
-      user_id: userId,
-      status: 'queued',
-      trigger_source: 'edge',
-      message: null,
-    })
-    .select('id')
-    .single()
-  if (jobInsErr || !jobIns?.id) {
-    return jsonResponse({ ok: false, error: jobInsErr?.message || '无法创建任务' }, 500)
-  }
+    .select('id,status,needs_rerun')
+    .eq('id', jobId)
+    .maybeSingle()
+
+  const st = typeof jobRow?.status === 'string' ? jobRow.status : ''
+  const reused = st === 'queued' || st === 'running'
+  const pendingRerun = Boolean(jobRow?.needs_rerun)
 
   return jsonResponse({
     ok: true,
     async: true,
-    jobId: jobIns.id,
+    jobId: String(jobId),
     batchId,
-    message: '已排队生成版本目录「软件包清单」电子表格，由 bom-scanner-worker 执行',
+    reused,
+    message: pendingRerun
+      ? '已有清单任务进行中，结束后将自动再生成一次（纳入新上传行）'
+      : reused
+        ? `已有进行中的生成任务（${st}）`
+        : '已排队生成版本目录「软件包清单」电子表格，由 bom-scanner-worker 执行',
   })
 })

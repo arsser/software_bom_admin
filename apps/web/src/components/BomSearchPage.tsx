@@ -172,15 +172,15 @@ export const BomSearchPage: React.FC = () => {
         </button>
       </div>
 
-      <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm space-y-3">
-        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+      <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm space-y-2">
+        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_minmax(0,2fr)_auto] items-end">
           <label className="flex flex-col gap-1 min-w-0">
             <span className="text-xs font-medium text-slate-500">产品</span>
             <select
               value={productId}
               disabled={loadingMeta}
               onChange={(e) => setProductId(e.target.value)}
-              className="rounded-lg border border-slate-200 px-3 py-2 text-sm bg-white"
+              className="rounded-lg border border-slate-200 px-3 py-2 text-sm bg-white w-full"
             >
               {!products.length ? <option value="">暂无产品</option> : null}
               {products.map((p) => (
@@ -196,7 +196,7 @@ export const BomSearchPage: React.FC = () => {
               value={batchId}
               disabled={loadingMeta || !productId}
               onChange={(e) => setBatchId(e.target.value)}
-              className="rounded-lg border border-slate-200 px-3 py-2 text-sm bg-white"
+              className="rounded-lg border border-slate-200 px-3 py-2 text-sm bg-white w-full"
             >
               <option value="">全部版本</option>
               {productBatches.map((b) => (
@@ -206,7 +206,7 @@ export const BomSearchPage: React.FC = () => {
               ))}
             </select>
           </label>
-          <label className="flex flex-col gap-1 min-w-0 sm:col-span-2">
+          <label className="flex flex-col gap-1 min-w-0 sm:col-span-2 lg:col-span-1">
             <span className="text-xs font-medium text-slate-500">关键词</span>
             <input
               type="search"
@@ -220,27 +220,25 @@ export const BomSearchPage: React.FC = () => {
                 }
               }}
               placeholder="至少 2 个字符，如文件名、MD5、模块、路径片段…"
-              className="rounded-lg border border-slate-200 px-3 py-2 text-sm"
+              className="rounded-lg border border-slate-200 px-3 py-2 text-sm w-full"
             />
           </label>
-        </div>
-        <div className="flex flex-wrap items-center gap-3">
           <button
             type="button"
             disabled={loadingMeta || searching || !productId || query.trim().length < 2}
             onClick={() => void runSearch()}
-            className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-indigo-600 text-white text-sm font-medium hover:bg-indigo-700 disabled:opacity-45 disabled:cursor-not-allowed"
+            className="inline-flex items-center justify-center gap-2 px-4 py-2 rounded-lg bg-indigo-600 text-white text-sm font-medium hover:bg-indigo-700 disabled:opacity-45 disabled:cursor-not-allowed shrink-0 h-[38px]"
           >
             {searching ? <Loader2 size={16} className="animate-spin" /> : <Search size={16} />}
             搜索
           </button>
-          {searchedAt ? (
-            <span className="text-xs text-slate-400">
-              上次搜索 {new Date(searchedAt).toLocaleString()}
-              {hits ? ` · 命中 ${hits.length}${hits.length >= PAGE_LIMIT ? '+' : ''} 行` : ''}
-            </span>
-          ) : null}
         </div>
+        {searchedAt ? (
+          <p className="text-xs text-slate-400">
+            上次搜索 {new Date(searchedAt).toLocaleString()}
+            {hits ? ` · 命中 ${hits.length}${hits.length >= PAGE_LIMIT ? '+' : ''} 行` : ''}
+          </p>
+        ) : null}
       </section>
 
       {error ? (

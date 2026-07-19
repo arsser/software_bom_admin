@@ -27,7 +27,7 @@ export const BomSearchPage: React.FC = () => {
   const [searching, setSearching] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [hits, setHits] = useState<BomSearchHit[] | null>(null);
-  const [truncatedAt, setSearchedAt] = useState<string | null>(null);
+  const [searchedAt, setSearchedAt] = useState<string | null>(null);
 
   const keyMap = useMemo(() => (config ?? defaultBomScannerConfig).jsonKeyMap, [config]);
 

@@ -1,5 +1,5 @@
 import { useNavigate, useLocation } from 'react-router-dom';
-import { LayoutDashboard, Settings, LogOut, ChevronLeft, ChevronRight, Calculator, Package, HardDriveDownload, FileJson } from 'lucide-react';
+import { LayoutDashboard, Settings, LogOut, ChevronLeft, ChevronRight, Calculator, Package, HardDriveDownload, FileJson, Search } from 'lucide-react';
 import { useAuthStore } from '../stores/authStore';
 import { SidebarWorkerHeartbeat } from './SidebarWorkerHeartbeat';
 import { UserAvatar } from './UserAvatar';
@@ -19,6 +19,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ collapsed = false, onToggle })
     { path: '/dashboard', label: '仪表盘', icon: LayoutDashboard },
     { path: '/md5', label: 'MD5 校验', icon: Calculator },
     { path: '/bom', label: 'BOM 管理', icon: Package },
+    { path: '/bom/search', label: 'BOM 搜索', icon: Search },
     { path: '/bom/jobs', label: 'BOM 任务', icon: HardDriveDownload },
     { path: '/feishu-manifest', label: '飞书软件包清单', icon: FileJson },
     { path: '/settings', label: '系统设置', icon: Settings },
@@ -72,11 +73,14 @@ export const Sidebar: React.FC<SidebarProps> = ({ collapsed = false, onToggle })
           const isActive =
             item.path === '/bom/jobs'
               ? location.pathname === '/bom/jobs'
-              : item.path === '/bom'
-                ? (location.pathname === '/bom' ||
-                    location.pathname.startsWith('/bom/')) &&
-                  location.pathname !== '/bom/jobs'
-                : location.pathname === item.path || location.pathname.startsWith(`${item.path}/`);
+              : item.path === '/bom/search'
+                ? location.pathname === '/bom/search'
+                : item.path === '/bom'
+                  ? (location.pathname === '/bom' ||
+                      location.pathname.startsWith('/bom/')) &&
+                    location.pathname !== '/bom/jobs' &&
+                    location.pathname !== '/bom/search'
+                  : location.pathname === item.path || location.pathname.startsWith(`${item.path}/`);
           return (
             <button
               key={item.path}

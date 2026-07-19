@@ -10,6 +10,7 @@ import {
   Pencil,
   Plus,
   RefreshCcw,
+  Search,
   Share2,
   Trash2,
 } from 'lucide-react';
@@ -252,6 +253,14 @@ export const BomMaster: React.FC = () => {
         </div>
 
         <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={() => navigate('/bom/search')}
+            className="inline-flex items-center gap-2 px-3 py-2 rounded-lg border border-slate-200 bg-white text-slate-700 hover:bg-slate-50"
+          >
+            <Search size={16} />
+            搜索
+          </button>
           <button
             type="button"
             onClick={() => navigate('/bom/compare')}

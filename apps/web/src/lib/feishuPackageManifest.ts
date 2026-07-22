@@ -29,6 +29,8 @@ export type FeishuPackageManifestGetResult =
       entries: FeishuPackageManifestEntry[];
       entryCount?: number;
       manifestFileToken?: string;
+      metaFolderToken?: string | null;
+      metaFolderUrl?: string | null;
       message?: string;
     }
   | { ok: false; error: string };
@@ -91,6 +93,12 @@ export async function fetchFeishuPackageManifest(productId: string): Promise<Fei
       /* ignore */
     }
   }
+  const metaFolderToken =
+    typeof data.metaFolderToken === 'string' && data.metaFolderToken.trim()
+      ? data.metaFolderToken.trim()
+      : null;
+  const existingMetaUrl =
+    typeof data.metaFolderUrl === 'string' && data.metaFolderUrl.trim() ? data.metaFolderUrl.trim() : null;
   return {
     ok: true,
     productId: String(data.productId ?? productId),
@@ -103,6 +111,8 @@ export async function fetchFeishuPackageManifest(productId: string): Promise<Fei
       .map((x) => mapEntry(x, webBaseUrl)),
     entryCount: typeof data.entryCount === 'number' ? data.entryCount : entriesRaw.length,
     manifestFileToken: typeof data.manifestFileToken === 'string' ? data.manifestFileToken : undefined,
+    metaFolderToken,
+    metaFolderUrl: existingMetaUrl || (metaFolderToken ? buildFeishuFolderWebUrl(metaFolderToken, webBaseUrl) : null),
     message: typeof data.message === 'string' ? data.message : undefined,
   };
 }

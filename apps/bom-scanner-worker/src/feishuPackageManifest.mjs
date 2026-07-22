@@ -172,21 +172,65 @@ async function listAllInFolder(accessToken, folderToken) {
 }
 
 /**
- * @param {Array<{ name?: string, token?: string, type?: string }>} items
+ * @param {Array<{ name?: string, token?: string, type?: string, created_time?: string }>} items
  * @param {string} folderName
+ * @returns {Array<{ name?: string, token?: string, type?: string, created_time?: string }>}
  */
-function findChildFolderToken(items, folderName) {
+function findChildFolders(items, folderName) {
   const want = safeTrim(folderName).normalize('NFKC');
-  if (!want) return null;
+  if (!want) return [];
+  /** @type {Array<{ name?: string, token?: string, type?: string, created_time?: string }>} */
+  const out = [];
   for (const it of items) {
     if (safeTrim(it.type) !== 'folder') continue;
     const n = safeTrim(it.name).normalize('NFKC');
-    if (n === want) {
-      const tok = safeTrim(it.token);
-      if (tok) return tok;
+    if (n !== want) continue;
+    const tok = safeTrim(it.token);
+    if (tok) out.push(it);
+  }
+  return out;
+}
+
+/**
+ * 解析产品根下的 meta/：同名多份时优先含 package-manifest.json 的，否则取最早创建的。
+ * @param {string} accessToken
+ * @param {string} rootFolderToken
+ * @param {{ createIfMissing?: boolean }} [opts]
+ */
+async function resolveMetaFolderToken(accessToken, rootFolderToken, opts = {}) {
+  const createIfMissing = opts.createIfMissing !== false;
+  const rootItems = await listAllInFolder(accessToken, rootFolderToken);
+  const metas = findChildFolders(rootItems, META_DIR);
+  if (metas.length === 0) {
+    if (!createIfMissing) return null;
+    const created = await createDriveChildFolder(accessToken, rootFolderToken, META_DIR);
+    log('feishu-manifest mkdir', { seg: META_DIR });
+    return created;
+  }
+
+  if (metas.length === 1) {
+    return safeTrim(metas[0].token);
+  }
+
+  log('WARN feishu-manifest duplicate meta folders', {
+    count: metas.length,
+    tokens: metas.map((m) => safeTrim(m.token).slice(0, 12)),
+  });
+
+  for (const m of metas) {
+    const tok = safeTrim(m.token);
+    if (!tok) continue;
+    const kids = await listAllInFolder(accessToken, tok);
+    const want = MANIFEST_FILE_NAME.normalize('NFKC');
+    for (const it of kids) {
+      if (safeTrim(it.type) !== 'file') continue;
+      const n = safeFlatFilename(safeTrim(it.name)).normalize('NFKC');
+      if (n === want) return tok;
     }
   }
-  return null;
+
+  metas.sort((a, b) => Number(a.created_time || 0) - Number(b.created_time || 0));
+  return safeTrim(metas[0].token) || null;
 }
 
 /**
@@ -218,26 +262,6 @@ async function createDriveChildFolder(accessToken, parentFolderToken, name) {
     throw new Error('创建成功但未返回子文件夹 token');
   }
   return token.trim();
-}
-
-/**
- * @param {string} accessToken
- * @param {string} rootFolderToken
- * @param {string[]} segmentNames
- */
-async function ensureFolderPath(accessToken, rootFolderToken, segmentNames) {
-  let cur = rootFolderToken;
-  for (const seg of segmentNames) {
-    if (!seg) continue;
-    const items = await listAllInFolder(accessToken, cur);
-    let next = findChildFolderToken(items, seg);
-    if (!next) {
-      next = await createDriveChildFolder(accessToken, cur, seg);
-      log('feishu-manifest mkdir', { seg });
-    }
-    cur = next;
-  }
-  return cur;
 }
 
 /**
@@ -418,8 +442,7 @@ export function createEmptyPackageManifest(jsonText, webBaseUrl) {
  * @returns {Promise<FeishuPackageManifestState>}
  */
 export async function loadFeishuPackageManifest(accessToken, rootFolderToken) {
-  const rootItems = await listAllInFolder(accessToken, rootFolderToken);
-  const metaToken = findChildFolderToken(rootItems, META_DIR);
+  const metaToken = await resolveMetaFolderToken(accessToken, rootFolderToken, { createIfMissing: false });
   if (!metaToken) {
     log('feishu-manifest meta folder missing, empty inventory');
     return createEmptyPackageManifest();
@@ -537,7 +560,8 @@ export function upsertPackageManifestEntry(state, p) {
 export async function saveFeishuPackageManifestIfDirty(accessToken, rootFolderToken, state) {
   if (!state.dirty) return false;
 
-  const metaToken = await ensureFolderPath(accessToken, rootFolderToken, [META_DIR]);
+  const metaToken = await resolveMetaFolderToken(accessToken, rootFolderToken, { createIfMissing: true });
+  if (!metaToken) throw new Error('无法解析或创建产品根下 meta/ 目录');
   const metaItems = await listAllInFolder(accessToken, metaToken);
   const want = MANIFEST_FILE_NAME.normalize('NFKC');
   for (const it of metaItems) {

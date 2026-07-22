@@ -4,10 +4,10 @@ import {
   AlertCircle,
   ArrowDown,
   ArrowUp,
+  Check,
   CheckCircle2,
   ChevronsUpDown,
-  ClipboardCopy,
-  ExternalLink,
+  Copy,
   Eye,
   FileJson,
   FolderOpen,
@@ -40,6 +40,7 @@ import {
   requestBomFeishuVersionSheet,
   type BomFeishuVersionSheetJob,
 } from '../lib/bomFeishuVersionSheet';
+import { copyTextToClipboard } from '../lib/clipboardCopy';
 
 function formatBytes(n: number): string {
   if (!Number.isFinite(n) || n < 0) return '-';
@@ -156,6 +157,7 @@ export const FeishuPackageManifestPage: React.FC = () => {
   const [info, setInfo] = useState<string | null>(null);
   const [exists, setExists] = useState(false);
   const [updatedAt, setUpdatedAt] = useState<string | null>(null);
+  const [metaFolderUrl, setMetaFolderUrl] = useState<string | null>(null);
   const [entries, setEntries] = useState<FeishuPackageManifestEntry[]>([]);
   const [jobs, setJobs] = useState<BomFeishuManifestJob[]>([]);
   const [dirs, setDirs] = useState<FeishuProductVersionDir[]>([]);
@@ -417,6 +419,7 @@ export const FeishuPackageManifestPage: React.FC = () => {
       setEntries([]);
       setExists(false);
       setUpdatedAt(null);
+      setMetaFolderUrl(null);
       return;
     }
     setLoadingManifest(true);
@@ -427,14 +430,17 @@ export const FeishuPackageManifestPage: React.FC = () => {
         setError(res.error);
         setEntries([]);
         setExists(false);
+        setMetaFolderUrl(null);
         return;
       }
       setExists(res.exists);
       setUpdatedAt(res.updated_at);
       setEntries(res.entries);
+      setMetaFolderUrl(res.metaFolderUrl ?? null);
       if (res.message) setInfo(res.message);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
+      setMetaFolderUrl(null);
     } finally {
       setLoadingManifest(false);
     }
@@ -624,11 +630,12 @@ export const FeishuPackageManifestPage: React.FC = () => {
 
   const copyText = async (text: string, key: string) => {
     try {
-      await navigator.clipboard.writeText(text);
+      await copyTextToClipboard(text);
+      setError(null);
       setCopiedToken(key);
       window.setTimeout(() => setCopiedToken((cur) => (cur === key ? null : cur)), 1500);
     } catch {
-      setError('复制失败');
+      setError('复制失败，请手动选择文本复制。');
     }
   };
 
@@ -785,6 +792,26 @@ export const FeishuPackageManifestPage: React.FC = () => {
               value={query}
               onChange={(e) => setQuery(e.target.value)}
             />
+            {metaFolderUrl ? (
+              <a
+                href={metaFolderUrl}
+                target="_blank"
+                rel="noreferrer"
+                className="inline-flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium rounded-lg bg-white border border-gray-300 text-slate-700 hover:bg-gray-50"
+                title="在飞书中打开产品根下的 meta 目录"
+              >
+                <FolderOpen size={14} />
+                打开 meta
+              </a>
+            ) : (
+              <span
+                className="inline-flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium rounded-lg bg-slate-100 text-slate-400 cursor-not-allowed"
+                title={loadingManifest ? '加载中…' : '尚未创建 meta 目录，请先扫描刷新'}
+              >
+                <FolderOpen size={14} />
+                打开 meta
+              </span>
+            )}
             <button
               type="button"
               onClick={() => productId && void loadManifest(productId)}
@@ -901,17 +928,17 @@ export const FeishuPackageManifestPage: React.FC = () => {
                           </a>
                           <button
                             type="button"
-                            className="p-1 text-slate-400 hover:text-slate-700 shrink-0"
-                            title="复制链接"
+                            className="inline-flex shrink-0 rounded p-0.5 text-slate-500 hover:bg-slate-200/80 hover:text-slate-800 focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-400/60"
+                            title={copiedToken === `url-${e.file_token}` ? '已复制' : '复制链接'}
                             onClick={() => void copyText(e.download_url, `url-${e.file_token}`)}
                           >
                             {copiedToken === `url-${e.file_token}` ? (
-                              <CheckCircle2 size={14} className="text-emerald-600" />
+                              <Check size={14} className="text-emerald-600" aria-hidden />
                             ) : (
-                              <ClipboardCopy size={14} />
+                              <Copy size={14} aria-hidden />
                             )}
+                            <span className="sr-only">复制链接</span>
                           </button>
-                          <ExternalLink size={12} className="text-slate-300 shrink-0" />
                         </div>
                       ) : (
                         <span

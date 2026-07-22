@@ -223,20 +223,42 @@ function feishuUnixToIso(raw: unknown): string | null {
   }
 }
 
-function findChildFolderToken(
-  items: Array<{ name?: string; token?: string; type?: string }>,
+function findChildFolders(
+  items: Array<{ name?: string; token?: string; type?: string; created_time?: string | number }>,
   folderName: string,
-): string | null {
+): Array<{ name?: string; token?: string; type?: string; created_time?: string | number }> {
   const want = safeTrim(folderName).normalize('NFKC')
-  if (!want) return null
+  if (!want) return []
+  const out: Array<{ name?: string; token?: string; type?: string; created_time?: string | number }> = []
   for (const it of items) {
     if (safeTrim(it.type) !== 'folder') continue
-    if (safeTrim(it.name).normalize('NFKC') === want) {
-      const tok = safeTrim(it.token)
-      if (tok) return tok
+    if (safeTrim(it.name).normalize('NFKC') !== want) continue
+    if (safeTrim(it.token)) out.push(it)
+  }
+  return out
+}
+
+/** 同名多份 meta 时优先含 package-manifest.json 的，否则取最早创建的 */
+async function resolveMetaFolderToken(
+  accessToken: string,
+  rootItems: Array<{ name?: string; token?: string; type?: string; created_time?: string | number }>,
+): Promise<string | null> {
+  const metas = findChildFolders(rootItems, META_DIR)
+  if (metas.length === 0) return null
+  if (metas.length === 1) return safeTrim(metas[0].token) || null
+
+  const want = MANIFEST_FILE_NAME.normalize('NFKC')
+  for (const m of metas) {
+    const tok = safeTrim(m.token)
+    if (!tok) continue
+    const kids = await listAllInFolder(accessToken, tok)
+    for (const it of kids) {
+      if (safeTrim(it.type) !== 'file') continue
+      if (safeTrim(it.name).normalize('NFKC') === want) return tok
     }
   }
-  return null
+  metas.sort((a, b) => Number(a.created_time || 0) - Number(b.created_time || 0))
+  return safeTrim(metas[0].token) || null
 }
 
 async function downloadFileText(accessToken: string, fileToken: string): Promise<string> {
@@ -639,7 +661,8 @@ serve(async (req) => {
   try {
     const accessToken = await feishuTenantToken(appId, appSecret)
     const rootItems = await listAllInFolder(accessToken, rootFolder)
-    const metaToken = findChildFolderToken(rootItems, META_DIR)
+    const metaToken = await resolveMetaFolderToken(accessToken, rootItems)
+    const metaFolderUrl = metaToken ? buildFeishuFolderWebUrl(metaToken, webBaseUrl) : null
     if (!metaToken) {
       return jsonResponse({
         ok: true,
@@ -649,6 +672,9 @@ serve(async (req) => {
         version: 1,
         updated_at: null,
         entries: [],
+        metaFolderToken: null,
+        metaFolderUrl: null,
+        webBaseUrl: webBaseUrl || undefined,
         message: '尚未创建 meta/package-manifest.json（可执行扫描刷新）',
       })
     }
@@ -672,6 +698,9 @@ serve(async (req) => {
         version: 1,
         updated_at: null,
         entries: [],
+        metaFolderToken: metaToken,
+        metaFolderUrl,
+        webBaseUrl: webBaseUrl || undefined,
         message: 'meta 目录存在但未找到 package-manifest.json',
       })
     }
@@ -687,6 +716,8 @@ serve(async (req) => {
       entries: manifest.entries,
       entryCount: manifest.entries.length,
       manifestFileToken: fileToken,
+      metaFolderToken: metaToken,
+      metaFolderUrl,
       webBaseUrl: webBaseUrl || undefined,
     })
   } catch (e) {

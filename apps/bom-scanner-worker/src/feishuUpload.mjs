@@ -24,6 +24,7 @@ import {
   saveFeishuPackageManifestIfDirty,
   upsertPackageManifestEntry,
 } from './feishuPackageManifest.mjs';
+import { deliveryFileNameFromUrl } from './localStorePaths.mjs';
 function log(...args) {
   console.log(new Date().toISOString(), ...args);
 }
@@ -104,6 +105,9 @@ const FEISHU_PART_RETRY_MAX = 2;
 const FEISHU_PART_DELAY_MS = 220;
 const FEISHU_TOKEN_REFRESH_MS = 100 * 60 * 1000;
 const FEISHU_TOKEN_SAFETY_BUFFER_MS = 10 * 60 * 1000;
+/** 行级上传失败后自动重试：共 3 次尝试（含首次） */
+const FEISHU_ROW_RETRY_MAX = 2;
+const FEISHU_ROW_RETRY_DELAY_MS = 800;
 
 /**
  * 飞书常见 token 失效英文提示（如 code 99991663 / 99991668 等对应 msg）。
@@ -151,6 +155,34 @@ function resolveMiddleDirFromRow(bomRow, keyMap) {
   const comp = firstNonEmptyByKeysRelaxed(bomRow, keyMap.component);
   if (comp) return safePathSegment(comp);
   return null;
+}
+
+/**
+ * 飞书交付文件名：优先下载 URL 原始 basename，避免本地 _N 撞名泄漏。
+ * @param {Record<string, unknown>} bomRow
+ * @param {ReturnType<typeof mergeKeyMap>} keyMap
+ * @param {string} diskAbs
+ */
+function resolveDeliveryFileName(bomRow, keyMap, diskAbs) {
+  const urlRaw = firstNonEmptyByKeysRelaxed(bomRow, keyMap.downloadUrl);
+  if (urlRaw) {
+    const fromUrl = deliveryFileNameFromUrl(urlRaw);
+    if (fromUrl && fromUrl !== 'artifact.bin') return fromUrl;
+  }
+  return safeFlatFilename(path.basename(diskAbs));
+}
+
+/**
+ * @param {string} message
+ */
+function isRetriableFeishuUploadError(message) {
+  const m = String(message ?? '');
+  if (!m) return false;
+  if (/飞书code=1061001|飞书code=1061045|code=1061001|code=1061045/i.test(m)) return true;
+  if (/\bHTTP 5\d\d\b/.test(m)) return true;
+  if (/ECONNRESET|ETIMEDOUT|ENOTFOUND|EAI_AGAIN|socket hang up|fetch failed|network/i.test(m)) return true;
+  if (/unknown error/i.test(m) && /飞书code=/i.test(m)) return true;
+  return false;
 }
 
 /**
@@ -901,6 +933,7 @@ export async function executeFeishuUploadJob(supabase, rootAbs, job, tuning) {
     let nFail = 0;
     let nSkip = 0;
     let nDedup = 0;
+    let nRowRetries = 0;
     let bytesDoneTotal = 0;
     /** @type {string[]} */
     const failSamples = [];
@@ -909,6 +942,12 @@ export async function executeFeishuUploadJob(supabase, rootAbs, job, tuning) {
       if (!m) return;
       if (failSamples.length < 3) failSamples.push(m.slice(0, 160));
     };
+    /** @type {{ rowId: string, fileName?: string, error: string, at: string }[]} */
+    const resultFail = [];
+    /** @type {{ rowId: string, fileName?: string, kind?: string }[]} */
+    const resultOk = [];
+    /** @type {{ rowId: string, reason?: string }[]} */
+    const resultSkip = [];
     let userCancelled = false;
 
     for (const rowId of rowIds) {
@@ -925,6 +964,7 @@ export async function executeFeishuUploadJob(supabase, rootAbs, job, tuning) {
       if (!still) {
         nSkip += 1;
         completed += 1;
+        resultSkip.push({ rowId, reason: '状态已变或非上传目标' });
         lastJobMessage = `${completed}/${total} 跳过（状态已变或非上传目标）`;
         await patchFeishuUploadJob(supabase, jobId, {
           progress_current: completed,
@@ -948,6 +988,7 @@ export async function executeFeishuUploadJob(supabase, rootAbs, job, tuning) {
         completed += 1;
         const reason = rowErr?.message ? `读取行失败：${rowErr.message}` : '行不存在';
         rememberFailSample(reason);
+        resultFail.push({ rowId, error: reason, at: new Date().toISOString() });
         lastJobMessage = `${completed}/${total} ${reason}`;
         await patchFeishuUploadJob(supabase, jobId, {
           progress_current: completed,
@@ -969,6 +1010,7 @@ export async function executeFeishuUploadJob(supabase, rootAbs, job, tuning) {
         completed += 1;
         const reason = '飞书上传：缺少合法期望 MD5';
         rememberFailSample(reason);
+        resultFail.push({ rowId, error: reason, at: new Date().toISOString() });
         await patchBomRowFeishuUploadError(supabase, rowId, reason);
         lastJobMessage = `${completed}/${total} 缺少 MD5`;
         await patchFeishuUploadJob(supabase, jobId, {
@@ -989,6 +1031,7 @@ export async function executeFeishuUploadJob(supabase, rootAbs, job, tuning) {
         completed += 1;
         const reason = '飞书上传：本地索引中无该 MD5，请先完成本地扫描';
         rememberFailSample(reason);
+        resultFail.push({ rowId, error: reason, at: new Date().toISOString() });
         await patchBomRowFeishuUploadError(supabase, rowId, reason);
         lastJobMessage = `${completed}/${total} 本地无文件`;
         await patchFeishuUploadJob(supabase, jobId, {
@@ -1012,6 +1055,7 @@ export async function executeFeishuUploadJob(supabase, rootAbs, job, tuning) {
         completed += 1;
         const reason = `本地文件不存在：${diskAbs}`;
         rememberFailSample(reason);
+        resultFail.push({ rowId, error: reason, at: new Date().toISOString() });
         await patchBomRowFeishuUploadError(supabase, rowId, reason);
         lastJobMessage = `${completed}/${total} 本地无文件`;
         await patchFeishuUploadJob(supabase, jobId, {
@@ -1030,6 +1074,7 @@ export async function executeFeishuUploadJob(supabase, rootAbs, job, tuning) {
         completed += 1;
         const reason = '本地路径不是文件';
         rememberFailSample(reason);
+        resultFail.push({ rowId, error: reason, at: new Date().toISOString() });
         await patchBomRowFeishuUploadError(supabase, rowId, reason);
         lastJobMessage = `${completed}/${total} 本地路径不是文件`;
         await patchFeishuUploadJob(supabase, jobId, {
@@ -1045,7 +1090,7 @@ export async function executeFeishuUploadJob(supabase, rootAbs, job, tuning) {
       }
       const rowTotalBytes = Math.max(0, Number(fileStat.size) || 0);
 
-      const fileName = safeFlatFilename(path.basename(diskAbs));
+      const fileName = resolveDeliveryFileName(bomRow, keyMap, diskAbs);
       const middleDir = resolveMiddleDirFromRow(bomRow, keyMap);
       const pathSegments = middleDir ? [batchDir, middleDir] : [batchDir];
       const packageRelPath = buildFeishuPackageRelPath(pathSegments, fileName);
@@ -1068,6 +1113,7 @@ export async function executeFeishuUploadJob(supabase, rootAbs, job, tuning) {
           nDedup += 1;
           completed += 1;
           bytesDoneTotal += hit.size_bytes;
+          resultOk.push({ rowId, fileName, kind: 'dedup' });
           lastJobMessage = `${completed}/${total} 跳过（清单已存在） 文件：${fileName}`;
           log('feishu-upload dedup skip', {
             jobId,
@@ -1109,140 +1155,175 @@ export async function executeFeishuUploadJob(supabase, rootAbs, job, tuning) {
         last_message: lastJobMessage,
       });
 
-      rowFeishuTry: for (let feishuTokenAttempt = 0; feishuTokenAttempt < 2; feishuTokenAttempt += 1) {
-        currentRowAbort = new AbortController();
-        try {
-          const rowUploadStartedAt = Date.now();
-
-          const token = await getToken();
-          const parentToken = await ensureFolderPath(token, rootFolder, pathSegments);
-          await removeSameNameFileIfAny(token, parentToken, fileName);
-
-          let fileToken, sizeBytes;
-          if (fileStat.size <= FEISHU_UPLOAD_ALL_MAX_BYTES) {
-            const r = await uploadAllUnderFolder(token, parentToken, diskAbs, fileName);
-            fileToken = r.fileToken;
-            sizeBytes = r.sizeBytes;
-          } else {
-            log('feishu-upload multipart needed', {
-              rowId, fileName,
-              size: formatBytes(fileStat.size),
-              sizeRaw: fileStat.size,
-            });
-            const r = await uploadFileMultipart({
-              supabase,
-              getToken,
-              invalidateToken: () => feishuToken.invalidate('upload_part invalid-access-token'),
-              parentFolderToken: parentToken,
-              localAbsPath: diskAbs,
-              fileName,
-              fileSize: fileStat.size,
-              rowId,
-              rowStatus: rowRec.status,
-              signal: currentRowAbort.signal,
-              onChunkDone: ({ seq, blockNum, bytesUploaded }) => {
-                const elapsedMs = Date.now() - rowUploadStartedAt;
-                let etaText = '预计剩余 --';
-                if (bytesUploaded >= fileStat.size) {
-                  etaText = '预计剩余 0秒';
-                } else if (bytesUploaded > 0 && elapsedMs >= 1500) {
-                  const speedBytesPerSec = bytesUploaded / (elapsedMs / 1000);
-                  if (speedBytesPerSec > 0) {
-                    const etaSeconds = (fileStat.size - bytesUploaded) / speedBytesPerSec;
-                    etaText = `预计剩余 ${formatEtaSeconds(etaSeconds)}`;
-                  }
-                }
-                lastJobMessage = `${completed + 1}/${total} 上传中…（分片 ${seq + 1}/${blockNum}，${formatBytes(bytesUploaded)}/${formatBytes(fileStat.size)}，${etaText}） 文件：${fileName}`;
-                void patchFeishuUploadJob(supabase, jobId, {
-                  running_bytes_downloaded: bytesUploaded,
-                  running_bytes_total: fileStat.size,
-                  bytes_downloaded_total: bytesDoneTotal + bytesUploaded,
-                  heartbeat_at: new Date().toISOString(),
-                  last_message: lastJobMessage,
-                });
-              },
-            });
-            fileToken = r.fileToken;
-            sizeBytes = r.sizeBytes;
-          }
-
-          await patchBomRowFeishuAfterUpload(supabase, rowId, {
-            fileToken,
-            fileName,
-            sizeBytes,
-          });
-
-          if (packageManifest) {
-            upsertPackageManifestEntry(packageManifest, {
-              relPath: packageRelPath,
-              fileName,
-              md5: md5Lower,
-              sizeBytes,
-              fileToken,
-              webBaseUrl,
-            });
-          }
-
-          nOk += 1;
-          completed += 1;
-          bytesDoneTotal += sizeBytes;
-          lastJobMessage = `${completed}/${total} OK（${formatBytes(sizeBytes)}） 文件：${fileName}`;
+      let rowSucceeded = false;
+      let lastRowErrMsg = '';
+      for (let rowAttempt = 0; rowAttempt <= FEISHU_ROW_RETRY_MAX; rowAttempt += 1) {
+        if (rowAttempt > 0) {
+          nRowRetries += 1;
+          const wait = FEISHU_ROW_RETRY_DELAY_MS * (rowAttempt + 1);
+          log('feishu-upload row retry', { jobId, rowId, attempt: rowAttempt, wait, err: lastRowErrMsg });
+          lastJobMessage = `${completed + 1}/${total} 重试 ${rowAttempt}/${FEISHU_ROW_RETRY_MAX}… 文件：${fileName}`;
           await patchFeishuUploadJob(supabase, jobId, {
-            progress_current: completed,
-            bytes_downloaded_total: bytesDoneTotal,
-            running_row_id: null,
-            running_bytes_downloaded: 0,
-            running_bytes_total: null,
             heartbeat_at: new Date().toISOString(),
             last_message: lastJobMessage,
           });
-          break rowFeishuTry;
-        } catch (e) {
-          const aborted =
-            currentRowAbort.signal.aborted ||
-            (e instanceof Error && (e.name === 'AbortError' || e.message === '用户取消'));
-          if (aborted) {
-            userCancelled = true;
-            log('feishu-upload row aborted', { jobId, rowId });
+          await new Promise((r) => setTimeout(r, wait));
+        }
+
+        rowFeishuTry: for (let feishuTokenAttempt = 0; feishuTokenAttempt < 2; feishuTokenAttempt += 1) {
+          currentRowAbort = new AbortController();
+          try {
+            const rowUploadStartedAt = Date.now();
+
+            const token = await getToken();
+            const parentToken = await ensureFolderPath(token, rootFolder, pathSegments);
+            await removeSameNameFileIfAny(token, parentToken, fileName);
+
+            let fileToken, sizeBytes;
+            if (fileStat.size <= FEISHU_UPLOAD_ALL_MAX_BYTES) {
+              const r = await uploadAllUnderFolder(token, parentToken, diskAbs, fileName);
+              fileToken = r.fileToken;
+              sizeBytes = r.sizeBytes;
+            } else {
+              log('feishu-upload multipart needed', {
+                rowId, fileName,
+                size: formatBytes(fileStat.size),
+                sizeRaw: fileStat.size,
+              });
+              const r = await uploadFileMultipart({
+                supabase,
+                getToken,
+                invalidateToken: () => feishuToken.invalidate('upload_part invalid-access-token'),
+                parentFolderToken: parentToken,
+                localAbsPath: diskAbs,
+                fileName,
+                fileSize: fileStat.size,
+                rowId,
+                rowStatus: rowRec.status,
+                signal: currentRowAbort.signal,
+                onChunkDone: ({ seq, blockNum, bytesUploaded }) => {
+                  const elapsedMs = Date.now() - rowUploadStartedAt;
+                  let etaText = '预计剩余 --';
+                  if (bytesUploaded >= fileStat.size) {
+                    etaText = '预计剩余 0秒';
+                  } else if (bytesUploaded > 0 && elapsedMs >= 1500) {
+                    const speedBytesPerSec = bytesUploaded / (elapsedMs / 1000);
+                    if (speedBytesPerSec > 0) {
+                      const etaSeconds = (fileStat.size - bytesUploaded) / speedBytesPerSec;
+                      etaText = `预计剩余 ${formatEtaSeconds(etaSeconds)}`;
+                    }
+                  }
+                  lastJobMessage = `${completed + 1}/${total} 上传中…（分片 ${seq + 1}/${blockNum}，${formatBytes(bytesUploaded)}/${formatBytes(fileStat.size)}，${etaText}） 文件：${fileName}`;
+                  void patchFeishuUploadJob(supabase, jobId, {
+                    running_bytes_downloaded: bytesUploaded,
+                    running_bytes_total: fileStat.size,
+                    bytes_downloaded_total: bytesDoneTotal + bytesUploaded,
+                    heartbeat_at: new Date().toISOString(),
+                    last_message: lastJobMessage,
+                  });
+                },
+              });
+              fileToken = r.fileToken;
+              sizeBytes = r.sizeBytes;
+            }
+
+            await patchBomRowFeishuAfterUpload(supabase, rowId, {
+              fileToken,
+              fileName,
+              sizeBytes,
+            });
+
+            if (packageManifest) {
+              upsertPackageManifestEntry(packageManifest, {
+                relPath: packageRelPath,
+                fileName,
+                md5: md5Lower,
+                sizeBytes,
+                fileToken,
+                webBaseUrl,
+              });
+            }
+
+            nOk += 1;
+            completed += 1;
+            bytesDoneTotal += sizeBytes;
+            resultOk.push({ rowId, fileName, kind: 'uploaded' });
+            lastJobMessage = `${completed}/${total} OK（${formatBytes(sizeBytes)}） 文件：${fileName}`;
+            await patchFeishuUploadJob(supabase, jobId, {
+              progress_current: completed,
+              bytes_downloaded_total: bytesDoneTotal,
+              running_row_id: null,
+              running_bytes_downloaded: 0,
+              running_bytes_total: null,
+              heartbeat_at: new Date().toISOString(),
+              last_message: lastJobMessage,
+            });
+            rowSucceeded = true;
             break rowFeishuTry;
-          }
-          const msg = (e instanceof Error ? e.message : String(e)).slice(0, 1000);
-          if (feishuTokenAttempt === 0 && isFeishuInvalidAccessTokenMessage(msg)) {
-            feishuToken.invalidate('row-level invalid-access-token');
-            log('feishu-upload row retry after invalid access token', {
+          } catch (e) {
+            const aborted =
+              currentRowAbort.signal.aborted ||
+              (e instanceof Error && (e.name === 'AbortError' || e.message === '用户取消'));
+            if (aborted) {
+              userCancelled = true;
+              log('feishu-upload row aborted', { jobId, rowId });
+              break rowFeishuTry;
+            }
+            const msg = (e instanceof Error ? e.message : String(e)).slice(0, 1000);
+            if (feishuTokenAttempt === 0 && isFeishuInvalidAccessTokenMessage(msg)) {
+              feishuToken.invalidate('row-level invalid-access-token');
+              log('feishu-upload row retry after invalid access token', {
+                jobId,
+                rowId,
+                tokenStats: feishuToken.stats(),
+              });
+              continue rowFeishuTry;
+            }
+            lastRowErrMsg = msg;
+            log('feishu-upload row attempt failed', {
               jobId,
               rowId,
-              tokenStats: feishuToken.stats(),
+              rowAttempt,
+              error: msg,
+              detail: extractErrorDetail(e),
+              retriable: isRetriableFeishuUploadError(msg),
             });
-            continue rowFeishuTry;
+            break rowFeishuTry;
+          } finally {
+            currentRowAbort = null;
           }
-          nFail += 1;
-          completed += 1;
-          rememberFailSample(msg);
-          log('feishu-upload row failed', {
-            jobId,
-            rowId,
-            error: msg,
-            detail: extractErrorDetail(e),
-          });
-          await patchBomRowFeishuUploadError(supabase, rowId, `飞书上传失败：${msg}`);
-          lastJobMessage = `${completed}/${total} 失败（${msg}） 文件：${fileName}`.slice(0, 2000);
-          await patchFeishuUploadJob(supabase, jobId, {
-            progress_current: completed,
-            bytes_downloaded_total: bytesDoneTotal,
-            running_row_id: null,
-            running_bytes_downloaded: 0,
-            running_bytes_total: null,
-            heartbeat_at: new Date().toISOString(),
-            last_message: lastJobMessage,
-          });
-          break rowFeishuTry;
-        } finally {
-          currentRowAbort = null;
         }
+
+        if (userCancelled || rowSucceeded) break;
+        if (rowAttempt < FEISHU_ROW_RETRY_MAX && isRetriableFeishuUploadError(lastRowErrMsg)) {
+          continue;
+        }
+        break;
       }
 
       if (userCancelled) break;
+      if (rowSucceeded) continue;
+
+      nFail += 1;
+      completed += 1;
+      rememberFailSample(lastRowErrMsg || '未知错误');
+      resultFail.push({
+        rowId,
+        fileName,
+        error: lastRowErrMsg || '未知错误',
+        at: new Date().toISOString(),
+      });
+      await patchBomRowFeishuUploadError(supabase, rowId, `飞书上传失败：${lastRowErrMsg || '未知错误'}`);
+      lastJobMessage = `${completed}/${total} 失败（${lastRowErrMsg || '未知错误'}） 文件：${fileName}`.slice(0, 2000);
+      await patchFeishuUploadJob(supabase, jobId, {
+        progress_current: completed,
+        bytes_downloaded_total: bytesDoneTotal,
+        running_row_id: null,
+        running_bytes_downloaded: 0,
+        running_bytes_total: null,
+        heartbeat_at: new Date().toISOString(),
+        last_message: lastJobMessage,
+      });
     }
 
     if (packageManifest?.dirty) {
@@ -1253,6 +1334,20 @@ export async function executeFeishuUploadJob(supabase, rootAbs, job, tuning) {
         log('WARN feishu-manifest save failed', e instanceof Error ? e.message : e);
       }
     }
+
+    const buildJobResult = () => ({
+      ok: resultOk,
+      fail: resultFail,
+      skip: resultSkip,
+      counts: {
+        ok: nOk,
+        fail: nFail,
+        skip: nSkip,
+        dedup: nDedup,
+        row_retries: nRowRetries,
+      },
+      finished_at: new Date().toISOString(),
+    });
 
     if (userCancelled) {
       await patchFeishuUploadJob(supabase, jobId, {
@@ -1265,6 +1360,7 @@ export async function executeFeishuUploadJob(supabase, rootAbs, job, tuning) {
         running_bytes_total: null,
         bytes_downloaded_total: bytesDoneTotal,
         progress_current: completed,
+        result: buildJobResult(),
       });
       log('feishu-upload-job cancelled', jobId);
       return;
@@ -1277,6 +1373,9 @@ export async function executeFeishuUploadJob(supabase, rootAbs, job, tuning) {
       summary = `失败：成功 ${nOk}，失败 ${nFail}，跳过 ${nSkip}，清单去重 ${nDedup}`;
     } else if (nOk > 0 && nFail > 0) {
       summary = `部分失败：成功 ${nOk}，失败 ${nFail}，跳过 ${nSkip}，清单去重 ${nDedup}`;
+    }
+    if (nRowRetries > 0) {
+      summary = `${summary}；已自动重试 ${nRowRetries} 次`;
     }
     if (nFail > 0 && failSamples.length > 0) {
       summary = `${summary}；原因示例：${failSamples.join(' | ')}`.slice(0, 2000);
@@ -1315,8 +1414,14 @@ export async function executeFeishuUploadJob(supabase, rootAbs, job, tuning) {
       running_bytes_total: null,
       bytes_downloaded_total: bytesDoneTotal,
       cancel_requested: false,
+      result: buildJobResult(),
     });
-    log('feishu-upload-job done', jobId, { status: finalStatus, summary });
+    log('feishu-upload-job done', jobId, {
+      status: finalStatus,
+      summary,
+      failCount: nFail,
+      rowRetries: nRowRetries,
+    });
   } finally {
     if (globalHbTimer) clearInterval(globalHbTimer);
     currentRowAbort = null;

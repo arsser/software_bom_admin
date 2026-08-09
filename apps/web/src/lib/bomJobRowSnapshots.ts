@@ -10,6 +10,7 @@ import {
   extractHttpUrlFromDownloadCell,
 } from './bomRowFields';
 import { parseBomRowStatus, type BomRowStatusJson } from './bomRowStatus';
+import type { BomFeishuUploadJob } from './bomFeishuUploadJobs';
 import { fetchBomScannerSettings, type BomJsonKeyMap } from './bomScannerSettings';
 import { LABEL_EXTERNAL_ARTI, LABEL_INTERNAL_ARTI } from './bomUiLabels';
 
@@ -22,6 +23,10 @@ export type BomJobRowDetailLine = {
   md5: string | null;
   localSizeLabel: string | null;
   statusLine: string;
+  /** 本任务结果视角：fail / ok / skip / live */
+  outcome?: 'fail' | 'ok' | 'skip' | 'live';
+  /** 失败行当前是否已飞书对齐（补传后） */
+  currentAligned?: boolean | null;
 };
 
 function urlBasename(u: string): string {
@@ -136,6 +141,97 @@ export async function fetchBomJobRowDetails(
       md5,
       localSizeLabel,
       statusLine: statusLineForKind(kind, r.status),
+    });
+  }
+  return out;
+}
+
+/**
+ * 飞书上传详情：优先读任务不可变 result（失败置顶），并附带当前行状态。
+ * 旧任务无 result 时回退到 live bom_rows。
+ */
+export async function fetchFeishuUploadJobDetailLines(
+  job: BomFeishuUploadJob,
+): Promise<BomJobRowDetailLine[]> {
+  const result = job.result;
+  if (!result || (result.fail.length === 0 && result.ok.length === 0 && result.skip.length === 0)) {
+    const live = await fetchBomJobRowDetails(job.batchId, job.rowIds, 'feishu_upload');
+    return live.map((l) => ({ ...l, outcome: 'live' as const }));
+  }
+
+  const orderedIds = [
+    ...result.fail.map((f) => f.rowId),
+    ...result.ok.map((o) => o.rowId),
+    ...result.skip.map((s) => s.rowId),
+  ];
+  const uniq = [...new Set(orderedIds.filter(Boolean))];
+  const { jsonKeyMap } = await fetchBomScannerSettings();
+
+  const { data, error } = await supabase
+    .from('bom_rows')
+    .select('id,bom_row,status')
+    .eq('batch_id', job.batchId)
+    .in('id', uniq);
+  if (error) throw error;
+
+  const byId = new Map<string, BomBatchRow>();
+  for (const raw of data ?? []) {
+    const rec = raw as Record<string, unknown>;
+    byId.set(String(rec.id), {
+      id: String(rec.id),
+      bom_row: rec.bom_row as BomRowRecord,
+      status: parseBomRowStatus(rec.status),
+    });
+  }
+
+  const md5List: string[] = [];
+  for (const id of uniq) {
+    const r = byId.get(id);
+    if (!r) continue;
+    const m = extractExpectedMd5FromRow(r.bom_row, jsonKeyMap);
+    if (m) md5List.push(m);
+  }
+  const localMap = await fetchLocalFileInfoByMd5(md5List);
+
+  const failMap = new Map(result.fail.map((f) => [f.rowId, f]));
+  const okMap = new Map(result.ok.map((o) => [o.rowId, o]));
+  const skipMap = new Map(result.skip.map((s) => [s.rowId, s]));
+
+  const out: BomJobRowDetailLine[] = [];
+  for (const id of orderedIds) {
+    const r = byId.get(id);
+    const fail = failMap.get(id);
+    const ok = okMap.get(id);
+    const skip = skipMap.get(id);
+    const outcome: BomJobRowDetailLine['outcome'] = fail ? 'fail' : ok ? 'ok' : skip ? 'skip' : 'live';
+    const displayFromSnap = fail?.fileName || ok?.fileName || null;
+    const md5 = r ? extractExpectedMd5FromRow(r.bom_row, jsonKeyMap) : null;
+    const localInfo = md5 ? localMap.get(md5) : undefined;
+    const feishuNow = r?.status.feishu ?? null;
+    const currentAligned = fail ? feishuNow === 'present' : null;
+
+    let statusLine: string;
+    if (fail) {
+      statusLine = `本任务失败 · ${fail.error.slice(0, 200)}`;
+      if (currentAligned) statusLine += ' · 当前已对齐（后续补传成功）';
+      else if (feishuNow) statusLine += ` · 当前飞书 ${feishuNow}`;
+    } else if (ok) {
+      statusLine = `本任务成功${ok.kind === 'dedup' ? '（清单去重）' : ''}`;
+      if (r) statusLine += ` · ${statusLineForKind('feishu_upload', r.status)}`;
+    } else if (skip) {
+      statusLine = `本任务跳过${skip.reason ? ` · ${skip.reason}` : ''}`;
+    } else {
+      statusLine = r ? statusLineForKind('feishu_upload', r.status) : '—';
+    }
+
+    out.push({
+      rowId: id,
+      displayName: displayFromSnap || (r ? displayNameForRow(r.bom_row, jsonKeyMap) : '—'),
+      md5,
+      localSizeLabel: localInfo != null ? formatBytesHuman(localInfo.sizeBytes) : null,
+      statusLine,
+      outcome,
+      currentAligned,
     });
   }
   return out;

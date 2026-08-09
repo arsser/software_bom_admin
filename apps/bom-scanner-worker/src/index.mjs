@@ -5,7 +5,15 @@ import path from 'node:path';
 import { pipeline } from 'node:stream/promises';
 import { Readable, Transform } from 'node:stream';
 import { createClient } from '@supabase/supabase-js';
-import { drainExtSyncJobs, failStaleExtSyncJobs } from './extArtifactorySync.mjs';
+import {
+  drainExtSyncJobs,
+  failStaleExtSyncJobs,
+  fetchBomScannerValue,
+  fetchBatchProductDistributionSettings,
+  firstNonEmptyByKeysRelaxed,
+  mergeKeyMap,
+  safePathSegment,
+} from './extArtifactorySync.mjs';
 import { drainFeishuUploadJobs, failStaleFeishuUploadJobs } from './feishuUpload.mjs';
 import { drainFeishuScanJobs, failStaleFeishuScanJobs } from './feishuScanWorker.mjs';
 import { drainFeishuManifestJobs, failStaleFeishuManifestJobs } from './feishuManifestWorker.mjs';
@@ -21,6 +29,12 @@ import {
 } from './workerTuning.mjs';
 import { patchBomRowLocalStatus } from './bomRowStatusJson.mjs';
 import { reportBomLocalRootRuntime } from './workerRuntimeReport.mjs';
+import {
+  buildVersionRelativePath,
+  deliveryFileNameFromUrl,
+  findExistingLocalRelPathByMd5,
+  linkOrReuseLocalPath,
+} from './localStorePaths.mjs';
 
 function log(...args) {
   console.log(new Date().toISOString(), ...args);
@@ -468,7 +482,7 @@ async function patchDownloadJob(supabase, jobId, patch) {
  * @param {import('@supabase/supabase-js').SupabaseClient} supabase
  * @param {string} rootAbs
  * @param {{ apiKey: string, baseUrl: string }} creds
- * @param {{ id: string, downloadUrl: string }} row
+ * @param {{ id: string, downloadUrl: string, destRelPath?: string, expectedMd5?: string | null }} row
  * @param {object} [opts]
  * @param {(n: { runningDownloaded: number, runningTotal: number | null, fileName: string }) => void} [opts.onProgress]
  * @param {AbortSignal} [opts.signal]
@@ -499,22 +513,97 @@ async function downloadItArtifactRow(supabase, rootAbs, creds, row, opts = {}) {
     return { ok: false, message: msg };
   }
 
-  let baseName = safeFlatFilename(urlPathBasename(url));
-  let destName = baseName;
-  let destAbs = path.join(rootAbs, destName);
-  let n = 0;
-  while (true) {
+  const baseName = deliveryFileNameFromUrl(url);
+  const destRel =
+    typeof row.destRelPath === 'string' && row.destRelPath.trim()
+      ? row.destRelPath.trim().replace(/\\/g, '/')
+      : baseName;
+  const destName = path.posix.basename(destRel);
+  const destAbs = path.join(rootAbs, destRel.split('/').join(path.sep));
+  const expectedMd5 =
+    typeof row.expectedMd5 === 'string' && /^[a-f0-9]{32}$/i.test(row.expectedMd5.trim())
+      ? row.expectedMd5.trim().toLowerCase()
+      : null;
+
+  // 同 MD5 已在索引中：硬链到版本目录路径，避免重复下载与 _N 改名
+  if (expectedMd5) {
     try {
-      await fs.access(destAbs);
-      n += 1;
-      const ext = path.extname(baseName);
-      const stem = ext ? baseName.slice(0, -ext.length) : baseName;
-      destName = `${stem}_${n}${ext || ''}`;
-      destAbs = path.join(rootAbs, destName);
-    } catch {
-      break;
+      const existingRel = await findExistingLocalRelPathByMd5(supabase, expectedMd5);
+      if (existingRel) {
+        const sourceAbs = path.join(rootAbs, existingRel.split('/').join(path.sep));
+        try {
+          await fs.access(sourceAbs);
+          const linked = await linkOrReuseLocalPath({
+            rootAbs,
+            destRel,
+            sourceRel: existingRel,
+          });
+          if (!linked.ok) {
+            await patchBomRowLocalStatus(supabase, id, 'error', linked.message.slice(0, 1000));
+            return { ok: false, message: linked.message };
+          }
+          let fileSize = 0;
+          let mtimeIso = new Date().toISOString();
+          try {
+            const st = await fs.stat(destAbs);
+            fileSize = st.size;
+            mtimeIso = new Date(st.mtimeMs).toISOString();
+          } catch {
+            /* ignore */
+          }
+          await supabase.rpc('bom_upsert_local_file_web', {
+            p_path: destRel,
+            p_size_bytes: fileSize,
+            p_mtime: mtimeIso,
+            p_md5: expectedMd5,
+          });
+          const { error: refErr } = await supabase.rpc('bom_refresh_local_found_statuses');
+          if (refErr) log('WARN bom_refresh after hardlink', id, refErr.message);
+          log('it-download reuse', id, { kind: linked.kind, destRel, sourceRel: existingRel });
+          return { ok: true, fileName: destName, bytes: fileSize, retries: 0, reused: true };
+        } catch {
+          log('WARN it-download indexed path missing on disk', id, existingRel);
+        }
+      }
+    } catch (e) {
+      log('WARN it-download md5 lookup', id, e instanceof Error ? e.message : e);
     }
   }
+
+  // 目标已存在：同内容则跳过；不同内容则失败（不再 _N 改名）
+  try {
+    const st = await fs.stat(destAbs);
+    if (st.isFile()) {
+      if (expectedMd5) {
+        let existingMd5 = null;
+        try {
+          existingMd5 = await md5File(destAbs);
+        } catch (e) {
+          log('WARN it-download existing md5', id, e instanceof Error ? e.message : e);
+        }
+        if (existingMd5 && existingMd5.toLowerCase() === expectedMd5) {
+          await supabase.rpc('bom_upsert_local_file_web', {
+            p_path: destRel,
+            p_size_bytes: st.size,
+            p_mtime: new Date(st.mtimeMs).toISOString(),
+            p_md5: expectedMd5,
+          });
+          await supabase.rpc('bom_refresh_local_found_statuses');
+          return { ok: true, fileName: destName, bytes: st.size, retries: 0, reused: true };
+        }
+        const msg = `目标已存在且 MD5 不一致：${destRel}`;
+        await patchBomRowLocalStatus(supabase, id, 'error', msg.slice(0, 1000));
+        return { ok: false, message: msg };
+      }
+      const msg = `目标已存在：${destRel}（未提供期望 MD5，拒绝覆盖）`;
+      await patchBomRowLocalStatus(supabase, id, 'error', msg.slice(0, 1000));
+      return { ok: false, message: msg };
+    }
+  } catch {
+    /* missing ok */
+  }
+
+  await fs.mkdir(path.dirname(destAbs), { recursive: true });
 
   const tmpAbs = `${destAbs}.part`;
   let urlHost = '';
@@ -530,7 +619,7 @@ async function downloadItArtifactRow(supabase, rootAbs, creds, row, opts = {}) {
   log('it-download fetch', id, {
     urlHost,
     pathPrefix: urlPathPrefix,
-    destFile: destName,
+    destFile: destRel,
     configuredBaseUrl: creds.baseUrl || '(none)',
     hostMatchesBase: hostOk,
     auth: 'Bearer + X-JFrog-Art-Api (same key; JFrog 通常认后者)',
@@ -616,14 +705,19 @@ async function downloadItArtifactRow(supabase, rootAbs, creds, row, opts = {}) {
       fileSize = 0;
     }
     await fs.rename(tmpAbs, destAbs);
-    log('it-download ok', id, destName);
+    log('it-download ok', id, destRel);
 
-    const relPath = destName.split(path.sep).join('/');
+    const relPath = destRel;
     let md5Hex = null;
     try {
       md5Hex = await md5File(destAbs);
     } catch (e) {
       log('WARN it-download md5', id, e instanceof Error ? e.message : e);
+    }
+    if (expectedMd5 && md5Hex && md5Hex.toLowerCase() !== expectedMd5) {
+      const msg = `下载完成但 MD5 不匹配：期望 ${expectedMd5}，实际 ${md5Hex.toLowerCase()}`;
+      await patchBomRowLocalStatus(supabase, id, 'error', msg.slice(0, 1000));
+      return { ok: false, message: msg, retries };
     }
     let mtimeIso = new Date().toISOString();
     try {
@@ -720,7 +814,7 @@ async function claimDownloadJob(supabase) {
 /**
  * @param {import('@supabase/supabase-js').SupabaseClient} supabase
  * @param {string} rootAbs
- * @param {{ id: string, row_ids: string[], progress_total: number, pull_url_source?: string }} job
+ * @param {{ id: string, batch_id: string, row_ids: string[], progress_total: number, pull_url_source?: string }} job
  * @param {import('./workerTuning.mjs').WorkerTuning} tuning
  */
 async function executeDownloadJob(supabase, rootAbs, job, tuning) {
@@ -749,6 +843,28 @@ async function executeDownloadJob(supabase, rootAbs, job, tuning) {
       cancel_requested: false,
     });
     return;
+  }
+
+  const scannerVal = await fetchBomScannerValue(supabase);
+  const keyMap = mergeKeyMap(scannerVal);
+  const batchProdCfg = await fetchBatchProductDistributionSettings(supabase, job.batch_id);
+  const batchNameRaw = batchProdCfg.batchName;
+  const batchNameFallback = `batch-${String(job.batch_id).replace(/-/g, '').slice(0, 8)}`;
+  const batchDir = safePathSegment(batchNameRaw || batchNameFallback);
+
+  const { data: rowRecs, error: rowLoadErr } = await supabase
+    .from('bom_rows')
+    .select('id,bom_row')
+    .in('id', rowIds);
+  if (rowLoadErr) log('WARN load bom_rows for download paths', rowLoadErr.message);
+  /** @type {Map<string, Record<string, unknown>>} */
+  const bomById = new Map();
+  for (const r of rowRecs ?? []) {
+    const bom =
+      r.bom_row && typeof r.bom_row === 'object' && !Array.isArray(r.bom_row)
+        ? /** @type {Record<string, unknown>} */ (r.bom_row)
+        : {};
+    bomById.set(String(r.id), bom);
   }
 
   const extOnly = String(job.pull_url_source ?? 'download').toLowerCase() === 'ext_only';
@@ -836,15 +952,26 @@ async function executeDownloadJob(supabase, rootAbs, job, tuning) {
         continue;
       }
 
-      const destNameGuess = safeFlatFilename(urlPathBasename(url));
+      const bomRow = bomById.get(rowId) ?? {};
+      const fileName = deliveryFileNameFromUrl(url);
+      const modSeg = firstNonEmptyByKeysRelaxed(bomRow, keyMap.module);
+      const compSeg = firstNonEmptyByKeysRelaxed(bomRow, keyMap.component);
+      const middleDir = modSeg ? safePathSegment(modSeg) : compSeg ? safePathSegment(compSeg) : null;
+      const destRelPath = buildVersionRelativePath(batchDir, middleDir, fileName);
+      const md5Raw = firstNonEmptyByKeysRelaxed(bomRow, keyMap.expectedMd5);
+      const expectedMd5 =
+        md5Raw && typeof md5Raw === 'string' && /^[a-f0-9]{32}$/i.test(md5Raw.trim())
+          ? md5Raw.trim().toLowerCase()
+          : null;
+
       let lastFlush = 0;
       const rowDownloadStartedAt = Date.now();
       await patchDownloadJob(supabase, jobId, {
         running_row_id: rowId,
-        running_file_name: destNameGuess,
+        running_file_name: fileName,
         running_bytes_downloaded: 0,
         running_bytes_total: null,
-        last_message: `${completed}/${total} 下载中… ${destNameGuess}`,
+        last_message: `${completed}/${total} 下载中… ${destRelPath}`,
       });
       await touchHeartbeat();
 
@@ -869,11 +996,16 @@ async function executeDownloadJob(supabase, rootAbs, job, tuning) {
       }
 
       currentRowAbort = new AbortController();
-      const r = await downloadItArtifactRow(supabase, rootAbs, rowCreds, { id: rowId, downloadUrl: url }, {
+      const r = await downloadItArtifactRow(
+        supabase,
+        rootAbs,
+        rowCreds,
+        { id: rowId, downloadUrl: url, destRelPath, expectedMd5 },
+        {
         signal: currentRowAbort.signal,
         timeoutMs: tuning.httpTimeoutMs,
         maxRetries: tuning.httpRetries,
-        onProgress: ({ runningDownloaded, runningTotal, fileName }) => {
+        onProgress: ({ runningDownloaded, runningTotal, fileName: fn }) => {
           const now = Date.now();
           if (now - lastFlush < heartbeatMs) return;
           lastFlush = now;
@@ -888,14 +1020,15 @@ async function executeDownloadJob(supabase, rootAbs, job, tuning) {
               etaText = `预计剩余 ${formatEtaSeconds(etaSec)}`;
             }
           }
+          const displayName = fn || fileName;
           const msg =
             runningTotal != null
-              ? `${completed + 1}/${total} 下载中…（${formatBytes(runningDownloaded)}/${formatBytes(runningTotal)}，${etaText}） 文件：${fileName}`
-              : `${completed + 1}/${total} 下载中…（${formatBytes(runningDownloaded)}） 文件：${fileName}`;
+              ? `${completed + 1}/${total} 下载中…（${formatBytes(runningDownloaded)}/${formatBytes(runningTotal)}，${etaText}） 文件：${displayName}`
+              : `${completed + 1}/${total} 下载中…（${formatBytes(runningDownloaded)}） 文件：${displayName}`;
           void patchDownloadJob(supabase, jobId, {
             running_bytes_downloaded: runningDownloaded,
             running_bytes_total: runningTotal,
-            running_file_name: fileName,
+            running_file_name: displayName,
             heartbeat_at: new Date().toISOString(),
             last_message: msg.slice(0, 2000),
           });

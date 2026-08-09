@@ -696,7 +696,26 @@ export async function executeExtSyncJob(supabase, rootAbs, job, tuning) {
       const fileStat = await fs.stat(diskAbs);
       if (!fileStat.isFile()) throw new Error('本地路径不是文件');
       const rowSize = Math.max(0, Number(fileStat.size) || 0);
-      const fileName = safeFlatFilename(path.basename(diskAbs));
+      // 交付名优先下载 URL 原始 basename，避免本地 _N 撞名泄漏到 ext
+      const urlRawForName = firstNonEmptyByKeysRelaxed(bomRow, keyMap.downloadUrl);
+      let fileName = '';
+      if (urlRawForName) {
+        try {
+          if (/^https?:\/\//i.test(urlRawForName)) {
+            const u = new URL(urlRawForName);
+            const seg = u.pathname.split('/').filter(Boolean);
+            if (seg.length) fileName = safeFlatFilename(decodeURIComponent(seg[seg.length - 1]));
+          } else {
+            const parts = urlRawForName.replace(/\\/g, '/').split('/').filter(Boolean);
+            if (parts.length) fileName = safeFlatFilename(decodeURIComponent(parts[parts.length - 1]));
+          }
+        } catch {
+          fileName = '';
+        }
+      }
+      if (!fileName || fileName === 'artifact.bin') {
+        fileName = safeFlatFilename(path.basename(diskAbs));
+      }
       const etaText = estimateEtaText(completed, total, Date.now() - jobStartMs);
 
       await patchExtSyncJob(supabase, jobId, {

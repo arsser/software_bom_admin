@@ -33,9 +33,11 @@ import {
 import {
   BOM_FEISHU_UPLOAD_JOB_STATUS_LABEL,
   cancelBomFeishuUploadJob,
+  feishuUploadJobFailCount,
   feishuUploadJobProgressPercent,
   formatFeishuUploadJobBytesLine,
   fetchBomFeishuUploadJobsForUser,
+  requestBomFeishuUploadRetryFailed,
   type BomFeishuUploadJob,
   type BomFeishuUploadJobStatus,
 } from '../lib/bomFeishuUploadJobs';
@@ -43,6 +45,7 @@ import { LABEL_EXTERNAL_ARTI, LABEL_INTERNAL_ARTI } from '../lib/bomUiLabels';
 import { fetchBomBatches, type BomBatch } from '../lib/bomBatches';
 import {
   fetchBomJobRowDetails,
+  fetchFeishuUploadJobDetailLines,
   type BomJobDetailKind,
   type BomJobRowDetailLine,
 } from '../lib/bomJobRowSnapshots';
@@ -146,6 +149,8 @@ export const BomDownloadJobsPage: React.FC = () => {
   const [detailLines, setDetailLines] = useState<BomJobRowDetailLine[]>([]);
   const [detailLoading, setDetailLoading] = useState(false);
   const [detailError, setDetailError] = useState<string | null>(null);
+  const [detailFeishuJob, setDetailFeishuJob] = useState<BomFeishuUploadJob | null>(null);
+  const [feishuRetryBusy, setFeishuRetryBusy] = useState<string | null>(null);
   const [listRefreshNonce, setListRefreshNonce] = useState(0);
 
   const batchIdFilter = searchParams.get('batchId') ?? '';
@@ -345,15 +350,25 @@ export const BomDownloadJobsPage: React.FC = () => {
     batchName: string | null | undefined,
     jobId: string,
     rowIds: string[],
+    feishuJob?: BomFeishuUploadJob | null,
   ) => {
     setDetailOpen(true);
     setDetailTitle(`${jobLabel} · 行级详情`);
-    setDetailSubtitle(`${batchName ?? batchId} · 任务 ${jobId} · 共 ${rowIds.length} 行（按任务入队顺序）`);
+    const failN = feishuJob ? feishuUploadJobFailCount(feishuJob) : 0;
+    setDetailSubtitle(
+      failN > 0
+        ? `${batchName ?? batchId} · 任务 ${jobId} · 共 ${rowIds.length} 行 · 本任务失败 ${failN}`
+        : `${batchName ?? batchId} · 任务 ${jobId} · 共 ${rowIds.length} 行（按任务入队顺序）`,
+    );
     setDetailLoading(true);
     setDetailError(null);
     setDetailLines([]);
+    setDetailFeishuJob(kind === 'feishu_upload' ? feishuJob ?? null : null);
     try {
-      const lines = await fetchBomJobRowDetails(batchId, rowIds, kind);
+      const lines =
+        kind === 'feishu_upload' && feishuJob
+          ? await fetchFeishuUploadJobDetailLines(feishuJob)
+          : await fetchBomJobRowDetails(batchId, rowIds, kind);
       setDetailLines(lines);
     } catch (e) {
       setDetailError(e instanceof Error ? e.message : String(e));
@@ -366,6 +381,86 @@ export const BomDownloadJobsPage: React.FC = () => {
     setDetailOpen(false);
     setDetailLines([]);
     setDetailError(null);
+    setDetailFeishuJob(null);
+  };
+
+  const handleRetryFeishuFailed = async (job: BomFeishuUploadJob) => {
+    if (!window.confirm(`仅重试本任务失败的 ${feishuUploadJobFailCount(job)} 行？将创建新的补传任务。`)) {
+      return;
+    }
+    setFeishuRetryBusy(job.id);
+    try {
+      const newId = await requestBomFeishuUploadRetryFailed(job);
+      setListRefreshNonce((n) => n + 1);
+      alert(`已入队补传任务：${newId}`);
+      closeJobDetail();
+      setSectionFeishuOpen(true);
+    } catch (e) {
+      alert(e instanceof Error ? e.message : String(e));
+    } finally {
+      setFeishuRetryBusy(null);
+    }
+  };
+
+  const renderFeishuMessageCell = (job: BomFeishuUploadJob) => {
+    const failN = feishuUploadJobFailCount(job);
+    const msg = job.lastMessage;
+    if (!msg) return renderMessageCell(`feishu-${job.id}`, null);
+    if (failN <= 0) return renderMessageCell(`feishu-${job.id}`, msg);
+    const highlighted = msg.replace(
+      /(失败\s*)(\d+)/g,
+      '$1\u0000$2\u0000',
+    );
+    const parts = highlighted.split('\u0000');
+    const key = `feishu-${job.id}`;
+    const expanded = Boolean(expandedMessageKeys[key]);
+    return (
+      <div>
+        <div
+          className={expanded ? 'font-mono break-all whitespace-pre-wrap select-text' : 'line-clamp-2 font-mono break-all select-text'}
+          title={!expanded ? msg : undefined}
+        >
+          {parts.map((p, i) =>
+            i % 2 === 1 ? (
+              <span key={i} className="font-semibold text-red-600 bg-red-50 px-0.5 rounded">
+                {p}
+              </span>
+            ) : (
+              <span key={i}>{p}</span>
+            ),
+          )}
+        </div>
+        <div className="mt-1 flex flex-wrap items-center gap-3 text-[11px]">
+          <span className="inline-flex items-center rounded border border-red-200 bg-red-50 px-1.5 py-0.5 font-medium text-red-700">
+            失败 {failN}
+          </span>
+          {job.parentJobId ? (
+            <span className="text-slate-500" title={job.parentJobId}>
+              补传自 {job.parentJobId.slice(0, 8)}…
+            </span>
+          ) : null}
+          {(job.childJobIds?.length ?? 0) > 0 ? (
+            <span className="text-emerald-700" title={job.childJobIds!.join(', ')}>
+              已有补传 {job.childJobIds!.length}
+            </span>
+          ) : null}
+          <button
+            type="button"
+            onClick={() => toggleMessageExpanded(key)}
+            className="text-indigo-600 hover:text-indigo-700 underline decoration-indigo-300/80"
+          >
+            {expanded ? '收起' : '展开'}
+          </button>
+          <button
+            type="button"
+            onClick={() => void handleCopyMessage(key, msg)}
+            className="text-slate-600 hover:text-slate-800 underline decoration-slate-300/80"
+          >
+            {copiedMessageKey === key ? '已复制' : '复制'}
+          </button>
+        </div>
+      </div>
+    );
   };
 
   const toggleMessageExpanded = (key: string) => {
@@ -871,6 +966,7 @@ export const BomDownloadJobsPage: React.FC = () => {
               {feishuJobs.map((j) => {
                 const pct = feishuUploadJobProgressPercent(j);
                 const bytesLine = formatFeishuUploadJobBytesLine(j);
+                const failN = feishuUploadJobFailCount(j);
                 const canCancelFeishu =
                   j.status === 'queued' || j.status === 'running';
                 const startedMs = parseMsOrNull(j.startedAt);
@@ -880,11 +976,18 @@ export const BomDownloadJobsPage: React.FC = () => {
                   startedMs != null && endMs != null && endMs >= startedMs
                     ? Math.round((endMs - startedMs) / 1000)
                     : null;
+                const statusBadgeCls =
+                  failN > 0 || j.status === 'failed'
+                    ? 'border-red-200 bg-red-50 text-red-800'
+                    : 'border-violet-200 bg-violet-50/80 text-violet-900';
                 return (
                   <tr key={j.id} className="hover:bg-slate-50/80">
                     <td className="px-3 py-2 whitespace-nowrap">
-                      <span className="inline-flex rounded-md border border-violet-200 bg-violet-50/80 px-2 py-0.5 text-xs font-medium text-violet-900">
+                      <span className={`inline-flex rounded-md border px-2 py-0.5 text-xs font-medium ${statusBadgeCls}`}>
                         {BOM_FEISHU_UPLOAD_JOB_STATUS_LABEL[j.status]}
+                        {failN > 0 ? (
+                          <span className="ml-1 font-semibold text-red-600">· 失败 {failN}</span>
+                        ) : null}
                       </span>
                     </td>
                     <td className="px-3 py-2">
@@ -892,10 +995,18 @@ export const BomDownloadJobsPage: React.FC = () => {
                       <div className="text-[11px] text-slate-400 font-mono truncate max-w-[14rem]" title={j.batchId}>
                         {j.batchId}
                       </div>
+                      {j.parentJobId ? (
+                        <div className="text-[11px] text-slate-500 mt-0.5" title={j.parentJobId}>
+                          补传自 {j.parentJobId.slice(0, 8)}…
+                        </div>
+                      ) : null}
                     </td>
                     <td className="px-3 py-2 text-slate-700">
                       <div className="whitespace-nowrap">
                         {j.progressTotal > 0 ? `${j.progressCurrent}/${j.progressTotal} 行` : '—'}
+                        {failN > 0 ? (
+                          <span className="ml-1 text-red-600 font-medium">（失败 {failN}）</span>
+                        ) : null}
                       </div>
                       {(j.status === 'running' || j.status === 'queued') && pct > 0 ? (
                         <div className="mt-1 h-1.5 w-28 rounded-full bg-slate-100 overflow-hidden">
@@ -910,7 +1021,7 @@ export const BomDownloadJobsPage: React.FC = () => {
                       {bytesLine ?? '—'}
                     </td>
                     <td className="px-3 py-2 text-xs text-slate-600 max-w-[20rem]">
-                      {renderMessageCell(`feishu-${j.id}`, j.lastMessage)}
+                      {renderFeishuMessageCell(j)}
                     </td>
                     {renderJobTimeCell({
                       createdAt: j.createdAt,
@@ -925,10 +1036,10 @@ export const BomDownloadJobsPage: React.FC = () => {
                         <button
                           type="button"
                           onClick={() =>
-                            void openJobDetail('feishu_upload', '飞书上传', j.batchId, j.batchName, j.id, j.rowIds)
+                            void openJobDetail('feishu_upload', '飞书上传', j.batchId, j.batchName, j.id, j.rowIds, j)
                           }
                           className="inline-flex items-center gap-1 px-2 py-1 rounded border border-violet-200 text-xs text-violet-900 hover:bg-violet-50"
-                          title="按任务 row_ids 查看每行文件名、本地索引大小与飞书状态"
+                          title="按任务 result 查看失败清单与当前对齐状态"
                         >
                           <ListTree size={12} />
                           详情
@@ -938,24 +1049,38 @@ export const BomDownloadJobsPage: React.FC = () => {
                       )}
                     </td>
                     <td className="px-3 py-2 text-right">
-                      {canCancelFeishu ? (
-                        <button
-                          type="button"
-                          disabled={feishuCancelBusy === j.id}
-                          onClick={() => void handleCancelFeishu(j.id)}
-                          title={
-                            j.status === 'running'
-                              ? '请求取消正在执行的飞书上传（再次点击可强制取消）'
-                              : '取消排队中的飞书上传任务'
-                          }
-                          className="inline-flex items-center gap-1 px-2 py-1 rounded border border-slate-300 text-xs text-slate-700 hover:bg-slate-50 disabled:opacity-50"
-                        >
-                          {feishuCancelBusy === j.id ? <Loader2 size={12} className="animate-spin" /> : <XCircle size={12} />}
-                          {j.status === 'running' ? '取消任务' : '取消排队'}
-                        </button>
-                      ) : (
-                        <span className="text-slate-300">—</span>
-                      )}
+                      <div className="inline-flex flex-col items-end gap-1">
+                        {failN > 0 && (j.result?.fail?.length ?? 0) > 0 ? (
+                          <button
+                            type="button"
+                            disabled={feishuRetryBusy === j.id}
+                            onClick={() => void handleRetryFeishuFailed(j)}
+                            className="inline-flex items-center gap-1 px-2 py-1 rounded border border-red-200 text-xs text-red-800 hover:bg-red-50 disabled:opacity-50"
+                            title="仅重试本任务失败行（创建补传任务）"
+                          >
+                            {feishuRetryBusy === j.id ? <Loader2 size={12} className="animate-spin" /> : <RefreshCcw size={12} />}
+                            仅重试失败
+                          </button>
+                        ) : null}
+                        {canCancelFeishu ? (
+                          <button
+                            type="button"
+                            disabled={feishuCancelBusy === j.id}
+                            onClick={() => void handleCancelFeishu(j.id)}
+                            title={
+                              j.status === 'running'
+                                ? '请求取消正在执行的飞书上传（再次点击可强制取消）'
+                                : '取消排队中的飞书上传任务'
+                            }
+                            className="inline-flex items-center gap-1 px-2 py-1 rounded border border-slate-300 text-xs text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+                          >
+                            {feishuCancelBusy === j.id ? <Loader2 size={12} className="animate-spin" /> : <XCircle size={12} />}
+                            {j.status === 'running' ? '取消任务' : '取消排队'}
+                          </button>
+                        ) : failN <= 0 ? (
+                          <span className="text-slate-300">—</span>
+                        ) : null}
+                      </div>
                     </td>
                   </tr>
                 );
@@ -995,13 +1120,30 @@ export const BomDownloadJobsPage: React.FC = () => {
                   {detailSubtitle}
                 </div>
               </div>
-              <button
-                type="button"
-                onClick={() => closeJobDetail()}
-                className="rounded-md border border-slate-300 px-2 py-1 text-xs text-slate-700 hover:bg-slate-50 shrink-0"
-              >
-                关闭
-              </button>
+              <div className="flex items-center gap-2 shrink-0">
+                {detailFeishuJob && feishuUploadJobFailCount(detailFeishuJob) > 0 && (detailFeishuJob.result?.fail?.length ?? 0) > 0 ? (
+                  <button
+                    type="button"
+                    disabled={feishuRetryBusy === detailFeishuJob.id}
+                    onClick={() => void handleRetryFeishuFailed(detailFeishuJob)}
+                    className="inline-flex items-center gap-1 rounded-md border border-red-200 px-2 py-1 text-xs text-red-800 hover:bg-red-50 disabled:opacity-50"
+                  >
+                    {feishuRetryBusy === detailFeishuJob.id ? (
+                      <Loader2 size={12} className="animate-spin" />
+                    ) : (
+                      <RefreshCcw size={12} />
+                    )}
+                    仅重试失败行
+                  </button>
+                ) : null}
+                <button
+                  type="button"
+                  onClick={() => closeJobDetail()}
+                  className="rounded-md border border-slate-300 px-2 py-1 text-xs text-slate-700 hover:bg-slate-50"
+                >
+                  关闭
+                </button>
+              </div>
             </div>
             <div className="p-3 overflow-auto flex-1 min-h-0">
               {detailLoading ? (
@@ -1017,6 +1159,7 @@ export const BomDownloadJobsPage: React.FC = () => {
                     <thead className="bg-slate-50 border-b border-slate-200">
                       <tr>
                         <th className="px-2 py-2 text-left font-semibold text-slate-700">#</th>
+                        <th className="px-2 py-2 text-left font-semibold text-slate-700">结果</th>
                         <th className="px-2 py-2 text-left font-semibold text-slate-700">文件名（推断）</th>
                         <th className="px-2 py-2 text-left font-semibold text-slate-700">期望 MD5</th>
                         <th className="px-2 py-2 text-left font-semibold text-slate-700">本地索引大小</th>
@@ -1024,19 +1167,40 @@ export const BomDownloadJobsPage: React.FC = () => {
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-100">
-                      {detailLines.map((line, idx) => (
-                        <tr key={`${line.rowId}-${idx}`} className="hover:bg-slate-50/80">
-                          <td className="px-2 py-1.5 text-slate-500 whitespace-nowrap">{idx + 1}</td>
-                          <td className="px-2 py-1.5 text-slate-800 max-w-[14rem] truncate" title={line.displayName}>
-                            {line.displayName}
-                          </td>
-                          <td className="px-2 py-1.5 font-mono text-[11px] text-slate-600">{line.md5 ?? '—'}</td>
-                          <td className="px-2 py-1.5 whitespace-nowrap">{line.localSizeLabel ?? '—'}</td>
-                          <td className="px-2 py-1.5 text-slate-700 max-w-[28rem]">
-                            <div className="whitespace-pre-wrap break-words">{line.statusLine}</div>
-                          </td>
-                        </tr>
-                      ))}
+                      {detailLines.map((line, idx) => {
+                        const isFail = line.outcome === 'fail';
+                        const rowCls = isFail
+                          ? line.currentAligned
+                            ? 'bg-amber-50/70 hover:bg-amber-50'
+                            : 'bg-red-50/80 hover:bg-red-50'
+                          : 'hover:bg-slate-50/80';
+                        return (
+                          <tr key={`${line.rowId}-${idx}`} className={rowCls}>
+                            <td className="px-2 py-1.5 text-slate-500 whitespace-nowrap">{idx + 1}</td>
+                            <td className="px-2 py-1.5 whitespace-nowrap">
+                              {isFail ? (
+                                <span className={`font-medium ${line.currentAligned ? 'text-amber-800' : 'text-red-700'}`}>
+                                  {line.currentAligned ? '失败·已补齐' : '失败'}
+                                </span>
+                              ) : line.outcome === 'ok' ? (
+                                <span className="text-emerald-700">成功</span>
+                              ) : line.outcome === 'skip' ? (
+                                <span className="text-slate-500">跳过</span>
+                              ) : (
+                                <span className="text-slate-400">当前</span>
+                              )}
+                            </td>
+                            <td className="px-2 py-1.5 text-slate-800 max-w-[14rem] truncate" title={line.displayName}>
+                              {line.displayName}
+                            </td>
+                            <td className="px-2 py-1.5 font-mono text-[11px] text-slate-600">{line.md5 ?? '—'}</td>
+                            <td className="px-2 py-1.5 whitespace-nowrap">{line.localSizeLabel ?? '—'}</td>
+                            <td className={`px-2 py-1.5 max-w-[28rem] ${isFail && !line.currentAligned ? 'text-red-800' : 'text-slate-700'}`}>
+                              <div className="whitespace-pre-wrap break-words">{line.statusLine}</div>
+                            </td>
+                          </tr>
+                        );
+                      })}
                     </tbody>
                   </table>
                 </div>

@@ -104,7 +104,7 @@ function renderJobTimeCell(opts: {
             {live?.speedBps != null && live.speedBps > 0 ? formatSpeedLabel(live.speedBps) : '—'}
           </div>
           <div>
-            ETA{' '}
+            整批 ETA{' '}
             {live?.etaSec != null ? formatElapsedLabel(live.etaSec) : '—'}
           </div>
         </>
@@ -263,10 +263,13 @@ export const BomDownloadJobsPage: React.FC = () => {
   useEffect(() => {
     const now = Date.now();
     const next: Record<string, JobTransferLiveStats> = {};
-    const touch = (job: BomJobByteProgress & { id: string }, runningAlreadyInTotal: boolean) => {
+    const touch = (job: BomJobByteProgress & { id: string; startedAt?: string | null; progressCurrent?: number; progressTotal?: number }, runningAlreadyInTotal: boolean) => {
       const prev = speedSamplesRef.current[job.id];
       const { stats, nextSample } = computeJobTransferLiveStats(
-        job,
+        {
+          ...job,
+          startedAtMs: parseMsOrNull(job.startedAt),
+        },
         runningAlreadyInTotal,
         prev,
         now,

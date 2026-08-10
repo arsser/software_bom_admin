@@ -511,6 +511,13 @@ function formatEtaSeconds(seconds) {
   return remMin > 0 ? `${hour}时${remMin}分` : `${hour}时`;
 }
 
+/** 说明列：仅表示当前文件剩余时间 */
+function formatFileEtaText(secondsOrNull) {
+  if (secondsOrNull == null) return '本文件预计剩余 --';
+  if (secondsOrNull <= 0) return '本文件预计剩余 0秒';
+  return `本文件预计剩余 ${formatEtaSeconds(secondsOrNull)}`;
+}
+
 /**
  * tenant_access_token 管理器。
  * - 按飞书服务端返回的 `expire` 字段动态决定下一次刷新时机（留 10 分钟安全余量，且不超过 100 分钟）。
@@ -1145,7 +1152,7 @@ export async function executeFeishuUploadJob(supabase, rootAbs, job, tuning) {
         tokenStats: feishuToken.stats(),
       });
 
-      lastJobMessage = `${completed + 1}/${total} 上传中…（分片 1/1，${formatBytes(0)}/${formatBytes(rowTotalBytes)}，预计剩余 --） 文件：${fileName}`;
+      lastJobMessage = `${completed + 1}/${total} 上传中…（分片 1/1，${formatBytes(0)}/${formatBytes(rowTotalBytes)}，${formatFileEtaText(null)}） 文件：${fileName}`;
       await patchFeishuUploadJob(supabase, jobId, {
         running_row_id: rowId,
         running_bytes_downloaded: 0,
@@ -1203,17 +1210,16 @@ export async function executeFeishuUploadJob(supabase, rootAbs, job, tuning) {
                 signal: currentRowAbort.signal,
                 onChunkDone: ({ seq, blockNum, bytesUploaded }) => {
                   const elapsedMs = Date.now() - rowUploadStartedAt;
-                  let etaText = '预计剩余 --';
+                  let fileEtaSec = null;
                   if (bytesUploaded >= fileStat.size) {
-                    etaText = '预计剩余 0秒';
+                    fileEtaSec = 0;
                   } else if (bytesUploaded > 0 && elapsedMs >= 1500) {
                     const speedBytesPerSec = bytesUploaded / (elapsedMs / 1000);
                     if (speedBytesPerSec > 0) {
-                      const etaSeconds = (fileStat.size - bytesUploaded) / speedBytesPerSec;
-                      etaText = `预计剩余 ${formatEtaSeconds(etaSeconds)}`;
+                      fileEtaSec = (fileStat.size - bytesUploaded) / speedBytesPerSec;
                     }
                   }
-                  lastJobMessage = `${completed + 1}/${total} 上传中…（分片 ${seq + 1}/${blockNum}，${formatBytes(bytesUploaded)}/${formatBytes(fileStat.size)}，${etaText}） 文件：${fileName}`;
+                  lastJobMessage = `${completed + 1}/${total} 上传中…（分片 ${seq + 1}/${blockNum}，${formatBytes(bytesUploaded)}/${formatBytes(fileStat.size)}，${formatFileEtaText(fileEtaSec)}） 文件：${fileName}`;
                   void patchFeishuUploadJob(supabase, jobId, {
                     running_bytes_downloaded: bytesUploaded,
                     running_bytes_total: fileStat.size,

@@ -33,13 +33,11 @@ function formatEtaSeconds(seconds) {
   return remMin > 0 ? `${hour}时${remMin}分` : `${hour}时`;
 }
 
-function estimateEtaText(completed, total, elapsedMs) {
-  if (total <= 0 || completed <= 0 || elapsedMs < 1500) return '预计剩余 --';
-  const speed = completed / (elapsedMs / 1000);
-  if (!Number.isFinite(speed) || speed <= 0) return '预计剩余 --';
-  const etaSeconds = (total - completed) / speed;
-  if (etaSeconds <= 0) return '预计剩余 0秒';
-  return `预计剩余 ${formatEtaSeconds(etaSeconds)}`;
+/** 说明列：仅表示当前文件剩余时间 */
+function formatFileEtaText(secondsOrNull) {
+  if (secondsOrNull == null) return '本文件预计剩余 --';
+  if (secondsOrNull <= 0) return '本文件预计剩余 0秒';
+  return `本文件预计剩余 ${formatEtaSeconds(secondsOrNull)}`;
 }
 
 const MAX_HTTP_RETRIES = 2;
@@ -618,7 +616,6 @@ export async function executeExtSyncJob(supabase, rootAbs, job, tuning) {
   let nRetries = 0;
   let bytesDoneTotal = 0;
   let userCancelled = false;
-  const jobStartMs = Date.now();
 
   for (const rowId of rowIds) {
     if (await isExtSyncJobCancelRequested(supabase, jobId)) {
@@ -716,7 +713,6 @@ export async function executeExtSyncJob(supabase, rootAbs, job, tuning) {
       if (!fileName || fileName === 'artifact.bin') {
         fileName = safeFlatFilename(path.basename(diskAbs));
       }
-      const etaText = estimateEtaText(completed, total, Date.now() - jobStartMs);
 
       await patchExtSyncJob(supabase, jobId, {
         running_row_id: rowId,
@@ -724,7 +720,7 @@ export async function executeExtSyncJob(supabase, rootAbs, job, tuning) {
         running_bytes_total: rowSize,
         bytes_downloaded_total: bytesDoneTotal,
         heartbeat_at: new Date().toISOString(),
-        last_message: `${completed + 1}/${total} 同步中…（${formatBytes(0)}/${formatBytes(rowSize)}，${etaText}） 文件：${fileName}`.slice(0, 2000),
+        last_message: `${completed + 1}/${total} 同步中…（${formatBytes(0)}/${formatBytes(rowSize)}，${formatFileEtaText(null)}） 文件：${fileName}`.slice(0, 2000),
       });
       const rowStartedAtMs = Date.now();
       let lastProgressFlushMs = 0;
@@ -812,17 +808,16 @@ export async function executeExtSyncJob(supabase, rootAbs, job, tuning) {
                 if (now - lastProgressFlushMs < hbMs) return;
                 lastProgressFlushMs = now;
                 const elapsedMs = now - rowStartedAtMs;
-                let etaText = '预计剩余 --';
+                let fileEtaSec = null;
                 if (uploadedBytes >= totalBytes) {
-                  etaText = '预计剩余 0秒';
+                  fileEtaSec = 0;
                 } else if (uploadedBytes > 0 && elapsedMs >= 1500) {
                   const speedBytesPerSec = uploadedBytes / (elapsedMs / 1000);
                   if (speedBytesPerSec > 0) {
-                    const etaSec = (totalBytes - uploadedBytes) / speedBytesPerSec;
-                    etaText = `预计剩余 ${formatEtaSeconds(etaSec)}`;
+                    fileEtaSec = (totalBytes - uploadedBytes) / speedBytesPerSec;
                   }
                 }
-                const progressMsg = `${completed + 1}/${total} 同步中…（${formatBytes(uploadedBytes)}/${formatBytes(totalBytes)}，${etaText}） 文件：${fileName}`.slice(0, 2000);
+                const progressMsg = `${completed + 1}/${total} 同步中…（${formatBytes(uploadedBytes)}/${formatBytes(totalBytes)}，${formatFileEtaText(fileEtaSec)}） 文件：${fileName}`.slice(0, 2000);
                 void patchExtSyncJob(supabase, jobId, {
                   running_bytes_downloaded: uploadedBytes,
                   running_bytes_total: totalBytes,

@@ -361,6 +361,13 @@ function formatEtaSeconds(seconds) {
   return remMin > 0 ? `${hour}时${remMin}分` : `${hour}时`;
 }
 
+/** 说明列：仅表示当前文件剩余时间 */
+function formatFileEtaText(secondsOrNull) {
+  if (secondsOrNull == null) return '本文件预计剩余 --';
+  if (secondsOrNull <= 0) return '本文件预计剩余 0秒';
+  return `本文件预计剩余 ${formatEtaSeconds(secondsOrNull)}`;
+}
+
 /** 日志用：不输出完整密钥 */
 function apiKeyLogHint(key) {
   const k = String(key ?? '').trim();
@@ -538,7 +545,30 @@ async function downloadItArtifactRow(supabase, rootAbs, creds, row, opts = {}) {
             destRel,
             sourceRel: existingRel,
           });
-          if (!linked.ok) {
+          if (!linked.ok && /目标路径已存在且与源不是同一文件/.test(linked.message)) {
+            log('it-download replace dest before hardlink', id, { destRel, sourceRel: existingRel });
+            try {
+              await fs.unlink(destAbs);
+            } catch (e) {
+              await patchBomRowLocalStatus(
+                supabase,
+                id,
+                'error',
+                `无法删除冲突目标文件：${destRel}（${e instanceof Error ? e.message : e}）`.slice(0, 1000),
+              );
+              return { ok: false, message: linked.message };
+            }
+            const linked2 = await linkOrReuseLocalPath({
+              rootAbs,
+              destRel,
+              sourceRel: existingRel,
+            });
+            if (!linked2.ok) {
+              await patchBomRowLocalStatus(supabase, id, 'error', linked2.message.slice(0, 1000));
+              return { ok: false, message: linked2.message };
+            }
+            Object.assign(linked, linked2);
+          } else if (!linked.ok) {
             await patchBomRowLocalStatus(supabase, id, 'error', linked.message.slice(0, 1000));
             return { ok: false, message: linked.message };
           }
@@ -570,7 +600,7 @@ async function downloadItArtifactRow(supabase, rootAbs, creds, row, opts = {}) {
     }
   }
 
-  // 目标已存在：同内容则跳过；不同内容则失败（不再 _N 改名）
+  // 目标已存在：同内容则跳过；不同内容则删除后重新拉取（下载任务语义是落到期望 MD5）
   try {
     const st = await fs.stat(destAbs);
     if (st.isFile()) {
@@ -591,13 +621,23 @@ async function downloadItArtifactRow(supabase, rootAbs, creds, row, opts = {}) {
           await supabase.rpc('bom_refresh_local_found_statuses');
           return { ok: true, fileName: destName, bytes: st.size, retries: 0, reused: true };
         }
-        const msg = `目标已存在且 MD5 不一致：${destRel}`;
+        log('it-download replace mismatched dest', id, {
+          destRel,
+          existingMd5: existingMd5 || '(unreadable)',
+          expectedMd5,
+        });
+        try {
+          await fs.unlink(destAbs);
+        } catch (e) {
+          const msg = `目标已存在且 MD5 不一致，且无法删除：${destRel}（${e instanceof Error ? e.message : e}）`;
+          await patchBomRowLocalStatus(supabase, id, 'error', msg.slice(0, 1000));
+          return { ok: false, message: msg };
+        }
+      } else {
+        const msg = `目标已存在：${destRel}（未提供期望 MD5，拒绝覆盖）`;
         await patchBomRowLocalStatus(supabase, id, 'error', msg.slice(0, 1000));
         return { ok: false, message: msg };
       }
-      const msg = `目标已存在：${destRel}（未提供期望 MD5，拒绝覆盖）`;
-      await patchBomRowLocalStatus(supabase, id, 'error', msg.slice(0, 1000));
-      return { ok: false, message: msg };
     }
   } catch {
     /* missing ok */
@@ -716,6 +756,11 @@ async function downloadItArtifactRow(supabase, rootAbs, creds, row, opts = {}) {
     }
     if (expectedMd5 && md5Hex && md5Hex.toLowerCase() !== expectedMd5) {
       const msg = `下载完成但 MD5 不匹配：期望 ${expectedMd5}，实际 ${md5Hex.toLowerCase()}`;
+      try {
+        await fs.unlink(destAbs);
+      } catch (e) {
+        log('WARN it-download unlink after md5 mismatch', id, e instanceof Error ? e.message : e);
+      }
       await patchBomRowLocalStatus(supabase, id, 'error', msg.slice(0, 1000));
       return { ok: false, message: msg, retries };
     }
@@ -1010,20 +1055,19 @@ async function executeDownloadJob(supabase, rootAbs, job, tuning) {
           if (now - lastFlush < heartbeatMs) return;
           lastFlush = now;
           const elapsedMs = now - rowDownloadStartedAt;
-          let etaText = '预计剩余 --';
+          let fileEtaSec = null;
           if (runningTotal != null && runningDownloaded >= runningTotal) {
-            etaText = '预计剩余 0秒';
+            fileEtaSec = 0;
           } else if (runningTotal != null && runningDownloaded > 0 && elapsedMs >= 1500) {
             const speedBytesPerSec = runningDownloaded / (elapsedMs / 1000);
             if (speedBytesPerSec > 0) {
-              const etaSec = (runningTotal - runningDownloaded) / speedBytesPerSec;
-              etaText = `预计剩余 ${formatEtaSeconds(etaSec)}`;
+              fileEtaSec = (runningTotal - runningDownloaded) / speedBytesPerSec;
             }
           }
           const displayName = fn || fileName;
           const msg =
             runningTotal != null
-              ? `${completed + 1}/${total} 下载中…（${formatBytes(runningDownloaded)}/${formatBytes(runningTotal)}，${etaText}） 文件：${displayName}`
+              ? `${completed + 1}/${total} 下载中…（${formatBytes(runningDownloaded)}/${formatBytes(runningTotal)}，${formatFileEtaText(fileEtaSec)}） 文件：${displayName}`
               : `${completed + 1}/${total} 下载中…（${formatBytes(runningDownloaded)}） 文件：${displayName}`;
           void patchDownloadJob(supabase, jobId, {
             running_bytes_downloaded: runningDownloaded,

@@ -287,6 +287,101 @@ serve(async (req) => {
       }
     }
 
+    if (action === 'send_im') {
+      const msg = typeof raw.msg === 'string' ? raw.msg.trim() : ''
+      if (!msg) {
+        return new Response(
+          JSON.stringify({ ok: false, action: 'send_im', error: '缺少 msg' }),
+          { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json; charset=utf-8' } },
+        )
+      }
+      let openIds: string[] = []
+      if (Array.isArray(raw.openIds)) {
+        openIds = raw.openIds.map((x) => String(x ?? '').trim()).filter(Boolean)
+      } else if (typeof raw.openIds === 'string') {
+        openIds = raw.openIds.split(/[\s,，;；]+/).map((s) => s.trim()).filter(Boolean)
+      }
+      if (openIds.length === 0) {
+        // 回读库中 notifyOpenIds
+        try {
+          const supabaseUrl = Deno.env.get('SUPABASE_URL')
+          const serviceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')
+          if (supabaseUrl && serviceKey) {
+            const admin = createClient(supabaseUrl, serviceKey, {
+              auth: { persistSession: false, autoRefreshToken: false },
+            })
+            const { data } = await admin
+              .from('system_settings')
+              .select('value')
+              .eq('key', FEISHU_SETTINGS_KEY)
+              .maybeSingle()
+            const v = (data?.value ?? {}) as Record<string, unknown>
+            const rawIds = v.notifyOpenIds ?? v.notify_open_ids
+            if (Array.isArray(rawIds)) {
+              openIds = rawIds.map((x) => String(x ?? '').trim()).filter(Boolean)
+            } else if (typeof rawIds === 'string') {
+              openIds = rawIds.split(/[\s,，;；]+/).map((s) => s.trim()).filter(Boolean)
+            }
+          }
+        } catch {
+          /* ignore */
+        }
+      }
+      openIds = [...new Set(openIds)]
+      if (openIds.length === 0) {
+        return new Response(
+          JSON.stringify({ ok: false, action: 'send_im', error: '未配置接收人 open_id' }),
+          { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json; charset=utf-8' } },
+        )
+      }
+
+      const failed: Array<{ openId: string; error: string }> = []
+      let sent = 0
+      for (const openId of openIds) {
+        try {
+          const u = new URL('https://open.feishu.cn/open-apis/im/v1/messages')
+          u.searchParams.set('receive_id_type', 'open_id')
+          const res = await fetch(u.toString(), {
+            method: 'POST',
+            headers: {
+              Authorization: `Bearer ${tenant.accessToken}`,
+              'Content-Type': 'application/json; charset=utf-8',
+            },
+            body: JSON.stringify({
+              receive_id: openId,
+              msg_type: 'text',
+              content: JSON.stringify({ text: msg }),
+            }),
+          })
+          const text = await res.text()
+          let parsed: { code?: number; msg?: string }
+          try {
+            parsed = JSON.parse(text) as typeof parsed
+          } catch {
+            failed.push({ openId, error: `非 JSON：${text.slice(0, 120)}` })
+            continue
+          }
+          if (!res.ok || parsed.code !== 0) {
+            failed.push({ openId, error: parsed.msg || `HTTP ${res.status}` })
+            continue
+          }
+          sent += 1
+        } catch (e) {
+          failed.push({ openId, error: e instanceof Error ? e.message : String(e) })
+        }
+      }
+      return new Response(
+        JSON.stringify({
+          ok: failed.length === 0,
+          action: 'send_im',
+          sent,
+          failed: failed.length ? failed : undefined,
+          error: failed.length ? `部分失败 ${failed.length}/${openIds.length}` : undefined,
+        }),
+        { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json; charset=utf-8' } },
+      )
+    }
+
     if (action === 'create_folder') {
       if (!folderToken) {
         return new Response(

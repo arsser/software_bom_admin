@@ -25,6 +25,7 @@ import {
   upsertPackageManifestEntry,
 } from './feishuPackageManifest.mjs';
 import { deliveryFileNameFromUrl } from './localStorePaths.mjs';
+import { notifyFeishuJobFailed } from './feishuNotify.mjs';
 function log(...args) {
   console.log(new Date().toISOString(), ...args);
 }
@@ -240,6 +241,19 @@ async function feishuTenantToken(appId, appSecret) {
 async function patchFeishuUploadJob(supabase, jobId, patch) {
   const { error } = await supabase.from('bom_feishu_upload_jobs').update(patch).eq('id', jobId);
   if (error) log('WARN patchFeishuUploadJob', jobId, error.message);
+  if (patch?.status === 'failed') {
+    const { data } = await supabase
+      .from('bom_feishu_upload_jobs')
+      .select('batch_id')
+      .eq('id', jobId)
+      .maybeSingle();
+    void notifyFeishuJobFailed(supabase, {
+      jobType: '飞书上传',
+      jobId,
+      batchId: data?.batch_id ? String(data.batch_id) : undefined,
+      message: typeof patch.last_message === 'string' ? patch.last_message : undefined,
+    });
+  }
 }
 
 /**

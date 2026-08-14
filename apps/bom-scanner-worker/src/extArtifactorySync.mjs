@@ -4,6 +4,7 @@ import path from 'node:path';
 import { Readable } from 'node:stream';
 import { patchBomRowExtStatus, withExt } from './bomRowStatusJson.mjs';
 import { reportBomLocalRootRuntime } from './workerRuntimeReport.mjs';
+import { notifyFeishuJobFailed } from './feishuNotify.mjs';
 
 function log(...args) {
   console.log(new Date().toISOString(), ...args);
@@ -512,6 +513,19 @@ export function buildArtifactoryDownloadUrl(rootUrl, repo, relPath) {
 async function patchExtSyncJob(supabase, jobId, patch) {
   const { error } = await supabase.from('bom_ext_sync_jobs').update(patch).eq('id', jobId);
   if (error) log('WARN patchExtSyncJob', jobId, error.message);
+  if (patch?.status === 'failed') {
+    const { data } = await supabase
+      .from('bom_ext_sync_jobs')
+      .select('batch_id')
+      .eq('id', jobId)
+      .maybeSingle();
+    void notifyFeishuJobFailed(supabase, {
+      jobType: 'Artifactory-ext 同步',
+      jobId,
+      batchId: data?.batch_id ? String(data.batch_id) : undefined,
+      message: typeof patch.last_message === 'string' ? patch.last_message : undefined,
+    });
+  }
 }
 
 /** @param {import('@supabase/supabase-js').SupabaseClient} supabase @param {string} jobId */

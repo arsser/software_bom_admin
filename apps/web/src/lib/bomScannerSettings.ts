@@ -58,12 +58,33 @@ export function mergeWorkerTuning(raw: unknown): BomWorkerTuning {
 }
 
 /** DB 中仅存 scanIntervalSeconds；读库时可能仍有历史 scanIntervalMinutes */
+/** Hot fix / 配置页：硬件平台候选项默认值 */
+export const DEFAULT_ARCH_OPTIONS = ['x86_T4', 'arm_NPU40T', 'arm_NPU10T', 'common'] as const;
+
+/** 解析硬件平台选项（逗号/中文逗号/分号/换行） */
+export function parseArchOptions(raw: unknown): string[] {
+  if (Array.isArray(raw)) {
+    const list = raw.map((x) => String(x ?? '').trim()).filter(Boolean);
+    return list.length > 0 ? [...new Set(list)] : [...DEFAULT_ARCH_OPTIONS];
+  }
+  if (typeof raw === 'string') {
+    const list = raw
+      .split(/[\n,，;；\t]+/)
+      .map((s) => s.trim())
+      .filter(Boolean);
+    return list.length > 0 ? [...new Set(list)] : [...DEFAULT_ARCH_OPTIONS];
+  }
+  return [...DEFAULT_ARCH_OPTIONS];
+}
+
 type BomScannerRaw = Partial<{
   scanIntervalSeconds: number;
   scanIntervalMinutes: number;
   jsonKeyMap: BomJsonKeyMap;
   /** 飞书版本目录「软件包清单」表头顺序（字符串数组） */
   versionSheetColumns: string[];
+  /** Hot fix 硬件平台候选项 */
+  archOptions: string[] | string;
   workerTuning: Partial<BomWorkerTuning> | Record<string, unknown>;
   runtime: Partial<{
     workerLocalRoot: string;
@@ -106,6 +127,8 @@ export type BomScannerConfig = {
   jsonKeyMap: BomJsonKeyMap;
   /** 飞书版本 BOM 表列顺序 */
   versionSheetColumns: string[];
+  /** Hot fix 等场景的硬件平台候选项 */
+  archOptions: string[];
   /** 拉取/上传/扫描等间隔，由 worker 每轮读取 */
   workerTuning: BomWorkerTuning;
   /** worker 回报的当前生效本地根目录（仅展示） */
@@ -144,6 +167,7 @@ const defaultConfig: BomScannerConfig = {
   scanIntervalSeconds: 30,
   jsonKeyMap: defaultJsonKeyMap,
   versionSheetColumns: [...DEFAULT_VERSION_SHEET_COLUMNS],
+  archOptions: [...DEFAULT_ARCH_OPTIONS],
   workerTuning: { ...defaultWorkerTuning },
 };
 
@@ -173,6 +197,7 @@ function mergeConfig(raw: BomScannerRaw | null | undefined): BomScannerConfig {
     scanIntervalSeconds: resolveScanIntervalSeconds(raw),
     workerTuning: mergeWorkerTuning(raw?.workerTuning),
     versionSheetColumns: normalizeVersionSheetColumns(raw?.versionSheetColumns),
+    archOptions: parseArchOptions(raw?.archOptions),
     workerLocalRoot: typeof raw?.runtime?.workerLocalRoot === 'string' ? raw.runtime.workerLocalRoot.trim() : undefined,
     workerReportedAt: typeof raw?.runtime?.workerReportedAt === 'string' ? raw.runtime.workerReportedAt : undefined,
     workerPhase: typeof raw?.runtime?.workerPhase === 'string' ? raw.runtime.workerPhase : undefined,
@@ -258,6 +283,7 @@ export async function saveBomScannerSettings(config: BomScannerConfig): Promise<
         scanIntervalSeconds: merged.scanIntervalSeconds,
         jsonKeyMap: merged.jsonKeyMap,
         versionSheetColumns: merged.versionSheetColumns,
+        archOptions: merged.archOptions,
         workerTuning: merged.workerTuning,
       },
     },
@@ -281,6 +307,29 @@ export async function saveBomVersionSheetColumns(columns: string[]): Promise<str
       value: {
         ...cur,
         versionSheetColumns: normalized,
+      },
+    },
+    { onConflict: 'key' },
+  );
+  if (error) throw error;
+  return normalized;
+}
+
+/** 仅更新硬件平台选项列表 */
+export async function saveBomArchOptions(options: string[] | string): Promise<string[]> {
+  const normalized = parseArchOptions(options);
+  const { data: curData } = await supabase
+    .from('system_settings')
+    .select('value')
+    .eq('key', BOM_SCANNER_SETTINGS_KEY)
+    .maybeSingle();
+  const cur = (curData?.value ?? {}) as Record<string, unknown>;
+  const { error } = await supabase.from('system_settings').upsert(
+    {
+      key: BOM_SCANNER_SETTINGS_KEY,
+      value: {
+        ...cur,
+        archOptions: normalized,
       },
     },
     { onConflict: 'key' },

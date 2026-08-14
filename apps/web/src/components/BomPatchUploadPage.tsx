@@ -11,6 +11,7 @@ import {
   type PatchPipelineProgress,
 } from '../lib/bomPatchFromUrls';
 import { formatSupabaseError } from '../lib/bomScannerJobs';
+import { DEFAULT_ARCH_OPTIONS, fetchBomScannerSettings } from '../lib/bomScannerSettings';
 import { LABEL_EXTERNAL_ARTI } from '../lib/bomUiLabels';
 
 const PHASE_ORDER: PatchPipelinePhase[] = [
@@ -25,10 +26,10 @@ const PHASE_ORDER: PatchPipelinePhase[] = [
   'done',
 ];
 
-function phaseIndex(phase: PatchPipelinePhase): number {
+function phaseIndex(phase: PatchPipelinePhase, order: PatchPipelinePhase[]): number {
   if (phase === 'idle') return -1;
   if (phase === 'failed') return -2;
-  return PHASE_ORDER.indexOf(phase);
+  return order.indexOf(phase);
 }
 
 export const BomPatchUploadPage: React.FC = () => {
@@ -37,12 +38,16 @@ export const BomPatchUploadPage: React.FC = () => {
   const presetProductId = searchParams.get('productId')?.trim() ?? '';
 
   const [products, setProducts] = useState<Product[]>([]);
+  const [archOptions, setArchOptions] = useState<string[]>([...DEFAULT_ARCH_OPTIONS]);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [productId, setProductId] = useState(presetProductId);
   const [batchName, setBatchName] = useState(() => suggestedPatchBatchName());
-  const [arch, setArch] = useState('');
+  const [defaultArch, setDefaultArch] = useState('');
+  const [urlArchMap, setUrlArchMap] = useState<Record<string, string>>({});
   const [urlsText, setUrlsText] = useState('');
   const [description, setDescription] = useState('');
+  const [doExt, setDoExt] = useState(true);
+  const [doFeishu, setDoFeishu] = useState(true);
   const [busy, setBusy] = useState(false);
   const [progress, setProgress] = useState<PatchPipelineProgress | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -54,9 +59,10 @@ export const BomPatchUploadPage: React.FC = () => {
     let cancelled = false;
     (async () => {
       try {
-        const list = await fetchProducts();
+        const [list, scanner] = await Promise.all([fetchProducts(), fetchBomScannerSettings()]);
         if (cancelled) return;
         setProducts(list);
+        setArchOptions(scanner.archOptions.length ? scanner.archOptions : [...DEFAULT_ARCH_OPTIONS]);
         if (!presetProductId && list.length === 1) {
           setProductId(list[0].id);
         } else if (presetProductId && list.some((p) => p.id === presetProductId)) {
@@ -78,20 +84,42 @@ export const BomPatchUploadPage: React.FC = () => {
   }, []);
 
   const urlPreview = useMemo(() => parseArtifactoryUrlsFromText(urlsText), [urlsText]);
+
+  useEffect(() => {
+    setUrlArchMap((prev) => {
+      const next: Record<string, string> = {};
+      for (const u of urlPreview.urls) {
+        next[u] = prev[u] || defaultArch || (archOptions[0] ?? '');
+      }
+      return next;
+    });
+  }, [urlPreview.urls.join('\n'), defaultArch, archOptions.join('|')]);
+
   const selectedProduct = products.find((p) => p.id === productId) ?? null;
-  const distOk = Boolean(
-    selectedProduct?.extArtifactoryRepo.trim() && selectedProduct?.feishuDriveRootFolderToken.trim(),
-  );
+  const extOk = Boolean(selectedProduct?.extArtifactoryRepo.trim());
+  const feishuOk = Boolean(selectedProduct?.feishuDriveRootFolderToken.trim());
+  const distOk = (!doExt || extOk) && (!doFeishu || feishuOk);
+
+  const visiblePhases = useMemo(() => {
+    return PHASE_ORDER.filter((p) => {
+      if (p === 'done') return true;
+      if (p === 'ext_sync') return doExt;
+      if (p === 'feishu_scan' || p === 'feishu_upload' || p === 'version_sheet') return doFeishu;
+      return true;
+    });
+  }, [doExt, doFeishu]);
+
+  const allUrlsHaveArch = urlPreview.urls.every((u) => (urlArchMap[u] ?? '').trim().length > 0);
 
   const canSubmit =
     !busy &&
     Boolean(productId) &&
     distOk &&
     batchName.trim().length > 0 &&
-    arch.trim().length > 0 &&
     description.trim().length > 0 &&
     urlPreview.urls.length > 0 &&
-    urlPreview.errors.length === 0;
+    urlPreview.errors.length === 0 &&
+    allUrlsHaveArch;
 
   const handleSubmit = async () => {
     if (!canSubmit) return;
@@ -104,9 +132,13 @@ export const BomPatchUploadPage: React.FC = () => {
       const result = await createPatchBatchAndRunPipeline({
         productId,
         batchName: batchName.trim(),
-        urls: urlPreview.urls,
+        urls: urlPreview.urls.map((url) => ({
+          url,
+          arch: (urlArchMap[url] || defaultArch || '').trim(),
+        })),
         description: description.trim(),
-        arch: arch.trim(),
+        doExt,
+        doFeishu,
         signal: ac.signal,
         onProgress: (p) => {
           if (p.phase !== 'failed' && p.phase !== 'idle') {
@@ -120,7 +152,7 @@ export const BomPatchUploadPage: React.FC = () => {
         phase: 'done',
         message: result.versionSheetUrl
           ? `完成：版本「${result.batchName}」，共 ${result.rowCount} 个包；清单 ${result.versionSheetUrl}`
-          : `完成：版本「${result.batchName}」，共 ${result.rowCount} 个包；软件包清单已生成`,
+          : `完成：版本「${result.batchName}」，共 ${result.rowCount} 个包`,
         batchId: result.batchId,
         batchName: result.batchName,
         rowCount: result.rowCount,
@@ -156,10 +188,10 @@ export const BomPatchUploadPage: React.FC = () => {
   };
 
   const curIdx = progress
-    ? phaseIndex(progress.phase === 'failed' ? lastWorkingPhaseRef.current : progress.phase)
+    ? phaseIndex(progress.phase === 'failed' ? lastWorkingPhaseRef.current : progress.phase, visiblePhases)
     : -1;
   const failedAtIdx =
-    progress?.phase === 'failed' ? phaseIndex(lastWorkingPhaseRef.current) : -1;
+    progress?.phase === 'failed' ? phaseIndex(lastWorkingPhaseRef.current, visiblePhases) : -1;
 
   return (
     <div className="max-w-3xl mx-auto space-y-5 pb-8">
@@ -178,8 +210,7 @@ export const BomPatchUploadPage: React.FC = () => {
           </button>
           <h2 className="text-2xl font-bold text-slate-900 mt-1">Hot fix</h2>
           <p className="text-slate-500 mt-1 text-sm">
-            填写 Artifactory 链接与说明，系统将新建 Hot fix 版本并自动完成：本地拉取 → {LABEL_EXTERNAL_ARTI} →
-            飞书（可全局去重）→ 生成版本「软件包清单」。
+            填写 Artifactory 链接与每条链接的硬件平台；本地拉取必选，{LABEL_EXTERNAL_ARTI} / 飞书可勾选。
           </p>
         </div>
       </div>
@@ -211,7 +242,8 @@ export const BomPatchUploadPage: React.FC = () => {
           </select>
           {selectedProduct && !distOk ? (
             <p className="mt-1 text-xs text-amber-700">
-              请先在产品编辑中配置 {LABEL_EXTERNAL_ARTI} 仓库与飞书根目录。
+              {doExt && !extOk ? `请配置 ${LABEL_EXTERNAL_ARTI} 仓库。` : null}
+              {doFeishu && !feishuOk ? '请配置飞书根目录。' : null}
             </p>
           ) : null}
         </div>
@@ -226,29 +258,54 @@ export const BomPatchUploadPage: React.FC = () => {
             className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm disabled:opacity-60"
             placeholder={suggestedPatchBatchName()}
           />
-          <p className="mt-1 text-xs text-slate-500">
-            将作为 {LABEL_EXTERNAL_ARTI} 与飞书下的一级目录名。
-          </p>
         </div>
 
         <div>
-          <label className="block text-sm font-medium text-slate-700 mb-1">硬件平台</label>
-          <input
-            type="text"
-            value={arch}
-            onChange={(e) => setArch(e.target.value)}
+          <label className="block text-sm font-medium text-slate-700 mb-1">默认同步阶段</label>
+          <div className="flex flex-wrap gap-4 text-sm text-slate-700">
+            <label className="inline-flex items-center gap-2 opacity-80">
+              <input type="checkbox" checked disabled className="h-4 w-4 rounded border-gray-300" />
+              本地拉取（必选）
+            </label>
+            <label className="inline-flex items-center gap-2 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={doExt}
+                disabled={busy}
+                onChange={(e) => setDoExt(e.target.checked)}
+                className="h-4 w-4 rounded border-gray-300 text-indigo-600"
+              />
+              {LABEL_EXTERNAL_ARTI}
+            </label>
+            <label className="inline-flex items-center gap-2 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={doFeishu}
+                disabled={busy}
+                onChange={(e) => setDoFeishu(e.target.checked)}
+                className="h-4 w-4 rounded border-gray-300 text-indigo-600"
+              />
+              飞书（扫描 / 上传 / 清单）
+            </label>
+          </div>
+        </div>
+
+        <div>
+          <label className="block text-sm font-medium text-slate-700 mb-1">默认硬件平台</label>
+          <select
+            value={defaultArch}
+            onChange={(e) => setDefaultArch(e.target.value)}
             disabled={busy}
-            className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm disabled:opacity-60"
-            placeholder="例如：x86_T4 / arm_NPU40T / common"
-            list="bom-patch-arch-suggestions"
-          />
-          <datalist id="bom-patch-arch-suggestions">
-            <option value="x86_T4" />
-            <option value="arm_NPU40T" />
-            <option value="arm_NPU10T" />
-            <option value="common" />
-          </datalist>
-          <p className="mt-1 text-xs text-slate-500">写入各行「硬件平台」列，参与本地命名区分。</p>
+            className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm bg-white disabled:opacity-60"
+          >
+            <option value="">（请选择，将应用到新解析的链接）</option>
+            {archOptions.map((a) => (
+              <option key={a} value={a}>
+                {a}
+              </option>
+            ))}
+          </select>
+          <p className="mt-1 text-xs text-slate-500">选项来自系统设置；可在下方为每条链接单独修改。</p>
         </div>
 
         <div>
@@ -272,6 +329,41 @@ export const BomPatchUploadPage: React.FC = () => {
             ) : null}
           </div>
         </div>
+
+        {urlPreview.urls.length > 0 ? (
+          <div className="rounded-lg border border-slate-200 overflow-hidden">
+            <div className="px-3 py-2 bg-slate-50 text-xs font-medium text-slate-600">
+              每条链接的硬件平台
+            </div>
+            <ul className="divide-y divide-slate-100 max-h-64 overflow-y-auto">
+              {urlPreview.urls.map((u) => (
+                <li key={u} className="px-3 py-2 flex flex-col sm:flex-row sm:items-center gap-2">
+                  <div className="min-w-0 flex-1 text-xs font-mono text-slate-700 truncate" title={u}>
+                    {u}
+                  </div>
+                  <select
+                    value={urlArchMap[u] || ''}
+                    onChange={(e) =>
+                      setUrlArchMap((prev) => ({
+                        ...prev,
+                        [u]: e.target.value,
+                      }))
+                    }
+                    disabled={busy}
+                    className="sm:w-44 rounded-md border border-slate-300 px-2 py-1.5 text-sm bg-white disabled:opacity-60"
+                  >
+                    <option value="">选择平台</option>
+                    {archOptions.map((a) => (
+                      <option key={a} value={a}>
+                        {a}
+                      </option>
+                    ))}
+                  </select>
+                </li>
+              ))}
+            </ul>
+          </div>
+        ) : null}
 
         <div>
           <label className="block text-sm font-medium text-slate-700 mb-1">说明（写入备注）</label>
@@ -337,8 +429,8 @@ export const BomPatchUploadPage: React.FC = () => {
         <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-5 space-y-3">
           <div className="text-sm font-medium text-slate-800">进度</div>
           <ol className="space-y-2">
-            {PHASE_ORDER.filter((p) => p !== 'done').map((p) => {
-              const idx = PHASE_ORDER.indexOf(p);
+            {visiblePhases.filter((p) => p !== 'done').map((p) => {
+              const idx = visiblePhases.indexOf(p);
               const failed = failedAtIdx === idx;
               const done =
                 progress.phase === 'done' || (curIdx >= 0 && idx < curIdx && !failed);

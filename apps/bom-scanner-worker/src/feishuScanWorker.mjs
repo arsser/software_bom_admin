@@ -10,6 +10,7 @@ import {
   findPackageManifestHit,
   loadFeishuPackageManifest,
 } from './feishuPackageManifest.mjs';
+import { notifyFeishuJobFailed } from './feishuNotify.mjs';
 
 function log(...args) {
   console.log(new Date().toISOString(), ...args);
@@ -418,6 +419,12 @@ export async function executeFeishuScanJob(supabase, job) {
         updated_at: new Date().toISOString(),
       })
       .eq('id', jobId);
+    void notifyFeishuJobFailed(supabase, {
+      jobType: '飞书扫描',
+      jobId,
+      batchId,
+      message: msg.slice(0, 2000),
+    });
   };
 
   try {
@@ -904,6 +911,12 @@ export async function drainFeishuScanJobs(supabase) {
           updated_at: new Date().toISOString(),
         })
         .eq('id', id);
+      void notifyFeishuJobFailed(supabase, {
+        jobType: '飞书扫描',
+        jobId: id,
+        batchId: first.batch_id ? String(first.batch_id) : undefined,
+        message: msg,
+      });
     }
   }
 }

@@ -25,16 +25,20 @@ import {
 } from '../lib/feishuAuthTest';
 import {
   BOM_JSON_KEY_MAP_REQUIRED_KEYS,
+  DEFAULT_ARCH_OPTIONS,
   DEFAULT_VERSION_SHEET_COLUMNS,
   fetchBomScannerSettings,
   fetchBomScannerSettingsRawView,
   normalizeVersionSheetColumns,
+  parseArchOptions,
+  saveBomArchOptions,
   saveBomVersionSheetColumns,
   type BomScannerConfig,
 } from '../lib/bomScannerSettings';
 import { getArtifactoryApiInfo, type ApiInfoResult } from '../lib/artifactoryApi';
 import { formatArtifactoryRepoPath } from '../lib/distributionTestUi';
 import { SettingsTestResultPanel } from './SettingsTestResultPanel';
+import { parseNotifyOpenIds } from '../lib/feishuSettings';
 
 /** 设置页内所有「测试」按钮与 feishu_assistant 设置页「测试连接」一致：白底、灰边框、浅灰悬停 */
 const settingsTestButtonLg =
@@ -118,12 +122,20 @@ export const Settings: React.FC = () => {
   const [showJsonKeyMap, setShowJsonKeyMap] = useState(false);
   const [showMainApiKey, setShowMainApiKey] = useState(false);
   const [showExtApiKey, setShowExtApiKey] = useState(false);
-  const [feishu, setFeishu] = useState<FeishuConfig>({ appId: '', appSecret: '', webBaseUrl: '' });
+  const [feishu, setFeishu] = useState<FeishuConfig>({
+    appId: '',
+    appSecret: '',
+    webBaseUrl: '',
+    notifyEnabled: false,
+    notifyOpenIds: [],
+  });
   const [feishuLoading, setFeishuLoading] = useState(false);
   const [feishuSaveStatus, setFeishuSaveStatus] = useState<'idle' | 'success' | 'error'>('idle');
   const [feishuTestLoading, setFeishuTestLoading] = useState(false);
   const [feishuTestResult, setFeishuTestResult] = useState<FeishuAuthTestResult | null>(null);
+  const [feishuNotifyTestLoading, setFeishuNotifyTestLoading] = useState(false);
   const [showFeishuSecret, setShowFeishuSecret] = useState(false);
+  const [notifyOpenIdsText, setNotifyOpenIdsText] = useState('');
   const [versionSheetColumnsText, setVersionSheetColumnsText] = useState(
     DEFAULT_VERSION_SHEET_COLUMNS.join(', '),
   );
@@ -131,6 +143,9 @@ export const Settings: React.FC = () => {
   const [versionSheetColumnsSaveStatus, setVersionSheetColumnsSaveStatus] = useState<
     'idle' | 'success' | 'error'
   >('idle');
+  const [archOptionsText, setArchOptionsText] = useState(DEFAULT_ARCH_OPTIONS.join(', '));
+  const [archOptionsLoading, setArchOptionsLoading] = useState(false);
+  const [archOptionsSaveStatus, setArchOptionsSaveStatus] = useState<'idle' | 'success' | 'error'>('idle');
 
   // 与 supabase 客户端一致：优先 window.__APP_CONFIG__，否则 VITE_*
   const { supabaseUrl: envSupabaseUrl } = getAppConfig();
@@ -158,6 +173,7 @@ export const Settings: React.FC = () => {
         const f = await fetchFeishuSettings();
         if (cancelled || !f) return;
         setFeishu(f);
+        setNotifyOpenIdsText(f.notifyOpenIds.join(', '));
       } catch (e) {
         console.error(e);
       }
@@ -181,6 +197,7 @@ export const Settings: React.FC = () => {
         setBomJsonKeyMapMissingKeys(rawView.missingRequiredJsonKeyMapKeys);
         setBomKeyMapJson(JSON.stringify(rawView.jsonKeyMapRaw ?? null, null, 2));
         setVersionSheetColumnsText(cfg.versionSheetColumns.join(', '));
+        setArchOptionsText(cfg.archOptions.join(', '));
       } catch (e) {
         console.error(e);
       }
@@ -189,6 +206,24 @@ export const Settings: React.FC = () => {
       cancelled = true;
     };
   }, []);
+
+  const handleSaveArchOptions = async () => {
+    try {
+      setArchOptionsLoading(true);
+      const saved = await saveBomArchOptions(archOptionsText);
+      setArchOptionsText(saved.join(', '));
+      setBomScanner((prev) => (prev ? { ...prev, archOptions: saved } : prev));
+      setArchOptionsSaveStatus('success');
+      setTimeout(() => setArchOptionsSaveStatus('idle'), 3000);
+    } catch (err: unknown) {
+      setArchOptionsSaveStatus('error');
+      const msg = err instanceof Error ? err.message : String(err);
+      alert('保存硬件平台选项失败: ' + msg);
+      setTimeout(() => setArchOptionsSaveStatus('idle'), 3000);
+    } finally {
+      setArchOptionsLoading(false);
+    }
+  };
 
   const handleSaveVersionSheetColumns = async () => {
     try {
@@ -234,8 +269,12 @@ export const Settings: React.FC = () => {
         appId: feishu.appId.trim(),
         appSecret: feishu.appSecret,
         webBaseUrl: feishu.webBaseUrl.trim(),
+        notifyEnabled: feishu.notifyEnabled,
+        notifyOpenIds: parseNotifyOpenIds(notifyOpenIdsText),
       };
       await saveFeishuSettings(next);
+      setFeishu(next);
+      setNotifyOpenIdsText(next.notifyOpenIds.join(', '));
       setFeishuSaveStatus('success');
       setTimeout(() => setFeishuSaveStatus('idle'), 3000);
     } catch (err: any) {
@@ -284,6 +323,42 @@ export const Settings: React.FC = () => {
       alert('飞书凭据测试失败：' + msg);
     } finally {
       setFeishuTestLoading(false);
+    }
+  };
+
+  const handleTestFeishuNotify = async () => {
+    setFeishuNotifyTestLoading(true);
+    try {
+      // 先把当前表单里的接收人临时写入（未保存时用 invoke 直传 openIds）
+      const ids = parseNotifyOpenIds(notifyOpenIdsText);
+      if (!ids.length) {
+        alert('请先填写至少一个接收人 open_id');
+        return;
+      }
+      if (!feishu.notifyEnabled) {
+        alert('请先勾选「启用任务通知」并保存，或测试前勾选（发送仍可用当前填写的 open_id）');
+      }
+      const { supabase } = await import('../lib/supabase');
+      const { data, error } = await supabase.functions.invoke('feishu-auth-test', {
+        body: {
+          action: 'send_im',
+          msg: `【BOM】通知测试 ${new Date().toLocaleString()}`,
+          openIds: ids,
+          appId: feishu.appId.trim(),
+          appSecret: feishu.appSecret,
+        },
+      });
+      if (error) throw new Error(String(error.message || error));
+      const d = data as { ok?: boolean; sent?: number; error?: string };
+      if (!d?.ok) {
+        alert('发送失败：' + (d?.error || '未知错误'));
+      } else {
+        alert(`已发送（成功 ${d.sent ?? 0} 人）`);
+      }
+    } catch (err) {
+      alert('测试通知失败：' + (err instanceof Error ? err.message : String(err)));
+    } finally {
+      setFeishuNotifyTestLoading(false);
     }
   };
 
@@ -617,6 +692,90 @@ export const Settings: React.FC = () => {
               用于生成可分享的文件页链接（形如 <code className="bg-slate-100 px-1 rounded">域名/file/&#123;token&#125;</code>
               ）。在浏览器打开任意云空间文件，从地址栏复制域名即可；不要填 open.feishu.cn。
             </p>
+          </div>
+          <div className="md:col-span-2 space-y-3 rounded-lg border border-violet-100 bg-violet-50/40 p-4">
+            <label className="inline-flex items-center gap-2 text-sm font-medium text-slate-800 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={feishu.notifyEnabled}
+                onChange={(e) => setFeishu((f) => ({ ...f, notifyEnabled: e.target.checked }))}
+                className="h-4 w-4 rounded border-gray-300 text-violet-600"
+              />
+              启用任务通知（飞书私聊）
+            </label>
+            <div>
+              <label className="block text-sm font-medium text-slate-700 mb-1">接收人 open_id</label>
+              <textarea
+                value={notifyOpenIdsText}
+                onChange={(e) => setNotifyOpenIdsText(e.target.value)}
+                rows={2}
+                spellCheck={false}
+                placeholder="ou_xxxxxxxx，多个用逗号或换行分隔"
+                className="w-full px-4 py-2 border border-gray-200 rounded-lg font-mono text-xs focus:outline-none focus:ring-2 focus:ring-violet-500/20 focus:border-violet-500"
+              />
+              <p className="mt-1 text-xs text-slate-500">
+                流水线子任务约 1% 进度与成功结束、整条完成时由前端推送；Worker 任务失败时也会推送。须开通发消息权限，且用户已与机器人有会话。
+              </p>
+            </div>
+            <div className="flex justify-end">
+              <button
+                type="button"
+                onClick={() => void handleTestFeishuNotify()}
+                disabled={feishuNotifyTestLoading}
+                className={settingsTestButtonLg}
+              >
+                {feishuNotifyTestLoading ? (
+                  <Loader2 size={18} className={settingsTestSpinnerClass} />
+                ) : (
+                  <Zap size={18} className={settingsTestIconClass} />
+                )}
+                发送测试通知
+              </button>
+            </div>
+          </div>
+          <div className="md:col-span-2 space-y-2">
+            <label className="block text-sm font-medium text-slate-700">硬件平台选项</label>
+            <textarea
+              value={archOptionsText}
+              onChange={(e) => setArchOptionsText(e.target.value)}
+              rows={2}
+              spellCheck={false}
+              className="w-full px-4 py-3 border border-gray-200 rounded-lg font-mono text-xs text-slate-800 focus:outline-none focus:ring-2 focus:ring-violet-500/20 focus:border-violet-500"
+              placeholder={DEFAULT_ARCH_OPTIONS.join(', ')}
+            />
+            <p className="text-xs text-slate-500">
+              供 Hot fix 每条链接选择；逗号/换行分隔。写入{' '}
+              <code className="bg-slate-100 px-1 rounded">bom_scanner.archOptions</code>
+              。当前 {parseArchOptions(archOptionsText).length} 项。
+            </p>
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setArchOptionsText(DEFAULT_ARCH_OPTIONS.join(', '))}
+                className="px-3 py-1.5 text-xs font-medium rounded-lg bg-white border border-gray-300 text-slate-700 hover:bg-gray-50"
+              >
+                恢复默认
+              </button>
+              <button
+                type="button"
+                onClick={() => void handleSaveArchOptions()}
+                disabled={archOptionsLoading}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg bg-violet-600 text-white hover:bg-violet-700 disabled:opacity-50"
+              >
+                {archOptionsLoading ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />}
+                保存硬件平台
+              </button>
+              {archOptionsSaveStatus === 'success' && (
+                <span className="inline-flex items-center gap-1 text-emerald-600 text-xs">
+                  <CheckCircle2 size={14} /> 已保存
+                </span>
+              )}
+              {archOptionsSaveStatus === 'error' && (
+                <span className="inline-flex items-center gap-1 text-red-600 text-xs">
+                  <AlertCircle size={14} /> 保存失败
+                </span>
+              )}
+            </div>
           </div>
           <div className="md:col-span-2 space-y-2">
             <label className="block text-sm font-medium text-slate-700">

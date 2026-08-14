@@ -11,7 +11,36 @@ export type FeishuConfig = {
    * 勿填 open.feishu.cn。
    */
   webBaseUrl: string;
+  /** 是否启用任务/流水线飞书私聊通知 */
+  notifyEnabled: boolean;
+  /**
+   * 接收通知的用户 open_id 列表（须已与机器人建立会话或在可用范围）。
+   * 配置页可用逗号/换行分隔录入。
+   */
+  notifyOpenIds: string[];
 };
+
+/** 解析 open_id 列表（逗号、中文逗号、分号、空白） */
+export function parseNotifyOpenIds(raw: unknown): string[] {
+  if (Array.isArray(raw)) {
+    return [
+      ...new Set(
+        raw
+          .map((x) => String(x ?? '').trim())
+          .filter((x) => x.length > 0),
+      ),
+    ];
+  }
+  if (typeof raw !== 'string') return [];
+  return [
+    ...new Set(
+      raw
+        .split(/[\s,，;；]+/)
+        .map((s) => s.trim())
+        .filter(Boolean),
+    ),
+  ];
+}
 
 /** 规范化企业网页域名；非法或 open.* 主机返回空串 */
 export function normalizeFeishuWebBaseUrl(raw: unknown): string {
@@ -70,6 +99,8 @@ export async function fetchFeishuSettings(): Promise<FeishuConfig | null> {
     appId: typeof value.appId === 'string' ? value.appId.trim() : '',
     appSecret: typeof value.appSecret === 'string' ? value.appSecret : '',
     webBaseUrl: normalizeFeishuWebBaseUrl(value.webBaseUrl ?? value.web_base_url),
+    notifyEnabled: value.notifyEnabled === true,
+    notifyOpenIds: parseNotifyOpenIds(value.notifyOpenIds ?? value.notify_open_ids),
   };
 }
 
@@ -81,6 +112,8 @@ export async function saveFeishuSettings(config: FeishuConfig): Promise<void> {
         appId: config.appId?.trim() ?? '',
         appSecret: config.appSecret ?? '',
         webBaseUrl: normalizeFeishuWebBaseUrl(config.webBaseUrl),
+        notifyEnabled: config.notifyEnabled === true,
+        notifyOpenIds: parseNotifyOpenIds(config.notifyOpenIds),
       },
     },
     { onConflict: 'key' },

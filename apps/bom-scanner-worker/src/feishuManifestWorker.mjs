@@ -8,6 +8,7 @@ import {
   rebuildFeishuPackageManifestFromDrive,
 } from './feishuPackageManifest.mjs';
 import { reportBomLocalRootRuntime } from './workerRuntimeReport.mjs';
+import { notifyFeishuJobFailed } from './feishuNotify.mjs';
 
 function log(...args) {
   console.log(new Date().toISOString(), ...args);
@@ -72,6 +73,13 @@ async function feishuTenantToken(appId, appSecret) {
 async function patchManifestJob(supabase, jobId, patch) {
   const { error } = await supabase.from('bom_feishu_manifest_jobs').update(patch).eq('id', jobId);
   if (error) log('WARN patchManifestJob', jobId, error.message);
+  if (patch?.status === 'failed') {
+    void notifyFeishuJobFailed(supabase, {
+      jobType: '飞书清单扫描',
+      jobId,
+      message: typeof patch.message === 'string' ? patch.message : undefined,
+    });
+  }
 }
 
 /**

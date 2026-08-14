@@ -4,6 +4,7 @@
 
 import { generateVersionPackageSheetForBatch } from './feishuVersionSheet.mjs';
 import { reportBomLocalRootRuntime } from './workerRuntimeReport.mjs';
+import { notifyFeishuJobFailed } from './feishuNotify.mjs';
 
 function log(...args) {
   console.log(new Date().toISOString(), ...args);
@@ -68,6 +69,19 @@ async function feishuTenantToken(appId, appSecret) {
 async function patchJob(supabase, jobId, patch) {
   const { error } = await supabase.from('bom_feishu_version_sheet_jobs').update(patch).eq('id', jobId);
   if (error) log('WARN patch version sheet job', jobId, error.message);
+  if (patch?.status === 'failed') {
+    const { data } = await supabase
+      .from('bom_feishu_version_sheet_jobs')
+      .select('batch_id')
+      .eq('id', jobId)
+      .maybeSingle();
+    void notifyFeishuJobFailed(supabase, {
+      jobType: '生成软件包清单',
+      jobId,
+      batchId: data?.batch_id ? String(data.batch_id) : undefined,
+      message: typeof patch.message === 'string' ? patch.message : undefined,
+    });
+  }
 }
 
 /**

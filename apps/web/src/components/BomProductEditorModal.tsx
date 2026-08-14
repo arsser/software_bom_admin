@@ -59,7 +59,13 @@ export const BomProductEditorModal: React.FC<BomProductEditorModalProps> = ({
   const [saveBusy, setSaveBusy] = useState(false);
 
   const [artifactory, setArtifactory] = useState<ArtifactoryConfig | null>(null);
-  const [feishu, setFeishu] = useState<FeishuConfig>({ appId: '', appSecret: '', webBaseUrl: '' });
+  const [feishu, setFeishu] = useState<FeishuConfig>({
+    appId: '',
+    appSecret: '',
+    webBaseUrl: '',
+    notifyEnabled: false,
+    notifyOpenIds: [],
+  });
 
   const [bomExtRepoTestLoading, setBomExtRepoTestLoading] = useState(false);
   const [bomExtRepoTestOutcome, setBomExtRepoTestOutcome] = useState<BomExtRepoTestOutcome | null>(null);

@@ -35,6 +35,7 @@ import {
   findExistingLocalRelPathByMd5,
   linkOrReuseLocalPath,
 } from './localStorePaths.mjs';
+import { notifyFeishuJobFailed } from './feishuNotify.mjs';
 
 function log(...args) {
   console.log(new Date().toISOString(), ...args);
@@ -483,6 +484,19 @@ function itUrlAllowedForBase(downloadUrl, baseUrl) {
 async function patchDownloadJob(supabase, jobId, patch) {
   const { error } = await supabase.from('bom_download_jobs').update(patch).eq('id', jobId);
   if (error) log('WARN patchDownloadJob', jobId, error.message);
+  if (patch?.status === 'failed') {
+    const { data } = await supabase
+      .from('bom_download_jobs')
+      .select('batch_id')
+      .eq('id', jobId)
+      .maybeSingle();
+    void notifyFeishuJobFailed(supabase, {
+      jobType: '本地拉取',
+      jobId,
+      batchId: data?.batch_id ? String(data.batch_id) : undefined,
+      message: typeof patch.last_message === 'string' ? patch.last_message : undefined,
+    });
+  }
 }
 
 /**

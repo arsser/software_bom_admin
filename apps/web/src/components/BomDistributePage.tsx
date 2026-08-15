@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { ArrowLeft, Download, FileSpreadsheet, FolderSearch, Hourglass, Loader2, Package, Play, RefreshCcw, UploadCloud } from 'lucide-react';
+import { ArrowLeft, Download, FileSpreadsheet, FolderSearch, Hourglass, Loader2, Package, RefreshCcw, UploadCloud } from 'lucide-react';
 import {
   defaultBomScannerConfig,
   fetchBomScannerSettings,
@@ -51,14 +51,6 @@ import {
 import { BomDataTableCell, headerIsDownloadColumn, headerIsMd5Column } from '../lib/bomTableCell';
 import { fetchProductDistributionSettings } from '../lib/products';
 import { LABEL_EXTERNAL_ARTI } from '../lib/bomUiLabels';
-import {
-  assertPipelineDistributionReady,
-  runBomSyncPipeline,
-  SYNC_PIPELINE_PHASE_LABEL,
-  type SyncPipelinePhase,
-  type SyncPipelineProgress,
-} from '../lib/bomSyncPipeline';
-import { formatSupabaseError } from '../lib/bomScannerJobs';
 
 /** 分发页 tooltip：await_manual_download 在文案上显示为「待处理」，枚举值仍保留在括号内 */
 function formatDistributePageBomRowStatusTooltip(s: BomRowStatusJson): string {
@@ -109,8 +101,6 @@ export const BomDistributePage: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
   const [batchName, setBatchName] = useState('');
   const [productName, setProductName] = useState('');
-  const [productId, setProductId] = useState('');
-  const [productExtRepo, setProductExtRepo] = useState('');
   const [batchHeaderOrder, setBatchHeaderOrder] = useState<string[]>([]);
   const [config, setConfig] = useState<BomScannerConfig | null>(null);
   const [productFeishuRootFolderToken, setProductFeishuRootFolderToken] = useState('');
@@ -118,13 +108,6 @@ export const BomDistributePage: React.FC = () => {
   const [localInfoByMd5, setLocalInfoByMd5] = useState<Map<string, LocalFileIndexInfo>>(() => new Map());
   const [localIndexReady, setLocalIndexReady] = useState(true);
   const [moduleFilter, setModuleFilter] = useState<string>(MODULE_FILTER_ALL);
-  /** 一键同步流水线（与 Hot fix 同款） */
-  const [pipelineDoExt, setPipelineDoExt] = useState(true);
-  const [pipelineDoFeishu, setPipelineDoFeishu] = useState(true);
-  const [pipelineBusy, setPipelineBusy] = useState(false);
-  const [pipelineProgress, setPipelineProgress] = useState<SyncPipelineProgress | null>(null);
-  const [pipelineError, setPipelineError] = useState<string | null>(null);
-  const pipelineAbortRef = useRef<AbortController | null>(null);
   /** 飞书上传范围：与「当前表格筛选结果」取交后的选中行 id */
   const [selectedUploadRowIds, setSelectedUploadRowIds] = useState<Set<string>>(() => new Set());
   const [feishuScanBusy, setFeishuScanBusy] = useState(false);
@@ -340,8 +323,6 @@ export const BomDistributePage: React.FC = () => {
       const prodCfg = await fetchProductDistributionSettings(b.productId);
       setConfig(scanner);
       setProductFeishuRootFolderToken(prodCfg.feishuDriveRootFolderToken);
-      setProductExtRepo(prodCfg.extArtifactoryRepo);
-      setProductId(b.productId);
       setBatchName(b.name);
       setProductName(b.productName ?? '');
       setBatchHeaderOrder(b.headerOrder ?? []);
@@ -495,48 +476,6 @@ export const BomDistributePage: React.FC = () => {
       cancelled = true;
     };
   }, [batchId, config, loadedBomRows]);
-
-  const handleRunSyncPipeline = async () => {
-    if (!batchId || !productId) return;
-    setPipelineError(null);
-    setPipelineProgress(null);
-    setPipelineBusy(true);
-    const ac = new AbortController();
-    pipelineAbortRef.current = ac;
-    try {
-      await assertPipelineDistributionReady(productId, {
-        doExt: pipelineDoExt,
-        doFeishu: pipelineDoFeishu,
-      });
-      await runBomSyncPipeline({
-        batchId,
-        batchName: batchName || batchId,
-        doExt: pipelineDoExt,
-        doFeishu: pipelineDoFeishu,
-        enrichMd5: true,
-        signal: ac.signal,
-        onProgress: (p) => setPipelineProgress(p),
-      });
-      await load();
-    } catch (e) {
-      if (e instanceof DOMException && e.name === 'AbortError') {
-        setPipelineProgress((prev) =>
-          prev
-            ? { ...prev, phase: 'failed', message: '已取消' }
-            : { phase: 'failed', message: '已取消' },
-        );
-      } else {
-        const msg = formatSupabaseError(e);
-        setPipelineError(msg);
-        setPipelineProgress((prev) =>
-          prev ? { ...prev, phase: 'failed', message: msg } : { phase: 'failed', message: msg },
-        );
-      }
-    } finally {
-      setPipelineBusy(false);
-      pipelineAbortRef.current = null;
-    }
-  };
 
   const handleDistributeExtPullAll = async () => {
     if (!batchId) return;
@@ -812,80 +751,6 @@ export const BomDistributePage: React.FC = () => {
       {error ? (
         <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{error}</div>
       ) : null}
-
-      <div className="rounded-xl border border-emerald-200 bg-emerald-50/60 p-4 space-y-3">
-        <div className="flex flex-wrap items-start justify-between gap-3">
-          <div>
-            <div className="text-sm font-medium text-emerald-950">一键同步流水线</div>
-            <p className="text-xs text-emerald-900/80 mt-1">
-              与 Hot fix 相同：本地拉取必选；{LABEL_EXTERNAL_ARTI} / 飞书可勾选。进度约 1% 与阶段结束会发飞书通知（需在系统设置启用）。
-            </p>
-          </div>
-          <div className="flex flex-wrap items-center gap-3 text-sm text-slate-700">
-            <label className="inline-flex items-center gap-2 opacity-80">
-              <input type="checkbox" checked disabled className="h-4 w-4 rounded border-gray-300" />
-              本地（必选）
-            </label>
-            <label className="inline-flex items-center gap-2 cursor-pointer">
-              <input
-                type="checkbox"
-                checked={pipelineDoExt}
-                disabled={pipelineBusy}
-                onChange={(e) => setPipelineDoExt(e.target.checked)}
-                className="h-4 w-4 rounded border-gray-300 text-emerald-600"
-              />
-              {LABEL_EXTERNAL_ARTI}
-            </label>
-            <label className="inline-flex items-center gap-2 cursor-pointer">
-              <input
-                type="checkbox"
-                checked={pipelineDoFeishu}
-                disabled={pipelineBusy}
-                onChange={(e) => setPipelineDoFeishu(e.target.checked)}
-                className="h-4 w-4 rounded border-gray-300 text-emerald-600"
-              />
-              飞书
-            </label>
-            <button
-              type="button"
-              disabled={
-                pipelineBusy ||
-                loading ||
-                !productId ||
-                loadedBomRows.length === 0 ||
-                (pipelineDoExt && !productExtRepo.trim()) ||
-                (pipelineDoFeishu && !productFeishuRootFolderToken.trim())
-              }
-              onClick={() => void handleRunSyncPipeline()}
-              className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg bg-emerald-700 text-white text-sm font-medium hover:bg-emerald-800 disabled:opacity-50"
-            >
-              {pipelineBusy ? <Loader2 size={16} className="animate-spin" /> : <Play size={16} />}
-              {pipelineBusy ? '流水线执行中…' : '开始一键同步'}
-            </button>
-            {pipelineBusy ? (
-              <button
-                type="button"
-                onClick={() => pipelineAbortRef.current?.abort()}
-                className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg border border-slate-300 bg-white text-slate-700 text-sm hover:bg-slate-50"
-              >
-                取消等待
-              </button>
-            ) : null}
-          </div>
-        </div>
-        {pipelineProgress ? (
-          <p className="text-sm text-emerald-950">
-            <span className="font-medium">
-              {SYNC_PIPELINE_PHASE_LABEL[pipelineProgress.phase as SyncPipelinePhase] ?? pipelineProgress.phase}
-            </span>
-            {' · '}
-            {pipelineProgress.message}
-          </p>
-        ) : null}
-        {pipelineError ? (
-          <p className="text-sm text-rose-700 whitespace-pre-wrap">{pipelineError}</p>
-        ) : null}
-      </div>
 
       <div className="grid md:grid-cols-2 gap-4">
         <div className="rounded-lg border border-sky-200 bg-sky-50/90 p-3 md:p-4 space-y-2">

@@ -41,8 +41,14 @@ import {
   type BomFeishuVersionSheetJob,
 } from './bomFeishuVersionSheet';
 import {
+  extractComponentFromRow,
+  extractDownloadUrlRaw,
   extractExpectedMd5FromRow,
+  extractExtUrlFromRow,
+  extractHttpUrlFromDownloadCell,
+  rowEligibleForExtSync,
   rowEligibleForItPull,
+  rowExtUiComplete,
 } from './bomRowFields';
 import type { BomJsonKeyMap, BomScannerConfig } from './bomScannerSettings';
 import { fetchBomScannerSettings } from './bomScannerSettings';
@@ -57,7 +63,9 @@ import {
   buildJobEndNotifyText,
   buildJobProgressNotifyText,
   buildPipelineDoneNotifyText,
+  buildPipelineSkipNotifyText,
   sendFeishuNotify,
+  type PipelineNotifyStepOpts,
 } from './feishuNotify';
 
 export type SyncPipelinePhase =
@@ -102,6 +110,8 @@ export type SyncPipelineOptions = {
   doFeishu: boolean;
   /** 缺 MD5 时是否从 Artifactory 补全（默认 true） */
   enrichMd5?: boolean;
+  /** 仅处理指定行；null/空数组表示整批 */
+  rowIds?: string[] | null;
   signal?: AbortSignal;
   onProgress?: (p: SyncPipelineProgress) => void;
 };
@@ -177,6 +187,7 @@ async function pollByteJobWithNotify<T extends ByteJobLike>(opts: {
   runningAlreadyInTotal: boolean;
   /** 失败时是否由前端发结束通知（默认 false，交给 Worker） */
   notifyFailure?: boolean;
+  step?: PipelineNotifyStepOpts;
 }): Promise<T> {
   let sample: { t: number; bytes: number; speedBps: number | null } | undefined;
   let progressNotified = false;
@@ -223,7 +234,7 @@ async function pollByteJobWithNotify<T extends ByteJobLike>(opts: {
               total != null && total > 0
                 ? Math.min(100, (transferred / total) * 100)
                 : rowRatio * 100;
-            void sendFeishuNotify(
+            await sendFeishuNotify(
               buildJobProgressNotifyText({
                 title: `${opts.label}进行中`,
                 batchName: opts.batchName,
@@ -236,6 +247,7 @@ async function pollByteJobWithNotify<T extends ByteJobLike>(opts: {
                 progressCurrent: v.progressCurrent,
                 progressTotal: v.progressTotal,
                 extra: fallback && !hitPct ? '（进度不足 1%，超时兜底通知）' : undefined,
+                ...opts.step,
               }),
             );
           }
@@ -248,7 +260,7 @@ async function pollByteJobWithNotify<T extends ByteJobLike>(opts: {
             const transferred = jobEffectiveTransferredBytes(byteJob, opts.runningAlreadyInTotal);
             const avgSpeed =
               elapsed != null && elapsed > 0 && transferred > 0 ? transferred / elapsed : null;
-            void sendFeishuNotify(
+            await sendFeishuNotify(
               buildJobEndNotifyText({
                 title: opts.label,
                 batchName: opts.batchName,
@@ -258,6 +270,7 @@ async function pollByteJobWithNotify<T extends ByteJobLike>(opts: {
                 bytesTotal: v.bytesTotal,
                 avgSpeedBps: avgSpeed,
                 detail: (v.lastMessage || v.message || '').trim() || undefined,
+                ...opts.step,
               }),
             );
           }
@@ -276,6 +289,7 @@ async function pollSimpleJobWithNotify<T extends { id: string; status: string; s
   fetchOne: () => Promise<T | null>;
   isDone: (v: T) => boolean;
   isSuccess: (v: T) => boolean;
+  step?: PipelineNotifyStepOpts;
 }): Promise<T> {
   let progressNotified = false;
   for (;;) {
@@ -284,18 +298,19 @@ async function pollSimpleJobWithNotify<T extends { id: string; status: string; s
     if (v != null) {
       if (!progressNotified && v.status === 'running') {
         progressNotified = true;
-        void sendFeishuNotify(
+        await sendFeishuNotify(
           buildJobProgressNotifyText({
             title: `${opts.label}进行中`,
             batchName: opts.batchName,
             jobId: v.id,
             extra: '（无字节进度，任务已开始）',
+            ...opts.step,
           }),
         );
       }
       if (opts.isDone(v)) {
         if (opts.isSuccess(v)) {
-          void sendFeishuNotify(
+          await sendFeishuNotify(
             buildJobEndNotifyText({
               title: opts.label,
               batchName: opts.batchName,
@@ -303,6 +318,7 @@ async function pollSimpleJobWithNotify<T extends { id: string; status: string; s
               ok: true,
               elapsedSec: elapsedSecSince(v.startedAt, v.finishedAt),
               detail: (v.message || v.lastMessage || '').trim() || undefined,
+              ...opts.step,
             }),
           );
         }
@@ -318,11 +334,13 @@ async function waitDownloadJob(
   jobId: string,
   batchName: string,
   signal?: AbortSignal,
+  step?: PipelineNotifyStepOpts,
 ): Promise<BomDownloadJob> {
   const job = await pollByteJobWithNotify({
     label: '本地拉取',
     batchName,
     signal,
+    step,
     runningAlreadyInTotal: false,
     fetchOne: async () => {
       const jobs = await fetchBomDownloadJobsForBatch(batchId, 20);
@@ -341,11 +359,13 @@ async function waitExtSyncJob(
   jobId: string,
   batchName: string,
   signal?: AbortSignal,
+  step?: PipelineNotifyStepOpts,
 ): Promise<BomExtSyncJob> {
   const job = await pollByteJobWithNotify({
     label: 'Artifactory-ext 同步',
     batchName,
     signal,
+    step,
     runningAlreadyInTotal: false,
     fetchOne: async () => {
       const jobs = await fetchBomExtSyncJobsForBatch(batchId, 20);
@@ -364,11 +384,13 @@ async function waitFeishuScanJob(
   jobId: string,
   batchName: string,
   signal?: AbortSignal,
+  step?: PipelineNotifyStepOpts,
 ): Promise<BomFeishuScanJob> {
   const job = await pollSimpleJobWithNotify({
     label: '飞书扫描',
     batchName,
     signal,
+    step,
     fetchOne: async () => {
       const jobs = await fetchBomFeishuScanJobsForBatch(batchId, 20);
       return jobs.find((j) => j.id === jobId) ?? null;
@@ -387,11 +409,13 @@ async function waitFeishuUploadJob(
   jobId: string,
   batchName: string,
   signal?: AbortSignal,
+  step?: PipelineNotifyStepOpts,
 ): Promise<BomFeishuUploadJob> {
   const job = await pollByteJobWithNotify({
     label: '飞书上传',
     batchName,
     signal,
+    step,
     runningAlreadyInTotal: true,
     fetchOne: async () => {
       const jobs = await fetchBomFeishuUploadJobsForBatch(batchId, 20);
@@ -410,11 +434,13 @@ async function waitFeishuVersionSheetJob(
   jobId: string,
   batchName: string,
   signal?: AbortSignal,
+  step?: PipelineNotifyStepOpts,
 ): Promise<BomFeishuVersionSheetJob> {
   const job = await pollSimpleJobWithNotify({
     label: '生成软件包清单',
     batchName,
     signal,
+    step,
     fetchOne: async () => {
       const jobs = await fetchBomFeishuVersionSheetJobsForBatch(batchId, 20);
       return jobs.find((j) => j.id === jobId) ?? null;
@@ -431,32 +457,65 @@ async function waitFeishuVersionSheetJob(
 async function waitAllRowsVerifiedOk(
   batchId: string,
   expectedCount: number,
+  batchName: string,
   signal?: AbortSignal,
+  scopeIds?: Set<string> | null,
+  step?: PipelineNotifyStepOpts,
 ): Promise<BomBatchRow[]> {
+  const selectScope = (rows: BomBatchRow[]) =>
+    scopeIds ? rows.filter((row) => scopeIds.has(row.id)) : rows;
+  const initialRows = await fetchBomRows(batchId);
+  const initialScope = selectScope(initialRows);
+  if (initialScope.length !== expectedCount) {
+    throw new Error(`作用域行数异常：期望 ${expectedCount}，实际 ${initialScope.length}`);
+  }
+  if (initialScope.every((row) => row.status.local === 'verified_ok')) {
+    await sendFeishuNotify(
+      buildPipelineSkipNotifyText({
+        title: '本地校验',
+        batchName,
+        detail: `作用域内 ${expectedCount} 行已全部校验通过`,
+        ...step,
+      }),
+    );
+    return initialScope;
+  }
+
   const started = Date.now();
   for (;;) {
     throwIfAborted(signal);
     await refreshBomRowStatusesForBatch(batchId);
     const rows = await fetchBomRows(batchId);
-    if (rows.length !== expectedCount) {
-      throw new Error(`行数异常：期望 ${expectedCount}，实际 ${rows.length}`);
+    const scope = selectScope(rows);
+    if (scope.length !== expectedCount) {
+      throw new Error(`作用域行数异常：期望 ${expectedCount}，实际 ${scope.length}`);
     }
-    const ok = rows.every((r) => r.status.local === 'verified_ok');
-    if (ok) return rows;
+    if (scope.every((row) => row.status.local === 'verified_ok')) {
+      await sendFeishuNotify(
+        buildJobEndNotifyText({
+          title: '本地校验',
+          batchName,
+          ok: true,
+          elapsedSec: (Date.now() - started) / 1000,
+          detail: `${scope.length} 行全部通过`,
+          ...step,
+        }),
+      );
+      return scope;
+    }
 
-    const failed = rows.filter(
-      (r) => r.status.local === 'verified_fail' || r.status.local === 'error',
+    const failed = scope.filter(
+      (row) => row.status.local === 'verified_fail' || row.status.local === 'error',
     );
     if (failed.length > 0 && Date.now() - started > 15_000) {
       const detail = failed
         .slice(0, 5)
-        .map((r) => r.status.local_fetch_error || r.status.local)
+        .map((row) => row.status.local_fetch_error || row.status.local)
         .join('；');
-      throw new Error(`本地校验未通过（${failed.length}/${rows.length}）：${detail}`);
+      throw new Error(`本地校验未通过（${failed.length}/${scope.length}）：${detail}`);
     }
-
     if (Date.now() - started > VERIFY_TIMEOUT_MS) {
-      const pending = rows.filter((r) => r.status.local !== 'verified_ok').length;
+      const pending = scope.filter((row) => row.status.local !== 'verified_ok').length;
       throw new Error(`等待本地校验超时：仍有 ${pending} 行未通过`);
     }
     await sleep(POLL_MS, signal);
@@ -480,66 +539,132 @@ export async function runBomSyncPipeline(input: SyncPipelineOptions): Promise<Sy
   let loaded = await fetchBomRows(batchId);
   if (loaded.length === 0) throw new Error('当前版本没有数据行');
 
+  const resolveScope = (
+    all: BomBatchRow[],
+    rowIds?: string[] | null,
+  ): { scope: BomBatchRow[]; scopeIds: Set<string> | null; scoped: boolean } => {
+    const requested = [...new Set((rowIds ?? []).map((id) => id.trim()).filter(Boolean))];
+    if (requested.length === 0) return { scope: all, scopeIds: null, scoped: false };
+    const wanted = new Set(requested);
+    const scope = all.filter((row) => wanted.has(row.id));
+    const found = new Set(scope.map((row) => row.id));
+    const missing = requested.filter((id) => !found.has(id));
+    if (missing.length > 0) {
+      throw new Error(`选中行不存在或不属于当前版本：${missing.slice(0, 5).join(', ')}`);
+    }
+    return { scope, scopeIds: wanted, scoped: true };
+  };
+  const currentScope = () => resolveScope(loaded, input.rowIds);
+  let { scope, scopeIds, scoped } = currentScope();
+  if (scope.length === 0) throw new Error('当前作用域没有数据行');
+
+  const phases: SyncPipelinePhase[] = [
+    ...(enrichMd5 ? (['enrich_md5'] as SyncPipelinePhase[]) : []),
+    'download',
+    'wait_verified',
+    ...(doExt ? (['ext_sync'] as SyncPipelinePhase[]) : []),
+    ...(doFeishu
+      ? (['feishu_scan', 'feishu_upload', 'version_sheet'] as SyncPipelinePhase[])
+      : []),
+    'done',
+  ];
+  const stepFor = (phase: SyncPipelinePhase): PipelineNotifyStepOpts => ({
+    stepIndex: phases.indexOf(phase) + 1,
+    stepTotal: phases.length,
+  });
+  const skip = async (phase: SyncPipelinePhase, title: string, detail: string) => {
+    await sendFeishuNotify(
+      buildPipelineSkipNotifyText({ title, batchName, detail, ...stepFor(phase) }),
+    );
+  };
+  const scopedRpcIds = () => (scoped ? [...scopeIds!] : null);
+
   const config: BomScannerConfig = await fetchBomScannerSettings();
   const keyMap: BomJsonKeyMap = config.jsonKeyMap;
 
   if (enrichMd5) {
-    const missingBefore = loaded.filter((r) => !extractExpectedMd5FromRow(r.bom_row, keyMap));
-    if (missingBefore.length > 0) {
+    const missingBefore = scope.filter(
+      (row) => !extractExpectedMd5FromRow(row.bom_row, keyMap),
+    );
+    if (missingBefore.length === 0) {
+      await skip('enrich_md5', '补全 MD5', `作用域内 ${scope.length} 行均已有 MD5`);
+    } else {
       report({
         phase: 'enrich_md5',
-        message: '从 Artifactory Storage API 补全 MD5…',
+        message: `从 Artifactory Storage API 补全 MD5（${missingBefore.length}/${scope.length} 行）…`,
         batchId,
         batchName,
-        rowCount: loaded.length,
+        rowCount: scope.length,
       });
       throwIfAborted(signal);
       const af = await fetchArtifactorySettings();
       if (!af) throw new Error('无法读取 Artifactory 配置，请检查系统设置');
-      const { rows: enriched, summary } = await enrichBomRowsFromArtifactory(loaded, keyMap, af);
-      for (const r of enriched) {
-        const md5 = extractExpectedMd5FromRow(r.bom_row, keyMap);
-        if (!md5) continue;
-        const next = { ...r.bom_row };
-        for (const k of keyMap.expectedMd5?.length ? keyMap.expectedMd5 : ['MD5']) {
-          if (k.trim()) next[k.trim()] = md5;
+      const { rows: enriched, summary } = await enrichBomRowsFromArtifactory(
+        missingBefore,
+        keyMap,
+        af,
+      );
+      for (const row of enriched) {
+        const md5 = extractExpectedMd5FromRow(row.bom_row, keyMap);
+        if (md5) {
+          const next = { ...row.bom_row };
+          for (const key of keyMap.expectedMd5?.length ? keyMap.expectedMd5 : ['MD5']) {
+            if (key.trim()) next[key.trim()] = md5;
+          }
+          row.bom_row = next;
         }
-        r.bom_row = next;
-      }
-      const toEnsure = [keyMap.fileSizeBytes?.[0]].filter(Boolean) as string[];
-      const batchMeta = await fetchBomBatchById(batchId);
-      const ho = mergeHeaderOrder(batchMeta?.headerOrder ?? [], toEnsure);
-      for (let i = 0; i < enriched.length; i += 1) {
-        const a = loaded[i];
-        const b = enriched[i];
-        if (!a || !b) continue;
-        const bomChanged = JSON.stringify(a.bom_row) !== JSON.stringify(b.bom_row);
-        const itErrChanged = (a.status.it_fetch_error ?? null) !== (b.status.it_fetch_error ?? null);
+        const original = missingBefore.find((item) => item.id === row.id);
+        const bomChanged = JSON.stringify(original?.bom_row) !== JSON.stringify(row.bom_row);
+        const itErrChanged =
+          (original?.status.it_fetch_error ?? null) !== (row.status.it_fetch_error ?? null);
         if (bomChanged || itErrChanged) {
-          await updateBomRowBomAndStatusFetchErrors(b.id, b.bom_row, {
-            it_fetch_error: b.status.it_fetch_error ?? null,
+          await updateBomRowBomAndStatusFetchErrors(row.id, row.bom_row, {
+            it_fetch_error: row.status.it_fetch_error ?? null,
           });
         }
       }
-      if (toEnsure.length) await updateBomBatchHeaderOrder(batchId, ho);
-      loaded = await fetchBomRows(batchId);
-      const missingMd5 = loaded.filter((r) => !extractExpectedMd5FromRow(r.bom_row, keyMap));
-      if (missingMd5.length > 0) {
-        const tip =
-          summary.apiRespondedErrorCount > 0
-            ? `（Storage API 失败 ${summary.apiRespondedErrorCount} 行）`
-            : summary.apiOkButNoMd5Count > 0
-              ? `（API 成功但无 MD5 ${summary.apiOkButNoMd5Count} 行）`
-              : '';
-        throw new Error(`有 ${missingMd5.length} 行未能补全 MD5，无法继续同步${tip}`);
+      const toEnsure = [keyMap.fileSizeBytes?.[0]].filter(Boolean) as string[];
+      if (toEnsure.length > 0) {
+        const batchMeta = await fetchBomBatchById(batchId);
+        await updateBomBatchHeaderOrder(
+          batchId,
+          mergeHeaderOrder(batchMeta?.headerOrder ?? [], toEnsure),
+        );
       }
-      report({
-        phase: 'enrich_md5',
-        message: `已补全 MD5 ${summary.md5FilledCount || loaded.length} 行`,
-        batchId,
-        batchName,
-        rowCount: loaded.length,
-      });
+      loaded = await fetchBomRows(batchId);
+      ({ scope, scopeIds, scoped } = currentScope());
+      const missingMd5 = scope.filter(
+        (row) => !extractExpectedMd5FromRow(row.bom_row, keyMap),
+      );
+      if (missingMd5.length > 0) {
+        const samples = missingMd5.slice(0, 5).map((row) => {
+          const component = extractComponentFromRow(row.bom_row, keyMap) ?? row.id.slice(0, 8);
+          const raw = extractDownloadUrlRaw(row.bom_row, keyMap);
+          const url = raw ? extractHttpUrlFromDownloadCell(raw) : null;
+          const reason = row.status.it_fetch_error?.trim()
+            || (!raw ? '缺少下载地址' : !url ? '下载地址不是有效 HTTP(S) URL' : 'API 未返回 MD5');
+          return `${component}：${reason}`;
+        });
+        const tip = summary.failedChunks > 0
+          ? `；请求批次失败 ${summary.failedChunks} 次`
+          : summary.apiRespondedErrorCount > 0
+            ? `；Storage API 失败 ${summary.apiRespondedErrorCount} 行`
+            : summary.apiOkButNoMd5Count > 0
+              ? `；API 成功但无 MD5 ${summary.apiOkButNoMd5Count} 行`
+              : '';
+        throw new Error(
+          `作用域内有 ${missingMd5.length} 行未能补全 MD5${tip}。示例：${samples.join('；')}`,
+        );
+      }
+      await sendFeishuNotify(
+        buildJobEndNotifyText({
+          title: '补全 MD5',
+          batchName,
+          ok: true,
+          detail: `已补全 ${summary.md5FilledCount} 行`,
+          ...stepFor('enrich_md5'),
+        }),
+      );
     }
   }
 
@@ -548,66 +673,68 @@ export async function runBomSyncPipeline(input: SyncPipelineOptions): Promise<Sy
     message: '检查本地是否已有文件…',
     batchId,
     batchName,
-    rowCount: loaded.length,
+    rowCount: scope.length,
   });
   throwIfAborted(signal);
   await refreshBomRowStatusesForBatch(batchId);
   loaded = await fetchBomRows(batchId);
+  ({ scope, scopeIds, scoped } = currentScope());
 
-  const md5List = loaded
-    .map((r) => extractExpectedMd5FromRow(r.bom_row, keyMap))
-    .filter((m): m is string => Boolean(m));
+  const md5List = scope
+    .map((row) => extractExpectedMd5FromRow(row.bom_row, keyMap))
+    .filter((md5): md5 is string => Boolean(md5));
   const localInfoByMd5 = await fetchLocalFileInfoByMd5(md5List);
-  const pullIds = loaded.filter((r) => rowEligibleForItPull(r, keyMap, localInfoByMd5)).map((r) => r.id);
-  const verifiedCount = loaded.filter((r) => r.status.local === 'verified_ok').length;
+  const pullIds = scope
+    .filter((row) => rowEligibleForItPull(row, keyMap, localInfoByMd5))
+    .map((row) => row.id);
+  const verifiedCount = scope.filter((row) => row.status.local === 'verified_ok').length;
 
   let downloadJobId: string | null = null;
   if (pullIds.length === 0) {
-    if (verifiedCount === loaded.length) {
+    if (verifiedCount === scope.length) {
       report({
         phase: 'download',
-        message: `本地已有全部 ${loaded.length} 个文件，跳过拉取`,
+        message: `本地已有全部 ${scope.length} 个文件，跳过拉取`,
         batchId,
         batchName,
-        rowCount: loaded.length,
+        rowCount: scope.length,
       });
+      await skip('download', '本地拉取', `作用域内 ${scope.length} 行均已有本地文件`);
     } else {
-      const sample = loaded
-        .filter((r) => r.status.local !== 'verified_ok')
-        .slice(0, 3)
-        .map((r) => {
-          const md5 = extractExpectedMd5FromRow(r.bom_row, keyMap) ?? '无MD5';
-          return `${r.status.local}/${md5.slice(0, 8)}`;
+      const sample = scope
+        .filter((row) => row.status.local !== 'verified_ok')
+        .slice(0, 5)
+        .map((row) => {
+          const component = extractComponentFromRow(row.bom_row, keyMap) ?? row.id.slice(0, 8);
+          const raw = extractDownloadUrlRaw(row.bom_row, keyMap);
+          const url = raw ? extractHttpUrlFromDownloadCell(raw) : null;
+          const md5 = extractExpectedMd5FromRow(row.bom_row, keyMap);
+          return `${component}(${row.status.local}${!md5 ? '/无MD5' : !raw ? '/无下载地址' : !url ? '/地址无效' : ''})`;
         })
-        .join(', ');
+        .join('；');
       throw new Error(
-        `没有可拉取的行，且尚未全部校验通过（已通过 ${verifiedCount}/${loaded.length}）。状态示例：${sample || '—'}`,
+        `没有可拉取的行，且尚未全部校验通过（${verifiedCount}/${scope.length}）。示例：${sample || '—'}`,
       );
     }
   } else {
     report({
       phase: 'download',
-      message: `入队本地拉取（${pullIds.length}/${loaded.length} 行）…`,
+      message: `入队本地拉取（${pullIds.length}/${scope.length} 行）…`,
       batchId,
       batchName,
-      rowCount: loaded.length,
+      rowCount: scope.length,
     });
     throwIfAborted(signal);
     try {
-      downloadJobId = await requestBomItDownload(batchId, pullIds);
-    } catch (e) {
+      downloadJobId = await requestBomItDownload(batchId, scopedRpcIds());
+    } catch (error) {
       await refreshBomRowStatusesForBatch(batchId);
       loaded = await fetchBomRows(batchId);
-      if (loaded.every((r) => r.status.local === 'verified_ok')) {
-        report({
-          phase: 'download',
-          message: `本地已有全部文件，跳过拉取`,
-          batchId,
-          batchName,
-          rowCount: loaded.length,
-        });
+      ({ scope, scopeIds, scoped } = currentScope());
+      if (scope.every((row) => row.status.local === 'verified_ok')) {
+        await skip('download', '本地拉取', '入队期间文件已全部就绪');
       } else {
-        throw e;
+        throw error;
       }
     }
     if (downloadJobId) {
@@ -616,10 +743,16 @@ export async function runBomSyncPipeline(input: SyncPipelineOptions): Promise<Sy
         message: '正在拉取到本地…',
         batchId,
         batchName,
-        rowCount: loaded.length,
+        rowCount: scope.length,
         jobId: downloadJobId,
       });
-      await waitDownloadJob(batchId, downloadJobId, batchName, signal);
+      await waitDownloadJob(
+        batchId,
+        downloadJobId,
+        batchName,
+        signal,
+        stepFor('download'),
+      );
     }
   }
 
@@ -628,31 +761,83 @@ export async function runBomSyncPipeline(input: SyncPipelineOptions): Promise<Sy
     message: '等待本地 MD5 校验通过…',
     batchId,
     batchName,
-    rowCount: loaded.length,
+    rowCount: scope.length,
   });
-  await waitAllRowsVerifiedOk(batchId, loaded.length, signal);
+  scope = await waitAllRowsVerifiedOk(
+    batchId,
+    scope.length,
+    batchName,
+    signal,
+    scopeIds,
+    stepFor('wait_verified'),
+  );
   loaded = await fetchBomRows(batchId);
+  ({ scope, scopeIds, scoped } = currentScope());
 
   let extSyncJobId: string | null = null;
   if (doExt) {
-    report({
-      phase: 'ext_sync',
-      message: '入队 Artifactory-ext 同步…',
-      batchId,
-      batchName,
-      rowCount: loaded.length,
-    });
-    throwIfAborted(signal);
-    extSyncJobId = await requestBomExtSync(batchId, null);
-    report({
-      phase: 'ext_sync',
-      message: '正在同步到 Artifactory-ext…',
-      batchId,
-      batchName,
-      rowCount: loaded.length,
-      jobId: extSyncJobId,
-    });
-    await waitExtSyncJob(batchId, extSyncJobId, batchName, signal);
+    const eligible = scope.filter((row) => rowEligibleForExtSync(row, keyMap));
+    if (eligible.length === 0) {
+      if (scope.every((row) => rowExtUiComplete(row, keyMap))) {
+        report({
+          phase: 'ext_sync',
+          message: `Artifactory-ext 已覆盖全部 ${scope.length} 行，跳过同步`,
+          batchId,
+          batchName,
+          rowCount: scope.length,
+        });
+        await skip('ext_sync', 'Artifactory-ext 同步', `作用域内 ${scope.length} 行均已完成`);
+      } else {
+        const sample = scope
+          .filter((row) => !rowExtUiComplete(row, keyMap))
+          .slice(0, 5)
+          .map((row) => {
+            const component = extractComponentFromRow(row.bom_row, keyMap) ?? row.id.slice(0, 8);
+            const ext = extractExtUrlFromRow(row.bom_row, keyMap);
+            const md5 = extractExpectedMd5FromRow(row.bom_row, keyMap);
+            return `${component}(local=${row.status.local}, ext=${row.status.ext}, md5=${md5 ? '有' : '无'}, ext_url=${ext ? '有' : '无'})`;
+          })
+          .join('；');
+        throw new Error(`没有可同步到 Artifactory-ext 的行，且存在未完成行。示例：${sample || '—'}`);
+      }
+    } else {
+      report({
+        phase: 'ext_sync',
+        message: `入队 Artifactory-ext 同步（${eligible.length}/${scope.length} 行）…`,
+        batchId,
+        batchName,
+        rowCount: scope.length,
+      });
+      throwIfAborted(signal);
+      try {
+        extSyncJobId = await requestBomExtSync(batchId, scopedRpcIds());
+      } catch (error) {
+        loaded = await fetchBomRows(batchId);
+        ({ scope, scopeIds, scoped } = currentScope());
+        if (scope.every((row) => rowExtUiComplete(row, keyMap))) {
+          await skip('ext_sync', 'Artifactory-ext 同步', '入队期间作用域内行已全部完成');
+        } else {
+          throw error;
+        }
+      }
+      if (extSyncJobId) {
+        report({
+          phase: 'ext_sync',
+          message: '正在同步到 Artifactory-ext…',
+          batchId,
+          batchName,
+          rowCount: scope.length,
+          jobId: extSyncJobId,
+        });
+        await waitExtSyncJob(
+          batchId,
+          extSyncJobId,
+          batchName,
+          signal,
+          stepFor('ext_sync'),
+        );
+      }
+    }
   }
 
   let feishuScanJobId: string | null = null;
@@ -666,74 +851,71 @@ export async function runBomSyncPipeline(input: SyncPipelineOptions): Promise<Sy
       message: '入队飞书扫描（自动创建版本目录）…',
       batchId,
       batchName,
-      rowCount: loaded.length,
+      rowCount: scope.length,
     });
     throwIfAborted(signal);
     const scanRes = await requestBomFeishuScan(batchId, { autoCreateVersionFolder: true });
-    if (!scanRes.ok) {
-      throw new Error(scanRes.error || '飞书扫描入队失败');
-    }
+    if (!scanRes.ok) throw new Error(scanRes.error || '飞书扫描入队失败');
     feishuScanJobId = scanRes.jobId;
     if (!feishuScanJobId) throw new Error('飞书扫描未返回任务 ID');
-    report({
-      phase: 'feishu_scan',
-      message: '正在扫描飞书目录…',
+    await waitFeishuScanJob(
       batchId,
+      feishuScanJobId,
       batchName,
-      rowCount: loaded.length,
-      jobId: feishuScanJobId,
-    });
-    await waitFeishuScanJob(batchId, feishuScanJobId, batchName, signal);
+      signal,
+      stepFor('feishu_scan'),
+    );
 
     loaded = await fetchBomRows(batchId);
-    const uploadIds = loaded
-      .filter((r) => {
-        if (r.status.local !== 'verified_ok') return false;
-        const f = r.status.feishu;
-        if (f !== 'absent' && f !== 'error') return false;
-        if (feishuScanErrorBlocksFeishuUpload(r.status.feishu_scan_error)) return false;
-        return true;
+    ({ scope, scopeIds, scoped } = currentScope());
+    const uploadIds = scope
+      .filter((row) => {
+        if (row.status.local !== 'verified_ok') return false;
+        if (row.status.feishu !== 'absent' && row.status.feishu !== 'error') return false;
+        return !feishuScanErrorBlocksFeishuUpload(row.status.feishu_scan_error);
       })
-      .map((r) => r.id);
-    const presentCount = loaded.filter((r) => r.status.feishu === 'present').length;
+      .map((row) => row.id);
+    const presentCount = scope.filter((row) => row.status.feishu === 'present').length;
 
     if (uploadIds.length === 0) {
-      if (presentCount === loaded.length) {
+      if (presentCount === scope.length) {
         report({
           phase: 'feishu_upload',
-          message: `飞书清单已覆盖全部 ${loaded.length} 个包（全局去重），跳过文件上传`,
+          message: `飞书清单已覆盖全部 ${scope.length} 个包，跳过上传`,
           batchId,
           batchName,
-          rowCount: loaded.length,
+          rowCount: scope.length,
         });
+        await skip('feishu_upload', '飞书上传', `作用域内 ${scope.length} 行均已存在`);
       } else {
-        const sample = loaded
+        const sample = scope
           .slice(0, 5)
-          .map((r) => `${r.status.feishu ?? 'not_scanned'}${r.status.feishu_scan_error ? '(有扫描错误)' : ''}`)
-          .join(', ');
+          .map((row) => `${extractComponentFromRow(row.bom_row, keyMap) ?? row.id.slice(0, 8)}(${row.status.feishu ?? 'not_scanned'}${row.status.feishu_scan_error ? '/有扫描错误' : ''})`)
+          .join('；');
         throw new Error(
-          `飞书扫描后没有可上传的行（present ${presentCount}/${loaded.length}）。状态：${sample}`,
+          `飞书扫描后没有可上传的行（present ${presentCount}/${scope.length}）。示例：${sample}`,
         );
       }
     } else {
       report({
         phase: 'feishu_upload',
-        message: `入队飞书上传（${uploadIds.length}/${loaded.length} 行；其余可全局去重）…`,
+        message: `入队飞书上传（${uploadIds.length}/${scope.length} 行）…`,
         batchId,
         batchName,
-        rowCount: loaded.length,
+        rowCount: scope.length,
       });
       throwIfAborted(signal);
-      feishuUploadJobId = await requestBomFeishuUpload(batchId, uploadIds);
-      report({
-        phase: 'feishu_upload',
-        message: '正在上传到飞书…',
+      feishuUploadJobId = await requestBomFeishuUpload(
         batchId,
+        scopedRpcIds(),
+      );
+      await waitFeishuUploadJob(
+        batchId,
+        feishuUploadJobId,
         batchName,
-        rowCount: loaded.length,
-        jobId: feishuUploadJobId,
-      });
-      await waitFeishuUploadJob(batchId, feishuUploadJobId, batchName, signal);
+        signal,
+        stepFor('feishu_upload'),
+      );
     }
 
     report({
@@ -741,50 +923,44 @@ export async function runBomSyncPipeline(input: SyncPipelineOptions): Promise<Sy
       message: '生成版本目录「软件包清单」…',
       batchId,
       batchName,
-      rowCount: loaded.length,
+      rowCount: scope.length,
     });
     throwIfAborted(signal);
     const sheetRes = await requestBomFeishuVersionSheet(batchId);
-    if (!sheetRes.ok) {
-      throw new Error(sheetRes.error || '软件包清单入队失败');
-    }
+    if (!sheetRes.ok) throw new Error(sheetRes.error || '软件包清单入队失败');
     versionSheetJobId = sheetRes.jobId;
-    report({
-      phase: 'version_sheet',
-      message: sheetRes.reused ? '等待已有软件包清单任务…' : '正在生成软件包清单…',
+    const sheetJob = await waitFeishuVersionSheetJob(
       batchId,
+      versionSheetJobId,
       batchName,
-      rowCount: loaded.length,
-      jobId: versionSheetJobId,
-    });
-    const sheetJob = await waitFeishuVersionSheetJob(batchId, versionSheetJobId, batchName, signal);
+      signal,
+      stepFor('version_sheet'),
+    );
     versionSheetUrl = sheetJob.sheetUrl?.trim() || null;
   }
 
   report({
     phase: 'done',
-    message: versionSheetUrl
-      ? `同步完成；软件包清单：${versionSheetUrl}`
-      : '同步流水线已完成',
+    message: versionSheetUrl ? `同步完成；软件包清单：${versionSheetUrl}` : '同步流水线已完成',
     batchId,
     batchName,
-    rowCount: loaded.length,
+    rowCount: scope.length,
   });
-
-  void sendFeishuNotify(
+  await sendFeishuNotify(
     buildPipelineDoneNotifyText({
       batchName,
-      rowCount: loaded.length,
+      rowCount: scope.length,
       doExt,
       doFeishu,
       versionSheetUrl,
+      ...stepFor('done'),
     }),
   );
 
   return {
     batchId,
     batchName,
-    rowCount: loaded.length,
+    rowCount: scope.length,
     downloadJobId,
     extSyncJobId,
     feishuScanJobId,

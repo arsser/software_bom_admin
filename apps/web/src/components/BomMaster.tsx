@@ -14,6 +14,7 @@ import {
   Search,
   Share2,
   Trash2,
+  Workflow,
 } from 'lucide-react';
 import {
   copyBomBatch,
@@ -516,6 +517,15 @@ export const BomMaster: React.FC = () => {
                                 className="text-indigo-700 hover:text-indigo-800 text-sm font-medium"
                               >
                                 查看/编辑
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => navigate(`/bom/${b.id}/sync`)}
+                                className="inline-flex items-center gap-1 text-emerald-700 hover:text-emerald-800 text-sm font-medium"
+                                title="一键同步：本地必选，ext/飞书可选；可勾选部分行"
+                              >
+                                <Workflow size={14} />
+                                一键同步
                               </button>
                               <button
                                 type="button"

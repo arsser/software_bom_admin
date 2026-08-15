@@ -4,6 +4,7 @@ import { ArrowLeft, Loader2, PackagePlus } from 'lucide-react';
 import { fetchProducts, type Product } from '../lib/products';
 import {
   createPatchBatchAndRunPipeline,
+  createPatchBatchOnly,
   parseArtifactoryUrlsFromText,
   PATCH_PIPELINE_PHASE_LABEL,
   suggestedPatchBatchName,
@@ -49,6 +50,10 @@ export const BomPatchUploadPage: React.FC = () => {
   const [doExt, setDoExt] = useState(true);
   const [doFeishu, setDoFeishu] = useState(true);
   const [busy, setBusy] = useState(false);
+  /** create = 仅创建；pipeline = 创建并同步 */
+  const [busyMode, setBusyMode] = useState<'create' | 'pipeline' | null>(null);
+  /** 最近一次操作模式（用于进度条展示；busy 结束后仍保留） */
+  const [lastMode, setLastMode] = useState<'create' | 'pipeline' | null>(null);
   const [progress, setProgress] = useState<PatchPipelineProgress | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [doneBatchId, setDoneBatchId] = useState<string | null>(null);
@@ -101,42 +106,143 @@ export const BomPatchUploadPage: React.FC = () => {
   const distOk = (!doExt || extOk) && (!doFeishu || feishuOk);
 
   const visiblePhases = useMemo(() => {
+    const mode = busyMode ?? lastMode;
+    if (mode === 'create') {
+      return (['create_batch', 'done'] as PatchPipelinePhase[]);
+    }
     return PHASE_ORDER.filter((p) => {
       if (p === 'done') return true;
       if (p === 'ext_sync') return doExt;
       if (p === 'feishu_scan' || p === 'feishu_upload' || p === 'version_sheet') return doFeishu;
       return true;
     });
-  }, [doExt, doFeishu]);
+  }, [doExt, doFeishu, busyMode, lastMode]);
 
   const allUrlsHaveArch = urlPreview.urls.every((u) => (urlArchMap[u] ?? '').trim().length > 0);
 
-  const canSubmit =
-    !busy &&
-    Boolean(productId) &&
-    distOk &&
-    batchName.trim().length > 0 &&
-    description.trim().length > 0 &&
-    urlPreview.urls.length > 0 &&
-    urlPreview.errors.length === 0 &&
-    allUrlsHaveArch;
+  /** 仅创建：不校验分发配置 */
+  const createOnlyBlockReasons = useMemo(() => {
+    const reasons: string[] = [];
+    if (busy) reasons.push('正在处理中');
+    if (!productId) reasons.push('请选择产品');
+    if (!batchName.trim()) reasons.push('请填写版本名称');
+    if (urlPreview.urls.length === 0) reasons.push('请至少填写一条有效的 Artifactory 链接');
+    if (urlPreview.errors.length > 0) reasons.push(`链接解析错误：${urlPreview.errors[0]}`);
+    if (urlPreview.urls.length > 0 && !allUrlsHaveArch) {
+      reasons.push('请为每条链接选择硬件平台（或先选「默认硬件平台」）');
+    }
+    if (!description.trim()) reasons.push('请填写说明（写入备注）');
+    return reasons;
+  }, [
+    busy,
+    productId,
+    batchName,
+    urlPreview.urls.length,
+    urlPreview.errors,
+    allUrlsHaveArch,
+    description,
+  ]);
 
-  const handleSubmit = async () => {
-    if (!canSubmit) return;
+  const submitBlockReasons = useMemo(() => {
+    const reasons = [...createOnlyBlockReasons];
+    if (doExt && !extOk) reasons.push(`产品未配置 ${LABEL_EXTERNAL_ARTI} 仓库`);
+    if (doFeishu && !feishuOk) reasons.push('产品未配置飞书根目录');
+    return reasons;
+  }, [createOnlyBlockReasons, doExt, doFeishu, extOk, feishuOk]);
+
+  const canCreateOnly = createOnlyBlockReasons.length === 0;
+  const canSubmit = submitBlockReasons.length === 0;
+
+  // 选项加载后若未选手动默认平台，自动选第一项，避免「有链接但无平台」导致按钮一直灰
+  useEffect(() => {
+    if (!defaultArch && archOptions.length > 0) {
+      setDefaultArch(archOptions[0]);
+    }
+  }, [archOptions, defaultArch]);
+
+  const patchInputBase = () => ({
+    productId,
+    batchName: batchName.trim(),
+    urls: urlPreview.urls.map((url) => ({
+      url,
+      arch: (urlArchMap[url] || defaultArch || '').trim(),
+    })),
+    description: description.trim(),
+  });
+
+  const handleCreateOnly = async () => {
+    if (!canCreateOnly) {
+      setError(createOnlyBlockReasons.join('；'));
+      return;
+    }
     setError(null);
     setDoneBatchId(null);
     setBusy(true);
+    setBusyMode('create');
+    setLastMode('create');
+    const ac = new AbortController();
+    abortRef.current = ac;
+    try {
+      const result = await createPatchBatchOnly({
+        ...patchInputBase(),
+        signal: ac.signal,
+        onProgress: (p) => {
+          if (p.phase !== 'failed' && p.phase !== 'idle') {
+            lastWorkingPhaseRef.current = p.phase;
+          }
+          setProgress(p);
+        },
+      });
+      setDoneBatchId(result.batchId);
+      setProgress({
+        phase: 'done',
+        message: `已创建版本「${result.batchName}」，共 ${result.rowCount} 个包（未同步）`,
+        batchId: result.batchId,
+        batchName: result.batchName,
+        rowCount: result.rowCount,
+      });
+    } catch (e) {
+      if (e instanceof DOMException && e.name === 'AbortError') {
+        setProgress((prev) => ({
+          phase: 'failed',
+          message: '已取消',
+          batchId: prev?.batchId,
+          batchName: prev?.batchName,
+          rowCount: prev?.rowCount,
+        }));
+      } else {
+        const msg = formatSupabaseError(e);
+        setError(msg);
+        setProgress((prev) => ({
+          phase: 'failed',
+          message: msg,
+          batchId: prev?.batchId,
+          batchName: prev?.batchName,
+          rowCount: prev?.rowCount,
+        }));
+      }
+    } finally {
+      setBusy(false);
+      setBusyMode(null);
+      abortRef.current = null;
+    }
+  };
+
+  const handleSubmit = async () => {
+    if (!canSubmit) {
+      setError(submitBlockReasons.join('；'));
+      return;
+    }
+    setError(null);
+    setDoneBatchId(null);
+    setBusy(true);
+    setBusyMode('pipeline');
+    setLastMode('pipeline');
     const ac = new AbortController();
     abortRef.current = ac;
     try {
       const result = await createPatchBatchAndRunPipeline({
-        productId,
-        batchName: batchName.trim(),
-        urls: urlPreview.urls.map((url) => ({
-          url,
-          arch: (urlArchMap[url] || defaultArch || '').trim(),
-        })),
-        description: description.trim(),
+        ...patchInputBase(),
         doExt,
         doFeishu,
         signal: ac.signal,
@@ -179,6 +285,7 @@ export const BomPatchUploadPage: React.FC = () => {
       }
     } finally {
       setBusy(false);
+      setBusyMode(null);
       abortRef.current = null;
     }
   };
@@ -377,50 +484,96 @@ export const BomPatchUploadPage: React.FC = () => {
           />
         </div>
 
-        <div className="flex items-center gap-2 pt-1">
-          <button
-            type="button"
-            onClick={handleSubmit}
-            disabled={!canSubmit}
-            className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-indigo-600 text-white text-sm font-medium hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed"
-          >
-            {busy ? <Loader2 size={16} className="animate-spin" /> : <PackagePlus size={16} />}
-            {busy ? '处理中…' : '创建并自动同步'}
-          </button>
-          {busy ? (
+        <div className="pt-1 space-y-2">
+          <div className="flex flex-wrap items-center gap-2">
             <button
               type="button"
-              onClick={handleCancel}
-              className="inline-flex items-center gap-2 px-3 py-2 rounded-lg border border-slate-300 text-slate-700 text-sm hover:bg-slate-50"
+              onClick={() => void handleCreateOnly()}
+              disabled={busy}
+              title={
+                !canCreateOnly && createOnlyBlockReasons.length
+                  ? createOnlyBlockReasons.join('；')
+                  : '仅创建 Hot fix 版本，不跑本地/ext/飞书同步'
+              }
+              className="inline-flex items-center gap-2 px-4 py-2 rounded-lg border border-indigo-300 bg-white text-indigo-800 text-sm font-medium hover:bg-indigo-50 disabled:opacity-50 disabled:cursor-not-allowed"
             >
-              取消等待
+              {busy && busyMode === 'create' ? (
+                <Loader2 size={16} className="animate-spin" />
+              ) : (
+                <PackagePlus size={16} />
+              )}
+              {busy && busyMode === 'create' ? '创建中…' : '创建'}
             </button>
-          ) : null}
-          {doneBatchId ? (
-            <>
+            <button
+              type="button"
+              onClick={() => void handleSubmit()}
+              disabled={busy}
+              title={
+                !canSubmit && submitBlockReasons.length
+                  ? submitBlockReasons.join('；')
+                  : undefined
+              }
+              className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-indigo-600 text-white text-sm font-medium hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {busy && busyMode === 'pipeline' ? (
+                <Loader2 size={16} className="animate-spin" />
+              ) : (
+                <PackagePlus size={16} />
+              )}
+              {busy && busyMode === 'pipeline' ? '处理中…' : '创建并自动同步'}
+            </button>
+            {busy ? (
               <button
                 type="button"
-                onClick={() => navigate(`/bom/${doneBatchId}`)}
-                className="inline-flex items-center gap-2 px-3 py-2 rounded-lg border border-indigo-200 bg-indigo-50 text-indigo-700 text-sm hover:bg-indigo-100"
-              >
-                打开版本详情
-              </button>
-              <button
-                type="button"
-                onClick={() => navigate(`/bom/${doneBatchId}/distribute`)}
+                onClick={handleCancel}
                 className="inline-flex items-center gap-2 px-3 py-2 rounded-lg border border-slate-300 text-slate-700 text-sm hover:bg-slate-50"
               >
-                打开分发页
+                取消等待
               </button>
-            </>
-          ) : progress?.batchId && progress.phase === 'failed' ? (
-            <button
-              type="button"
-              onClick={() => navigate(`/bom/${progress.batchId}`)}
-              className="inline-flex items-center gap-2 px-3 py-2 rounded-lg border border-amber-200 bg-amber-50 text-amber-800 text-sm hover:bg-amber-100"
-            >
-              打开已创建版本
-            </button>
+            ) : null}
+            {doneBatchId ? (
+              <>
+                <button
+                  type="button"
+                  onClick={() => navigate(`/bom/${doneBatchId}`)}
+                  className="inline-flex items-center gap-2 px-3 py-2 rounded-lg border border-indigo-200 bg-indigo-50 text-indigo-700 text-sm hover:bg-indigo-100"
+                >
+                  打开版本详情
+                </button>
+                <button
+                  type="button"
+                  onClick={() => navigate(`/bom/${doneBatchId}/sync`)}
+                  className="inline-flex items-center gap-2 px-3 py-2 rounded-lg border border-emerald-300 text-emerald-800 text-sm hover:bg-emerald-50"
+                >
+                  去一键同步
+                </button>
+                <button
+                  type="button"
+                  onClick={() => navigate(`/bom/${doneBatchId}/distribute`)}
+                  className="inline-flex items-center gap-2 px-3 py-2 rounded-lg border border-slate-300 text-slate-700 text-sm hover:bg-slate-50"
+                >
+                  打开分发页
+                </button>
+              </>
+            ) : progress?.batchId && progress.phase === 'failed' ? (
+              <button
+                type="button"
+                onClick={() => navigate(`/bom/${progress.batchId}`)}
+                className="inline-flex items-center gap-2 px-3 py-2 rounded-lg border border-amber-200 bg-amber-50 text-amber-800 text-sm hover:bg-amber-100"
+              >
+                打开已创建版本
+              </button>
+            ) : null}
+          </div>
+          <p className="text-xs text-slate-500">
+            「创建」只建版本；「创建并自动同步」按上方勾选阶段跑流水线。创建后也可在 BOM 管理 → 一键同步。
+          </p>
+          {!busy && !canSubmit && submitBlockReasons.length > 0 ? (
+            <ul className="text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 space-y-0.5 list-disc list-inside">
+              {submitBlockReasons.map((r) => (
+                <li key={r}>{r}</li>
+              ))}
+            </ul>
           ) : null}
         </div>
       </div>

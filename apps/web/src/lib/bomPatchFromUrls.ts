@@ -60,6 +60,13 @@ export type CreatePatchBatchInput = {
 
 export type CreatePatchBatchResult = SyncPipelineResult;
 
+/** 仅创建版本（不跑同步流水线）时的结果 */
+export type CreatePatchBatchOnlyResult = {
+  batchId: string;
+  batchName: string;
+  rowCount: number;
+};
+
 function pad2(n: number): string {
   return n < 10 ? `0${n}` : String(n);
 }
@@ -153,11 +160,11 @@ export function buildPatchBomRows(
 }
 
 /**
- * 新建补丁版本并按勾选阶段跑同步流水线。
+ * 仅新建补丁版本，不跑同步流水线。
  */
-export async function createPatchBatchAndRunPipeline(
-  input: CreatePatchBatchInput,
-): Promise<CreatePatchBatchResult> {
+export async function createPatchBatchOnly(
+  input: Omit<CreatePatchBatchInput, 'doExt' | 'doFeishu'>,
+): Promise<CreatePatchBatchOnlyResult> {
   const productId = input.productId.trim();
   if (!productId) throw new Error('请选择产品');
   const entries = input.urls
@@ -174,10 +181,6 @@ export async function createPatchBatchAndRunPipeline(
   }
   const description = input.description.trim();
   if (!description) throw new Error('请填写必要说明');
-
-  const doExt = input.doExt !== false;
-  const doFeishu = input.doFeishu !== false;
-  await assertPipelineDistributionReady(productId, { doExt, doFeishu });
 
   const report = (p: PatchPipelineProgress) => input.onProgress?.(p);
   const signal = input.signal;
@@ -205,11 +208,42 @@ export async function createPatchBatchAndRunPipeline(
     rows,
   });
   report({
-    phase: 'create_batch',
-    message: `已创建版本，共 ${rows.length} 行`,
+    phase: 'done',
+    message: `已创建版本「${batchName}」，共 ${rows.length} 行（未同步）`,
     batchId,
     batchName,
     rowCount: rows.length,
+  });
+  return { batchId, batchName, rowCount: rows.length };
+}
+
+/**
+ * 新建补丁版本并按勾选阶段跑同步流水线。
+ */
+export async function createPatchBatchAndRunPipeline(
+  input: CreatePatchBatchInput,
+): Promise<CreatePatchBatchResult> {
+  const doExt = input.doExt !== false;
+  const doFeishu = input.doFeishu !== false;
+  await assertPipelineDistributionReady(input.productId.trim(), { doExt, doFeishu });
+
+  const report = (p: PatchPipelineProgress) => input.onProgress?.(p);
+  const created = await createPatchBatchOnly({
+    ...input,
+    onProgress: (p) => {
+      // 创建阶段用 create_batch；仅创建函数末尾会标 done，流水线场景改回 create_batch 摘要
+      if (p.phase === 'done') {
+        report({
+          phase: 'create_batch',
+          message: `已创建版本，共 ${p.rowCount ?? 0} 行`,
+          batchId: p.batchId,
+          batchName: p.batchName,
+          rowCount: p.rowCount,
+        });
+      } else {
+        report(p);
+      }
+    },
   });
 
   const mapProgress = (p: SyncPipelineProgress): PatchPipelineProgress => ({
@@ -222,12 +256,12 @@ export async function createPatchBatchAndRunPipeline(
   });
 
   return runBomSyncPipeline({
-    batchId,
-    batchName,
+    batchId: created.batchId,
+    batchName: created.batchName,
     doExt,
     doFeishu,
     enrichMd5: true,
-    signal,
+    signal: input.signal,
     onProgress: (p) => report(mapProgress(p)),
   });
 }

@@ -11,6 +11,7 @@ import { BomDownloadJobsPage } from '../components/BomDownloadJobsPage';
 import { BomComparePage } from '../components/BomComparePage';
 import { BomSearchPage } from '../components/BomSearchPage';
 import { BomPatchUploadPage } from '../components/BomPatchUploadPage';
+import { BomSyncPipelinePage } from '../components/BomSyncPipelinePage';
 import { FeishuPackageManifestPage } from '../components/FeishuPackageManifestPage';
 import { LoginPage } from '../pages/LoginPage';
 
@@ -37,6 +38,7 @@ export const router = createBrowserRouter([
       { path: 'bom/search', element: <BomSearchPage /> },
       { path: 'bom/compare', element: <BomComparePage /> },
       { path: 'bom/:batchId/distribute', element: <BomDistributePage /> },
+      { path: 'bom/:batchId/sync', element: <BomSyncPipelinePage /> },
       { path: 'bom/:batchId', element: <BomDetail /> },
       { path: 'feishu-manifest', element: <FeishuPackageManifestPage /> },
       { path: 'settings', element: <Settings /> }

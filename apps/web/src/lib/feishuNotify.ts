@@ -56,6 +56,25 @@ export async function sendFeishuNotify(text: string): Promise<FeishuSendImResult
   }
 }
 
+export function formatPipelineStepPrefix(stepIndex?: number | null, stepTotal?: number | null): string {
+  if (
+    stepIndex == null ||
+    stepTotal == null ||
+    !Number.isFinite(stepIndex) ||
+    !Number.isFinite(stepTotal) ||
+    stepIndex < 1 ||
+    stepTotal < 1
+  ) {
+    return '';
+  }
+  return `${Math.floor(stepIndex)}/${Math.floor(stepTotal)} `;
+}
+
+export type PipelineNotifyStepOpts = {
+  stepIndex?: number | null;
+  stepTotal?: number | null;
+};
+
 export function buildJobProgressNotifyText(opts: {
   title: string;
   batchName?: string;
@@ -68,8 +87,9 @@ export function buildJobProgressNotifyText(opts: {
   progressCurrent?: number | null;
   progressTotal?: number | null;
   extra?: string;
-}): string {
-  const lines = [`【BOM】${opts.title}`];
+} & PipelineNotifyStepOpts): string {
+  const step = formatPipelineStepPrefix(opts.stepIndex, opts.stepTotal);
+  const lines = [`【BOM】${step}${opts.title}`];
   if (opts.batchName?.trim()) lines.push(`版本：${opts.batchName.trim()}`);
   if (opts.jobId?.trim()) lines.push(`任务：${opts.jobId.trim().slice(0, 8)}…`);
   if (opts.progressPct != null && Number.isFinite(opts.progressPct)) {
@@ -101,8 +121,9 @@ export function buildJobEndNotifyText(opts: {
   bytesTotal?: number | null;
   avgSpeedBps?: number | null;
   detail?: string;
-}): string {
-  const lines = [`【BOM】${opts.title} · ${opts.ok ? '成功' : '失败'}`];
+} & PipelineNotifyStepOpts): string {
+  const step = formatPipelineStepPrefix(opts.stepIndex, opts.stepTotal);
+  const lines = [`【BOM】${step}${opts.title} · ${opts.ok ? '成功' : '失败'}`];
   if (opts.batchName?.trim()) lines.push(`版本：${opts.batchName.trim()}`);
   if (opts.jobId?.trim()) lines.push(`任务：${opts.jobId.trim().slice(0, 8)}…`);
   if (opts.elapsedSec != null && Number.isFinite(opts.elapsedSec) && opts.elapsedSec >= 0) {
@@ -118,18 +139,32 @@ export function buildJobEndNotifyText(opts: {
   return lines.join('\n');
 }
 
+/** 阶段跳过（未入队任务） */
+export function buildPipelineSkipNotifyText(opts: {
+  title: string;
+  batchName?: string;
+  detail?: string;
+} & PipelineNotifyStepOpts): string {
+  const step = formatPipelineStepPrefix(opts.stepIndex, opts.stepTotal);
+  const lines = [`【BOM】${step}${opts.title} · 跳过`];
+  if (opts.batchName?.trim()) lines.push(`版本：${opts.batchName.trim()}`);
+  if (opts.detail?.trim()) lines.push(opts.detail.trim());
+  return lines.join('\n');
+}
+
 export function buildPipelineDoneNotifyText(opts: {
   batchName: string;
   rowCount: number;
   doExt: boolean;
   doFeishu: boolean;
   versionSheetUrl?: string | null;
-}): string {
+} & PipelineNotifyStepOpts): string {
+  const step = formatPipelineStepPrefix(opts.stepIndex, opts.stepTotal);
   const stages = ['本地'];
   if (opts.doExt) stages.push('Artifactory-ext');
   if (opts.doFeishu) stages.push('飞书');
   const lines = [
-    `【BOM】同步流水线完成`,
+    `【BOM】${step}同步流水线完成`,
     `版本：${opts.batchName}`,
     `行数：${opts.rowCount}`,
     `阶段：${stages.join(' → ')}`,

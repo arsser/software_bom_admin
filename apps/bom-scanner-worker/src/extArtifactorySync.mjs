@@ -252,14 +252,19 @@ export async function fetchBomScannerValue(supabase) {
 export async function fetchBatchProductDistributionSettings(supabase, batchId) {
   const { data, error } = await supabase
     .from('bom_batches')
-    .select('name,product_id,products(name,ext_artifactory_repo,feishu_drive_root_folder_token)')
+    .select('name,original_bom_url,product_id,products(name,ext_artifactory_repo,feishu_drive_root_folder_token)')
     .eq('id', batchId)
     .maybeSingle();
   if (error) throw error;
   const batchName = data?.name && String(data.name).trim() ? String(data.name).trim() : '';
+  const originalBomUrl =
+    data?.original_bom_url && String(data.original_bom_url).trim()
+      ? String(data.original_bom_url).trim()
+      : '';
   const product = data?.products ?? {};
   return {
     batchName,
+    originalBomUrl,
     productName: product?.name && String(product.name).trim() ? String(product.name).trim() : '',
     extArtifactoryRepo:
       product?.ext_artifactory_repo && String(product.ext_artifactory_repo).trim()

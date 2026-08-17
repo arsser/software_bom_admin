@@ -551,15 +551,33 @@ function cellForSheetValue(v) {
 }
 
 /**
+ * 原始 BOM 链接单元格：有效 http(s) 写成可点链接，否则固定写「无」（不留空）。
+ * @param {unknown} raw
+ */
+function originalBomLinkCell(raw) {
+  const s = safeTrim(raw);
+  if (!s) return '无';
+  try {
+    const u = new URL(s);
+    if (u.protocol !== 'http:' && u.protocol !== 'https:') return '无';
+    return cellForSheetValue(u.toString());
+  } catch {
+    return '无';
+  }
+}
+
+/**
  * 表头行：水平居中 + 加粗
  * @param {string} accessToken
  * @param {string} spreadsheetToken
  * @param {string} sheetId
  * @param {number} colCount
+ * @param {number} [row1based=1]
  */
-async function setHeaderRowCenterBold(accessToken, spreadsheetToken, sheetId, colCount) {
+async function setHeaderRowCenterBold(accessToken, spreadsheetToken, sheetId, colCount, row1based = 1) {
   const endCol = colIndexToLetters(Math.max(0, colCount - 1));
-  const range = `${sheetId}!A1:${endCol}1`;
+  const row = Math.max(1, Math.trunc(row1based) || 1);
+  const range = `${sheetId}!A${row}:${endCol}${row}`;
   const res = await fetch(
     `https://open.feishu.cn/open-apis/sheets/v2/spreadsheets/${encodeURIComponent(spreadsheetToken)}/style`,
     {
@@ -607,6 +625,7 @@ async function setHeaderRowCenterBold(accessToken, spreadsheetToken, sheetId, co
  * @param {Array<{ bom_row?: unknown, status?: unknown }>} p.rows
  * @param {Awaited<ReturnType<typeof loadFeishuPackageManifest>> | null} [p.packageManifest]
  * @param {string} [p.webBaseUrl]
+ * @param {string} [p.originalBomUrl]
  * @returns {Promise<{ spreadsheetToken: string, url: string, rowCount: number, sheetTitle: string }>}
  */
 export async function generateVersionPackageSheet(p) {
@@ -634,8 +653,17 @@ export async function generateVersionPackageSheet(p) {
     throw new Error('当前版本没有 feishu=present 的行，无法生成软件包清单');
   }
 
+  const colCount = Math.max(header.length, 2);
+  /** @param {unknown[]} row */
+  const padRow = (row) => {
+    const next = row.slice();
+    while (next.length < colCount) next.push('');
+    return next;
+  };
+  const metaRow = padRow(['原始BOM链接', originalBomLinkCell(p.originalBomUrl)]);
+
   /** @type {unknown[][]} */
-  const values = [header];
+  const values = [metaRow, padRow(header)];
 
   for (const { bomRow, meta } of present) {
     const md5Raw = firstNonEmptyByKeysRelaxed(bomRow, keyMap.expectedMd5);
@@ -675,7 +703,7 @@ export async function generateVersionPackageSheet(p) {
       if (kind) return cellForSheetValue(extras[kind] ?? '');
       return cellForSheetValue(resolveBomCellByHeader(bomRow, keyMap, col));
     });
-    values.push(rowCells);
+    values.push(padRow(rowCells));
   }
 
   const { spreadsheetToken, url } = await createSpreadsheet(
@@ -685,11 +713,11 @@ export async function generateVersionPackageSheet(p) {
   );
   const sheetId = await queryFirstSheetId(accessToken, spreadsheetToken);
   const endRow = values.length;
-  const endCol = colIndexToLetters(header.length - 1);
+  const endCol = colIndexToLetters(colCount - 1);
   const range = `${sheetId}!A1:${endCol}${endRow}`;
   await putSheetValues(accessToken, spreadsheetToken, range, values);
   try {
-    await setHeaderRowCenterBold(accessToken, spreadsheetToken, sheetId, header.length);
+    await setHeaderRowCenterBold(accessToken, spreadsheetToken, sheetId, colCount, 2);
   } catch (e) {
     log('WARN feishu-version-sheet header style', e instanceof Error ? e.message : e);
   }
@@ -756,5 +784,6 @@ export async function generateVersionPackageSheetForBatch(supabase, accessToken,
     rows: rowList ?? [],
     packageManifest,
     webBaseUrl: opts.webBaseUrl,
+    originalBomUrl: batchProdCfg.originalBomUrl,
   });
 }

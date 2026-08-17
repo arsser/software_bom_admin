@@ -1,6 +1,6 @@
 {
   "name": "software_bom_admin-web",
-  "version": "1.0.61",
+  "version": "1.0.62",
   "private": true,
   "type": "module",
   "scripts": {

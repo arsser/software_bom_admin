@@ -76,6 +76,31 @@ async function sendTextToOpenId(token, openId, msg) {
  */
 export async function notifyFeishuJobFailed(admin, info) {
   try {
+    let batchName = info.batchName?.trim() || '';
+    if (!batchName && info.batchId) {
+      const { data: b } = await admin.from('bom_batches').select('name').eq('id', info.batchId).maybeSingle();
+      if (b?.name) batchName = String(b.name);
+    }
+
+    const lines = [`【BOM】${info.jobType} · 失败`];
+    if (batchName) lines.push(`版本：${batchName}`);
+    if (info.jobId) lines.push(`任务：${String(info.jobId).slice(0, 8)}…`);
+    if (info.message?.trim()) lines.push(info.message.trim().slice(0, 500));
+    await sendFeishuNotifyText(admin, lines.join('\n'));
+  } catch (e) {
+    log('notify error', e instanceof Error ? e.message : String(e));
+  }
+}
+
+/**
+ * 读取 feishu_config 后按 notifyOpenIds 发纯文本。未启用或失败时静默。
+ * @param {import('@supabase/supabase-js').SupabaseClient} admin
+ * @param {string} text
+ */
+export async function sendFeishuNotifyText(admin, text) {
+  const msg = String(text ?? '').trim();
+  if (!msg) return;
+  try {
     const { data, error } = await admin
       .from('system_settings')
       .select('value')
@@ -95,19 +120,6 @@ export async function notifyFeishuJobFailed(admin, info) {
       log('missing app credentials');
       return;
     }
-
-    let batchName = info.batchName?.trim() || '';
-    if (!batchName && info.batchId) {
-      const { data: b } = await admin.from('bom_batches').select('name').eq('id', info.batchId).maybeSingle();
-      if (b?.name) batchName = String(b.name);
-    }
-
-    const lines = [`【BOM】${info.jobType} · 失败`];
-    if (batchName) lines.push(`版本：${batchName}`);
-    if (info.jobId) lines.push(`任务：${String(info.jobId).slice(0, 8)}…`);
-    if (info.message?.trim()) lines.push(info.message.trim().slice(0, 500));
-    const msg = lines.join('\n');
-
     const token = await fetchTenantToken(appId, appSecret);
     for (const openId of openIds) {
       try {

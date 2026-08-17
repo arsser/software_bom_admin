@@ -14,6 +14,7 @@ import {
 import { formatSupabaseError } from '../lib/bomScannerJobs';
 import { DEFAULT_ARCH_OPTIONS, fetchBomScannerSettings } from '../lib/bomScannerSettings';
 import { LABEL_EXTERNAL_ARTI } from '../lib/bomUiLabels';
+import { cancelBomSyncPipelineJob } from '../lib/bomSyncPipeline';
 
 const PHASE_ORDER: PatchPipelinePhase[] = [
   'create_batch',
@@ -57,6 +58,7 @@ export const BomPatchUploadPage: React.FC = () => {
   const [progress, setProgress] = useState<PatchPipelineProgress | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [doneBatchId, setDoneBatchId] = useState<string | null>(null);
+  const [pipelineJobId, setPipelineJobId] = useState<string | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   const lastWorkingPhaseRef = useRef<PatchPipelinePhase>('idle');
 
@@ -235,6 +237,7 @@ export const BomPatchUploadPage: React.FC = () => {
     }
     setError(null);
     setDoneBatchId(null);
+    setPipelineJobId(null);
     setBusy(true);
     setBusyMode('pipeline');
     setLastMode('pipeline');
@@ -250,6 +253,8 @@ export const BomPatchUploadPage: React.FC = () => {
           if (p.phase !== 'failed' && p.phase !== 'idle') {
             lastWorkingPhaseRef.current = p.phase;
           }
+          if (p.batchId) setDoneBatchId(p.batchId);
+          if (p.jobId) setPipelineJobId(p.jobId);
           setProgress(p);
         },
       });
@@ -258,20 +263,15 @@ export const BomPatchUploadPage: React.FC = () => {
         phase: 'done',
         message: result.versionSheetUrl
           ? `完成：版本「${result.batchName}」，共 ${result.rowCount} 个包；清单 ${result.versionSheetUrl}`
-          : `完成：版本「${result.batchName}」，共 ${result.rowCount} 个包`,
+          : `完成：版本「${result.batchName}」，共 ${result.rowCount} 个包。可关闭本页，子任务见 BOM 任务。`,
         batchId: result.batchId,
         batchName: result.batchName,
         rowCount: result.rowCount,
+        jobId: result.pipelineJobId,
       });
     } catch (e) {
       if (e instanceof DOMException && e.name === 'AbortError') {
-        setProgress((prev) => ({
-          phase: 'failed',
-          message: '已取消',
-          batchId: prev?.batchId,
-          batchName: prev?.batchName,
-          rowCount: prev?.rowCount,
-        }));
+        return;
       } else {
         const msg = formatSupabaseError(e);
         setError(msg);
@@ -291,6 +291,11 @@ export const BomPatchUploadPage: React.FC = () => {
   };
 
   const handleCancel = () => {
+    const id = pipelineJobId;
+    if (busyMode === 'pipeline' && id) {
+      void cancelBomSyncPipelineJob(id).catch((e) => setError(formatSupabaseError(e)));
+      return;
+    }
     abortRef.current?.abort();
   };
 
@@ -318,6 +323,7 @@ export const BomPatchUploadPage: React.FC = () => {
           <h2 className="text-2xl font-bold text-slate-900 mt-1">Hot fix</h2>
           <p className="text-slate-500 mt-1 text-sm">
             填写 Artifactory 链接与每条链接的硬件平台；本地拉取必选，{LABEL_EXTERNAL_ARTI} / 飞书可勾选。
+            自动同步由后台 worker 编排，关闭本页不会中断。
           </p>
         </div>
       </div>
@@ -528,7 +534,7 @@ export const BomPatchUploadPage: React.FC = () => {
                 onClick={handleCancel}
                 className="inline-flex items-center gap-2 px-3 py-2 rounded-lg border border-slate-300 text-slate-700 text-sm hover:bg-slate-50"
               >
-                取消等待
+                取消同步
               </button>
             ) : null}
             {doneBatchId ? (
@@ -539,6 +545,13 @@ export const BomPatchUploadPage: React.FC = () => {
                   className="inline-flex items-center gap-2 px-3 py-2 rounded-lg border border-indigo-200 bg-indigo-50 text-indigo-700 text-sm hover:bg-indigo-100"
                 >
                   打开版本详情
+                </button>
+                <button
+                  type="button"
+                  onClick={() => navigate(`/bom/jobs?batchId=${encodeURIComponent(doneBatchId)}`)}
+                  className="inline-flex items-center gap-2 px-3 py-2 rounded-lg border border-slate-300 text-slate-700 text-sm hover:bg-slate-50"
+                >
+                  打开 BOM 任务
                 </button>
                 <button
                   type="button"
@@ -566,7 +579,7 @@ export const BomPatchUploadPage: React.FC = () => {
             ) : null}
           </div>
           <p className="text-xs text-slate-500">
-            「创建」只建版本；「创建并自动同步」按上方勾选阶段跑流水线。创建后也可在 BOM 管理 → 一键同步。
+            「创建」只建版本；「创建并自动同步」入队后台编排。关闭页面不会中断，进度见 BOM 任务。
           </p>
           {!busy && !canSubmit && submitBlockReasons.length > 0 ? (
             <ul className="text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 space-y-0.5 list-disc list-inside">

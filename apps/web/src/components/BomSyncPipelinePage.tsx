@@ -21,8 +21,12 @@ import {
 import { fetchProductDistributionSettings } from '../lib/products';
 import {
   assertPipelineDistributionReady,
-  runBomSyncPipeline,
+  cancelBomSyncPipelineJob,
+  fetchActiveBomSyncPipelineJob,
+  pipelineJobToProgress,
+  requestBomSyncPipeline,
   SYNC_PIPELINE_PHASE_LABEL,
+  watchBomSyncPipeline,
   type SyncPipelinePhase,
   type SyncPipelineProgress,
 } from '../lib/bomSyncPipeline';
@@ -71,10 +75,12 @@ export const BomSyncPipelinePage: React.FC = () => {
   const [busy, setBusy] = useState(false);
   const [progress, setProgress] = useState<SyncPipelineProgress | null>(null);
   const [runError, setRunError] = useState<string | null>(null);
-  const abortRef = useRef<AbortController | null>(null);
+  const [pipelineJobId, setPipelineJobId] = useState<string | null>(null);
+  const watchAbortRef = useRef<AbortController | null>(null);
+  const watchingIdRef = useRef<string | null>(null);
   const lastPhaseRef = useRef<SyncPipelinePhase>('idle');
 
-  const load = async () => {
+  async function load(opts?: { resumePipeline?: boolean }) {
     if (!batchId) return;
     setLoading(true);
     setError(null);
@@ -100,17 +106,25 @@ export const BomSyncPipelinePage: React.FC = () => {
         }
         return next;
       });
+      const active = await fetchActiveBomSyncPipelineJob(batchId);
+      if (opts?.resumePipeline !== false && active && watchingIdRef.current !== active.id) {
+        setDoExt(active.doExt);
+        setDoFeishu(active.doFeishu);
+        setPipelineJobId(active.id);
+        setProgress(pipelineJobToProgress(active, { batchName: batch.name, rowCount: list.length }));
+        void attachWatch(active.id, batch.name);
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
       setLoading(false);
     }
-  };
+  }
 
   useEffect(() => {
     void load();
     return () => {
-      abortRef.current?.abort();
+      watchAbortRef.current?.abort();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [batchId]);
@@ -156,45 +170,98 @@ export const BomSyncPipelinePage: React.FC = () => {
     else setSelectedIds(new Set(rows.map((r) => r.id)));
   };
 
-  const handleStart = async () => {
-    if (!canStart || !batchId) return;
-    setRunError(null);
-    setProgress(null);
-    setBusy(true);
+  async function attachWatch(jobId: string, name: string) {
+    watchAbortRef.current?.abort();
     const ac = new AbortController();
-    abortRef.current = ac;
+    watchAbortRef.current = ac;
+    watchingIdRef.current = jobId;
+    setPipelineJobId(jobId);
+    setBusy(true);
+    setRunError(null);
     try {
-      await assertPipelineDistributionReady(productId, { doExt, doFeishu });
-      const rowIds = selectedIds.size > 0 ? [...selectedIds] : null;
-      await runBomSyncPipeline({
-        batchId,
-        batchName: batchName || batchId,
-        doExt,
-        doFeishu,
-        rowIds,
-        enrichMd5: true,
+      const job = await watchBomSyncPipeline(jobId, {
         signal: ac.signal,
+        batchName: name,
         onProgress: (p) => {
           if (p.phase !== 'failed' && p.phase !== 'idle') lastPhaseRef.current = p.phase;
           setProgress(p);
         },
       });
-      await load();
+      if (job.status === 'cancelled') {
+        setProgress((prev) =>
+          prev ? { ...prev, phase: 'failed', message: job.lastMessage || '已取消' } : { phase: 'failed', message: '已取消' },
+        );
+      } else if (job.status !== 'succeeded') {
+        const msg = job.lastMessage?.trim() || '同步流水线失败';
+        setRunError(msg);
+        setProgress((prev) => (prev ? { ...prev, phase: 'failed', message: msg } : { phase: 'failed', message: msg }));
+      }
+      await load({ resumePipeline: false });
     } catch (e) {
       if (e instanceof DOMException && e.name === 'AbortError') {
-        setProgress((prev) =>
-          prev ? { ...prev, phase: 'failed', message: '已取消' } : { phase: 'failed', message: '已取消' },
-        );
-      } else {
-        const msg = formatSupabaseError(e);
-        setRunError(msg);
-        setProgress((prev) =>
-          prev ? { ...prev, phase: 'failed', message: msg } : { phase: 'failed', message: msg },
-        );
+        return;
       }
+      const msg = formatSupabaseError(e);
+      setRunError(msg);
+      setProgress((prev) => (prev ? { ...prev, phase: 'failed', message: msg } : { phase: 'failed', message: msg }));
     } finally {
-      setBusy(false);
-      abortRef.current = null;
+      if (watchAbortRef.current === ac) {
+        setBusy(false);
+        watchAbortRef.current = null;
+        watchingIdRef.current = null;
+      }
+    }
+  }
+
+  const handleStart = async () => {
+    if (!canStart || !batchId) return;
+    setRunError(null);
+    setProgress(null);
+    try {
+      await assertPipelineDistributionReady(productId, { doExt, doFeishu });
+      const existing = await fetchActiveBomSyncPipelineJob(batchId);
+      if (existing) {
+        setDoExt(existing.doExt);
+        setDoFeishu(existing.doFeishu);
+        setProgress(pipelineJobToProgress(existing, { batchName, rowCount: rows.length }));
+        await attachWatch(existing.id, batchName || batchId);
+        return;
+      }
+      const jobId = await requestBomSyncPipeline({
+        batchId,
+        rowIds: selectedIds.size > 0 ? [...selectedIds] : null,
+        doExt,
+        doFeishu,
+        enrichMd5: true,
+      });
+      setProgress({
+        phase: 'idle',
+        message: '已入队，由后台 worker 编排。可关闭本页，进度见 BOM 任务页的子任务。',
+        batchId,
+        batchName,
+        rowCount: selectedIds.size || rows.length,
+        jobId,
+      });
+      await attachWatch(jobId, batchName || batchId);
+    } catch (e) {
+      if (e instanceof DOMException && e.name === 'AbortError') {
+        return;
+      }
+      const msg = formatSupabaseError(e);
+      setRunError(msg);
+      setProgress((prev) =>
+        prev ? { ...prev, phase: 'failed', message: msg } : { phase: 'failed', message: msg },
+      );
+    }
+  };
+
+  const handleCancel = async () => {
+    const id = pipelineJobId;
+    if (!id) return;
+    try {
+      await cancelBomSyncPipelineJob(id);
+    } catch (e) {
+      setRunError(formatSupabaseError(e));
     }
   };
 
@@ -235,7 +302,8 @@ export const BomSyncPipelinePage: React.FC = () => {
             </button>
             <h2 className="text-2xl font-bold text-slate-900 mt-1">一键同步</h2>
             <p className="text-slate-500 mt-1 text-sm">
-              本地拉取必选；{LABEL_EXTERNAL_ARTI} / 飞书可勾选。未勾选行 = 整版；有勾选 = 只跑勾选行（不依赖飞书扫描）。
+              本地拉取必选；{LABEL_EXTERNAL_ARTI} / 飞书可勾选。任务由后台 worker 编排，关闭本页不会中断。
+              未勾选行 = 整版；有勾选 = 只跑勾选行。
             </p>
           </div>
         </div>
@@ -275,6 +343,13 @@ export const BomSyncPipelinePage: React.FC = () => {
             onClick={() => navigate(`/bom/${batchId}/distribute`)}
           >
             打开分发页
+          </button>
+          <button
+            type="button"
+            className="text-indigo-700 hover:text-indigo-900"
+            onClick={() => navigate(`/bom/jobs?batchId=${encodeURIComponent(batchId)}`)}
+          >
+            打开 BOM 任务
           </button>
         </div>
       </div>
@@ -338,13 +413,13 @@ export const BomSyncPipelinePage: React.FC = () => {
               {busy ? <Loader2 size={16} className="animate-spin" /> : <Play size={16} />}
               {busy ? '同步中…' : '开始同步'}
             </button>
-            {busy ? (
+            {busy && pipelineJobId ? (
               <button
                 type="button"
-                onClick={() => abortRef.current?.abort()}
+                onClick={() => void handleCancel()}
                 className="inline-flex items-center gap-2 px-3 py-2 rounded-lg border border-slate-300 text-sm text-slate-700 hover:bg-slate-50"
               >
-                取消等待
+                取消同步
               </button>
             ) : null}
           </div>
@@ -460,6 +535,19 @@ export const BomSyncPipelinePage: React.FC = () => {
           <p className="text-sm text-slate-600 border-t border-slate-100 pt-3 whitespace-pre-wrap">
             {progress.message}
           </p>
+          {busy ? (
+            <p className="text-xs text-slate-500">
+              关闭或刷新本页不会中断后台任务。子任务进度请到{' '}
+              <button
+                type="button"
+                className="text-indigo-700 hover:text-indigo-900"
+                onClick={() => navigate(`/bom/jobs?batchId=${encodeURIComponent(batchId)}`)}
+              >
+                BOM 任务
+              </button>
+              查看。
+            </p>
+          ) : null}
         </div>
       ) : null}
 

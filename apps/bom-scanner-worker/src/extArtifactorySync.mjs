@@ -5,6 +5,7 @@ import { Readable } from 'node:stream';
 import { patchBomRowExtStatus, withExt } from './bomRowStatusJson.mjs';
 import { reportBomLocalRootRuntime } from './workerRuntimeReport.mjs';
 import { notifyFeishuJobFailed } from './feishuNotify.mjs';
+import { pickComponentId, resolveUniqueDeliveryFileName } from './deliveryFileName.mjs';
 
 function log(...args) {
   console.log(new Date().toISOString(), ...args);
@@ -634,6 +635,8 @@ export async function executeExtSyncJob(supabase, rootAbs, job, tuning) {
   let nSkip = 0;
   let nRetries = 0;
   let bytesDoneTotal = 0;
+  /** @type {Map<string, string>} targetRel -> md5 */
+  const claimedExtRel = new Map();
   let userCancelled = false;
 
   for (const rowId of rowIds) {
@@ -732,6 +735,25 @@ export async function executeExtSyncJob(supabase, rootAbs, job, tuning) {
       if (!fileName || fileName === 'artifact.bin') {
         fileName = safeFlatFilename(path.basename(diskAbs));
       }
+      const baseName = fileName;
+
+      const moduleRaw = firstNonEmptyByKeysRelaxed(bomRow, keyMap.module);
+      const componentRaw = firstNonEmptyByKeysRelaxed(bomRow, keyMap.component);
+      const midDir = moduleRaw ? safePathSegment(moduleRaw) : componentRaw ? safePathSegment(componentRaw) : null;
+      const batchDir = safePathSegment(batchName);
+      fileName = await resolveUniqueDeliveryFileName({
+        baseName,
+        componentId: pickComponentId(bomRow, firstNonEmptyByKeysRelaxed),
+        md5: md5Lower,
+        isTakenByOther: (name, md5) => {
+          const rel = midDir ? [batchDir, midDir, name].join('/') : [batchDir, name].join('/');
+          const prev = claimedExtRel.get(rel);
+          return Boolean(prev && prev !== md5);
+        },
+      });
+      if (fileName !== baseName) {
+        log('ext-sync rename on collision', { jobId, rowId, from: baseName, to: fileName, md5: md5Lower });
+      }
 
       await patchExtSyncJob(supabase, jobId, {
         running_row_id: rowId,
@@ -744,12 +766,9 @@ export async function executeExtSyncJob(supabase, rootAbs, job, tuning) {
       const rowStartedAtMs = Date.now();
       let lastProgressFlushMs = 0;
 
-      const moduleRaw = firstNonEmptyByKeysRelaxed(bomRow, keyMap.module);
-      const componentRaw = firstNonEmptyByKeysRelaxed(bomRow, keyMap.component);
-      const midDir = moduleRaw ? safePathSegment(moduleRaw) : componentRaw ? safePathSegment(componentRaw) : null;
-      const batchDir = safePathSegment(batchName);
       // 与飞书对账一致：{repo}/{batchName}/{模块优先否则组件}/{fileName}
       const targetRel = midDir ? [batchDir, midDir, fileName].join('/') : [batchDir, fileName].join('/');
+      claimedExtRel.set(targetRel, md5Lower);
 
       const targetDl = buildArtifactoryDownloadUrl(rootUrl, extRepo, targetRel);
       log('ext-sync row target', {

@@ -1,7 +1,8 @@
 /**
  * 本地暂存路径约定（目录方案 C）：
  *   {BOM_LOCAL_ROOT}/{batchDir}/{middleDir?}/{originalFileName}
- * 同 MD5 跨版本用硬链复用；交付名（飞书/ext）用原始 basename，不用 _N。
+ * 同 MD5 跨版本用硬链复用；交付名默认 URL basename。
+ * 同目录撞名（另一份不同 MD5）时改用组件 ID，再撞则加毫秒时间戳。
  */
 import path from 'node:path';
 import fs from 'node:fs/promises';

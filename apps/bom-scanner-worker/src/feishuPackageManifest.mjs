@@ -1,6 +1,7 @@
 /**
  * 飞书产品根目录下 meta/package-manifest.json：软件包去重清单。
- * 约定：软件包文件名全局不重名；条目含相对路径、文件名、md5、大小、file_token、download_url。
+ * 去重优先按 md5（+ 大小）命中，不要求文件名一致。
+ * 新上传若与「另一份不同 MD5」撞名，改用组件 ID / 毫秒时间戳（见 deliveryFileName.mjs）。
  */
 
 import { safeFlatFilename, safePathSegment } from './extArtifactorySync.mjs';
@@ -478,6 +479,31 @@ export async function loadFeishuPackageManifest(accessToken, rootFolderToken) {
 }
 
 /**
+ * @param {FeishuPackageManifestState | null | undefined} state
+ * @param {unknown} md5Raw
+ * @param {unknown} sizeBytes
+ * @returns {FeishuPackageManifestEntry | null}
+ */
+export function findPackageManifestHitByMd5(state, md5Raw, sizeBytes) {
+  if (!state) return null;
+  const md5 = isValidMd5Hex(md5Raw) ? String(md5Raw).trim().toLowerCase() : '';
+  const size = Math.trunc(Number(sizeBytes));
+  if (!md5) return null;
+
+  /** @type {FeishuPackageManifestEntry[]} */
+  const md5Hits = [];
+  for (const e of state.byRelPath.values()) {
+    if (e && e.md5 === md5) md5Hits.push(e);
+  }
+  if (!md5Hits.length) return null;
+  if (Number.isFinite(size) && size >= 0) {
+    const sized = md5Hits.find((e) => e.size_bytes === size);
+    if (sized) return sized;
+  }
+  return md5Hits.length === 1 ? md5Hits[0] : null;
+}
+
+/**
  * @param {FeishuPackageManifestState} state
  * @param {{ fileName: string, md5: string, sizeBytes: number, relPath?: string }} q
  * @returns {FeishuPackageManifestEntry | null}
@@ -486,7 +512,7 @@ export function findPackageManifestHit(state, q) {
   const fileName = safeFlatFilename(q.fileName).normalize('NFKC');
   const md5 = isValidMd5Hex(q.md5) ? String(q.md5).trim().toLowerCase() : '';
   const sizeBytes = Math.trunc(Number(q.sizeBytes));
-  if (!fileName || !md5 || !Number.isFinite(sizeBytes) || sizeBytes < 0) return null;
+  if (!md5) return null;
 
   const relPath = q.relPath
     ? safeTrim(q.relPath).replace(/\\/g, '/').replace(/^\/+/, '').normalize('NFKC')
@@ -494,17 +520,44 @@ export function findPackageManifestHit(state, q) {
   // 优先按目标相对路径命中（版本目录下的真实位置）
   if (relPath) {
     const byPath = state.byRelPath.get(relPath);
-    if (byPath && byPath.md5 && byPath.md5 === md5 && byPath.size_bytes === sizeBytes) {
+    if (
+      byPath &&
+      byPath.md5 &&
+      byPath.md5 === md5 &&
+      (!Number.isFinite(sizeBytes) || sizeBytes < 0 || byPath.size_bytes === sizeBytes)
+    ) {
       return byPath;
     }
   }
 
-  const byName = state.byFileName.get(fileName);
-  if (byName && byName.md5 && byName.md5 === md5 && byName.size_bytes === sizeBytes) {
-    return byName;
+  if (fileName) {
+    const byName = state.byFileName.get(fileName);
+    if (
+      byName &&
+      byName.md5 &&
+      byName.md5 === md5 &&
+      (!Number.isFinite(sizeBytes) || sizeBytes < 0 || byName.size_bytes === sizeBytes)
+    ) {
+      return byName;
+    }
   }
 
-  return null;
+  return findPackageManifestHitByMd5(state, md5, sizeBytes);
+}
+
+/**
+ * 该文件名是否已被另一份不同 MD5 占用（同 MD5 不算撞名）。
+ * @param {FeishuPackageManifestState | null | undefined} state
+ * @param {string} fileName
+ * @param {string} md5Raw
+ */
+export function packageManifestNameTakenByOtherMd5(state, fileName, md5Raw) {
+  if (!state) return false;
+  const name = safeFlatFilename(fileName).normalize('NFKC');
+  const md5 = isValidMd5Hex(md5Raw) ? String(md5Raw).trim().toLowerCase() : '';
+  const e = state.byFileName.get(name);
+  if (!e) return false;
+  return !e.md5 || e.md5 !== md5;
 }
 
 /** 清单命中是否就是「当前版本期望路径」（跨版本同名同 MD5 不算） */
@@ -530,7 +583,7 @@ export function upsertPackageManifestEntry(state, p) {
   }
 
   const prev = state.byFileName.get(fileName);
-  if (prev && prev.rel_path !== relPath) {
+  if (prev && prev.rel_path !== relPath && prev.md5 === md5) {
     state.byRelPath.delete(prev.rel_path);
   }
 

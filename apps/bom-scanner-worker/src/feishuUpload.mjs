@@ -21,10 +21,12 @@ import {
   buildFeishuPackageRelPath,
   findPackageManifestHit,
   loadFeishuPackageManifest,
+  packageManifestNameTakenByOtherMd5,
   saveFeishuPackageManifestIfDirty,
   upsertPackageManifestEntry,
 } from './feishuPackageManifest.mjs';
 import { deliveryFileNameFromUrl } from './localStorePaths.mjs';
+import { pickComponentId, resolveUniqueDeliveryFileName } from './deliveryFileName.mjs';
 import { notifyFeishuJobFailed } from './feishuNotify.mjs';
 function log(...args) {
   console.log(new Date().toISOString(), ...args);
@@ -159,7 +161,7 @@ function resolveMiddleDirFromRow(bomRow, keyMap) {
 }
 
 /**
- * 飞书交付文件名：优先下载 URL 原始 basename，避免本地 _N 撞名泄漏。
+ * 飞书交付文件名：优先下载 URL 原始 basename；撞名改名见 resolveUniqueDeliveryFileName。
  * @param {Record<string, unknown>} bomRow
  * @param {ReturnType<typeof mergeKeyMap>} keyMap
  * @param {string} diskAbs
@@ -969,6 +971,8 @@ export async function executeFeishuUploadJob(supabase, rootAbs, job, tuning) {
     const resultOk = [];
     /** @type {{ rowId: string, reason?: string }[]} */
     const resultSkip = [];
+    /** @type {Map<string, string>} */
+    const reservedNames = new Map();
     let userCancelled = false;
 
     for (const rowId of rowIds) {
@@ -1111,38 +1115,39 @@ export async function executeFeishuUploadJob(supabase, rootAbs, job, tuning) {
       }
       const rowTotalBytes = Math.max(0, Number(fileStat.size) || 0);
 
-      const fileName = resolveDeliveryFileName(bomRow, keyMap, diskAbs);
+      const baseName = resolveDeliveryFileName(bomRow, keyMap, diskAbs);
       const middleDir = resolveMiddleDirFromRow(bomRow, keyMap);
       const pathSegments = middleDir ? [batchDir, middleDir] : [batchDir];
-      const packageRelPath = buildFeishuPackageRelPath(pathSegments, fileName);
+      const tentativeRelPath = buildFeishuPackageRelPath(pathSegments, baseName);
 
-      // 清单去重：同文件名 + md5 + size 已存在则跳过实际上传（全局去重）
+      // 清单去重：优先 md5（旧名 utk_1 / 新名 utk 都能命中），同名同 MD5 跳过实际上传
       if (packageManifest) {
         const hit = findPackageManifestHit(packageManifest, {
-          fileName,
+          fileName: baseName,
           md5: md5Lower,
           sizeBytes: rowTotalBytes,
-          relPath: packageRelPath,
+          relPath: tentativeRelPath,
         });
         if (hit) {
           await patchBomRowFeishuAfterUpload(supabase, rowId, {
             fileToken: hit.file_token,
-            fileName: hit.file_name || fileName,
+            fileName: hit.file_name || baseName,
             sizeBytes: hit.size_bytes,
           });
           nOk += 1;
           nDedup += 1;
           completed += 1;
           bytesDoneTotal += hit.size_bytes;
-          resultOk.push({ rowId, fileName, kind: 'dedup' });
-          lastJobMessage = `${completed}/${total} 跳过（清单已存在） 文件：${fileName}`;
+          resultOk.push({ rowId, fileName: hit.file_name || baseName, kind: 'dedup' });
+          lastJobMessage = `${completed}/${total} 跳过（清单已存在） 文件：${hit.file_name || baseName}`;
           log('feishu-upload dedup skip', {
             jobId,
             rowId,
-            fileName,
+            fileName: hit.file_name || baseName,
+            wantedName: baseName,
             md5: md5Lower,
             manifestRelPath: hit.rel_path,
-            expectedRelPath: packageRelPath,
+            expectedRelPath: tentativeRelPath,
           });
           await patchFeishuUploadJob(supabase, jobId, {
             progress_current: completed,
@@ -1156,6 +1161,22 @@ export async function executeFeishuUploadJob(supabase, rootAbs, job, tuning) {
           continue;
         }
       }
+
+      const fileName = await resolveUniqueDeliveryFileName({
+        baseName,
+        componentId: pickComponentId(bomRow, firstNonEmptyByKeysRelaxed),
+        md5: md5Lower,
+        isTakenByOther: (name, md5) => {
+          const prev = reservedNames.get(name.normalize('NFKC'));
+          if (prev && prev !== md5) return true;
+          return packageManifestNameTakenByOtherMd5(packageManifest, name, md5);
+        },
+      });
+      reservedNames.set(fileName.normalize('NFKC'), md5Lower);
+      if (fileName !== baseName) {
+        log('feishu-upload rename on collision', { jobId, rowId, from: baseName, to: fileName, md5: md5Lower });
+      }
+      const packageRelPath = buildFeishuPackageRelPath(pathSegments, fileName);
 
       log('feishu-upload row start', {
         jobId,

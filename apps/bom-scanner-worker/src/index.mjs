@@ -35,6 +35,7 @@ import {
   findExistingLocalRelPathByMd5,
   linkOrReuseLocalPath,
 } from './localStorePaths.mjs';
+import { pickComponentId, resolveUniqueDeliveryFileName } from './deliveryFileName.mjs';
 import { notifyFeishuJobFailed } from './feishuNotify.mjs';
 import { drainSyncPipelineJobs, failStaleSyncPipelineJobs } from './syncPipelineWorker.mjs';
 
@@ -872,6 +873,32 @@ async function claimDownloadJob(supabase) {
 }
 
 /**
+ * 目标相对路径上是否已有「另一份不同 MD5」的文件。
+ * @param {import('@supabase/supabase-js').SupabaseClient} supabase
+ * @param {string} rootAbs
+ * @param {string} destRel
+ * @param {string | null} md5Lower
+ */
+async function localDestTakenByOtherMd5(supabase, rootAbs, destRel, md5Lower) {
+  const rel = String(destRel || '')
+    .replace(/\\/g, '/')
+    .replace(/^\/+/, '');
+  if (!rel) return false;
+  const abs = path.join(rootAbs, rel.split('/').join(path.sep));
+  try {
+    const st = await fs.stat(abs);
+    if (!st.isFile()) return false;
+  } catch {
+    return false;
+  }
+  if (!md5Lower) return true;
+  const { data } = await supabase.from('local_file').select('md5').eq('path', rel).limit(1).maybeSingle();
+  const got = typeof data?.md5 === 'string' ? data.md5.trim().toLowerCase() : '';
+  if (got && got === md5Lower) return false;
+  return true;
+}
+
+/**
  * @param {import('@supabase/supabase-js').SupabaseClient} supabase
  * @param {string} rootAbs
  * @param {{ id: string, batch_id: string, row_ids: string[], progress_total: number, pull_url_source?: string }} job
@@ -967,6 +994,8 @@ async function executeDownloadJob(supabase, rootAbs, job, tuning) {
   let nSkip = 0;
   let nRetries = 0;
   let bytesDoneTotal = 0;
+  /** @type {Map<string, string>} destRel -> md5 */
+  const claimedDestRel = new Map();
   let userCancelled = false;
 
   try {
@@ -1013,16 +1042,32 @@ async function executeDownloadJob(supabase, rootAbs, job, tuning) {
       }
 
       const bomRow = bomById.get(rowId) ?? {};
-      const fileName = deliveryFileNameFromUrl(url);
+      const baseName = deliveryFileNameFromUrl(url);
       const modSeg = firstNonEmptyByKeysRelaxed(bomRow, keyMap.module);
       const compSeg = firstNonEmptyByKeysRelaxed(bomRow, keyMap.component);
       const middleDir = modSeg ? safePathSegment(modSeg) : compSeg ? safePathSegment(compSeg) : null;
-      const destRelPath = buildVersionRelativePath(batchDir, middleDir, fileName);
       const md5Raw = firstNonEmptyByKeysRelaxed(bomRow, keyMap.expectedMd5);
       const expectedMd5 =
         md5Raw && typeof md5Raw === 'string' && /^[a-f0-9]{32}$/i.test(md5Raw.trim())
           ? md5Raw.trim().toLowerCase()
           : null;
+      const fileName = await resolveUniqueDeliveryFileName({
+        baseName,
+        componentId: pickComponentId(bomRow, firstNonEmptyByKeysRelaxed),
+        md5: expectedMd5 || '',
+        isTakenByOther: async (name, md5) => {
+          const rel = buildVersionRelativePath(batchDir, middleDir, name);
+          const claimed = claimedDestRel.get(rel);
+          if (claimed && claimed !== md5) return true;
+          if (claimed && claimed === md5) return false;
+          return localDestTakenByOtherMd5(supabase, rootAbs, rel, md5 || null);
+        },
+      });
+      const destRelPath = buildVersionRelativePath(batchDir, middleDir, fileName);
+      claimedDestRel.set(destRelPath, expectedMd5 || `__row:${rowId}`);
+      if (fileName !== baseName) {
+        log('it-download rename on collision', { jobId, rowId, from: baseName, to: fileName, destRelPath });
+      }
 
       let lastFlush = 0;
       const rowDownloadStartedAt = Date.now();

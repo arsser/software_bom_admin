@@ -12,6 +12,7 @@ import {
 } from './extArtifactorySync.mjs';
 import {
   buildFeishuPackageRelPath,
+  findPackageManifestHit,
   loadFeishuPackageManifest,
   resolvePackageManifestDownloadUrl,
 } from './feishuPackageManifest.mjs';
@@ -673,9 +674,14 @@ export async function generateVersionPackageSheet(p) {
       middleDir ? [batchDir, middleDir] : [batchDir],
       meta.fileName,
     );
-    const byName = packageManifest?.byFileName?.get(meta.fileName.normalize('NFKC')) ?? null;
-    const manifestHit =
-      byName && (!md5 || !byName.md5 || byName.md5 === md5) ? byName : byName || null;
+    const manifestHit = packageManifest
+      ? findPackageManifestHit(packageManifest, {
+          fileName: meta.fileName,
+          md5,
+          sizeBytes: meta.sizeBytes,
+          relPath: expectedRel,
+        })
+      : null;
 
     const sizeBytes =
       manifestHit && Number.isFinite(manifestHit.size_bytes) && manifestHit.size_bytes >= 0

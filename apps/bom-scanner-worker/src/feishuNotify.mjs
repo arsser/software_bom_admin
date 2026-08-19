@@ -84,7 +84,7 @@ export async function notifyFeishuJobFailed(admin, info) {
 
     const lines = [`【BOM】${info.jobType} · 失败`];
     if (batchName) lines.push(`版本：${batchName}`);
-    if (info.jobId) lines.push(`任务：${String(info.jobId).slice(0, 8)}…`);
+    if (info.jobId) lines.push(`任务：${String(info.jobId).trim()}`);
     if (info.message?.trim()) lines.push(info.message.trim().slice(0, 500));
     await sendFeishuNotifyText(admin, lines.join('\n'));
   } catch (e) {

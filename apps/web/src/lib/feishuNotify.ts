@@ -91,7 +91,7 @@ export function buildJobProgressNotifyText(opts: {
   const step = formatPipelineStepPrefix(opts.stepIndex, opts.stepTotal);
   const lines = [`【BOM】${step}${opts.title}`];
   if (opts.batchName?.trim()) lines.push(`版本：${opts.batchName.trim()}`);
-  if (opts.jobId?.trim()) lines.push(`任务：${opts.jobId.trim().slice(0, 8)}…`);
+  if (opts.jobId?.trim()) lines.push(`任务：${opts.jobId.trim()}`);
   if (opts.progressPct != null && Number.isFinite(opts.progressPct)) {
     lines.push(`进度：${opts.progressPct.toFixed(1)}%`);
   }
@@ -125,7 +125,7 @@ export function buildJobEndNotifyText(opts: {
   const step = formatPipelineStepPrefix(opts.stepIndex, opts.stepTotal);
   const lines = [`【BOM】${step}${opts.title} · ${opts.ok ? '成功' : '失败'}`];
   if (opts.batchName?.trim()) lines.push(`版本：${opts.batchName.trim()}`);
-  if (opts.jobId?.trim()) lines.push(`任务：${opts.jobId.trim().slice(0, 8)}…`);
+  if (opts.jobId?.trim()) lines.push(`任务：${opts.jobId.trim()}`);
   if (opts.elapsedSec != null && Number.isFinite(opts.elapsedSec) && opts.elapsedSec >= 0) {
     lines.push(`耗时：${formatEtaSec(opts.elapsedSec)}`);
   }

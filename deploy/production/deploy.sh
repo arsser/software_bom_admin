@@ -130,6 +130,21 @@ fi
 export VERSION
 export GITHUB_REPO
 
+COMPOSE_PROJECT_NAME="$(docker compose config --format json 2>/dev/null | python3 -c "import json,sys; print(json.load(sys.stdin).get('name') or '')" 2>/dev/null || true)"
+if [ -z "$COMPOSE_PROJECT_NAME" ]; then
+    COMPOSE_PROJECT_NAME="software-bom-admin"
+fi
+for c in softwarebomadmin-web softwarebomadmin-nginx softwarebomadmin-bom-scanner; do
+    if ! docker inspect "$c" >/dev/null 2>&1; then
+        continue
+    fi
+    old_project="$(docker inspect -f '{{index .Config.Labels "com.docker.compose.project"}}' "$c" 2>/dev/null || true)"
+    if [ -n "$old_project" ] && [ "$old_project" != "$COMPOSE_PROJECT_NAME" ]; then
+        log "Removing $c from old compose project '$old_project' (now '$COMPOSE_PROJECT_NAME')"
+        docker rm -f "$c" || true
+    fi
+done
+
 if docker compose up -d; then
     log "Services updated successfully"
 else

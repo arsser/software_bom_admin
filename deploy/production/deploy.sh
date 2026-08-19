@@ -134,16 +134,26 @@ COMPOSE_PROJECT_NAME="$(docker compose config --format json 2>/dev/null | python
 if [ -z "$COMPOSE_PROJECT_NAME" ]; then
     COMPOSE_PROJECT_NAME="software-bom-admin"
 fi
-for c in softwarebomadmin-web softwarebomadmin-nginx softwarebomadmin-bom-scanner; do
+# 精确 container_name，以及 docker 改名残留（如 0166c90cfbb8_softwarebomadmin-nginx 仍占 80）
+remove_old_project_container() {
+    local c="$1"
+    local old_project
     if ! docker inspect "$c" >/dev/null 2>&1; then
-        continue
+        return 0
     fi
     old_project="$(docker inspect -f '{{index .Config.Labels "com.docker.compose.project"}}' "$c" 2>/dev/null || true)"
     if [ -n "$old_project" ] && [ "$old_project" != "$COMPOSE_PROJECT_NAME" ]; then
         log "Removing $c from old compose project '$old_project' (now '$COMPOSE_PROJECT_NAME')"
         docker rm -f "$c" || true
     fi
+}
+for c in softwarebomadmin-web softwarebomadmin-nginx softwarebomadmin-bom-scanner; do
+    remove_old_project_container "$c"
 done
+while IFS= read -r c; do
+    [ -z "$c" ] && continue
+    remove_old_project_container "$c"
+done < <(docker ps -a --format '{{.Names}}' | grep -E '(^|_)softwarebomadmin-(web|nginx|bom-scanner)$' || true)
 
 if docker compose up -d; then
     log "Services updated successfully"

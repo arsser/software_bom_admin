@@ -1866,7 +1866,9 @@ export const BomDetail: React.FC = () => {
                       </span>
                     </div>
                     {formatDownloadJobBytesLine(latestDownloadJob) ? (
-                      <p className="text-[11px] text-indigo-800/90">{formatDownloadJobBytesLine(latestDownloadJob)}</p>
+                      <p className="text-[11px] text-indigo-800/90 whitespace-pre-line">
+                        {formatDownloadJobBytesLine(latestDownloadJob)}
+                      </p>
                     ) : null}
                     <div className="h-2 w-full rounded-full bg-indigo-100 overflow-hidden">
                       <div

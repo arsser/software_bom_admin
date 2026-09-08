@@ -1,5 +1,5 @@
 import { supabase } from './supabase';
-import { formatBytesHuman } from './bytesFormat';
+import { formatJobBytesLine, jobOverallProgressPercent } from './bomJobTransferStats';
 import { formatSupabaseError } from './bomScannerJobs';
 
 export type BomFeishuUploadJobStatus = 'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled';
@@ -186,7 +186,7 @@ export async function requestBomFeishuUploadRetryFailed(parentJob: BomFeishuUplo
 
 export async function cancelBomFeishuUploadJob(jobId: string): Promise<boolean> {
   const { data, error } = await supabase.rpc('bom_cancel_feishu_upload_job', { p_job_id: jobId });
-  if (error) throw error;
+  if (error) throw new Error(formatSupabaseError(error));
   return data === true;
 }
 
@@ -211,7 +211,7 @@ export async function fetchBomFeishuUploadJobsForBatch(batchId: string, limit = 
     .eq('batch_id', batchId)
     .order('created_at', { ascending: false })
     .limit(limit);
-  if (error) throw error;
+  if (error) throw new Error(formatSupabaseError(error));
   return attachChildJobIds((data ?? []).map((raw) => mapJob(raw as Record<string, unknown>)));
 }
 
@@ -237,7 +237,7 @@ export async function fetchBomFeishuUploadJobsForUser(
     q = q.eq('status', filter.status);
   }
   const { data, error } = await q;
-  if (error) throw error;
+  if (error) throw new Error(formatSupabaseError(error));
   return attachChildJobIds((data ?? []).map((raw) => mapJob(raw as Record<string, unknown>)));
 }
 
@@ -264,28 +264,9 @@ export function feishuUploadJobFailCount(job: BomFeishuUploadJob): number {
 }
 
 export function feishuUploadJobProgressPercent(job: BomFeishuUploadJob): number {
-  if (job.status === 'running' && job.runningBytesTotal != null && job.runningBytesTotal > 0) {
-    return Math.min(100, (job.runningBytesDownloaded / job.runningBytesTotal) * 100);
-  }
-  if (job.bytesTotal != null && job.bytesTotal > 0) {
-    return Math.min(100, (job.bytesDownloadedTotal / job.bytesTotal) * 100);
-  }
-  if (job.progressTotal > 0) {
-    return Math.min(100, (job.progressCurrent / job.progressTotal) * 100);
-  }
-  return 0;
+  return jobOverallProgressPercent(job, true);
 }
 
 export function formatFeishuUploadJobBytesLine(job: BomFeishuUploadJob): string | null {
-  if (job.status === 'running' && (job.runningBytesDownloaded > 0 || job.runningBytesTotal != null)) {
-    const a = formatBytesHuman(job.runningBytesDownloaded);
-    const b = job.runningBytesTotal != null ? formatBytesHuman(job.runningBytesTotal) : null;
-    return b ? `当前文件 ${a} / ${b}` : `当前文件 ${a}`;
-  }
-  if (job.bytesDownloadedTotal > 0 || job.bytesTotal != null) {
-    const a = formatBytesHuman(job.bytesDownloadedTotal);
-    const b = job.bytesTotal != null ? formatBytesHuman(job.bytesTotal) : null;
-    return b ? `累计 ${a} / ${b}` : `累计 ${a}`;
-  }
-  return null;
+  return formatJobBytesLine(job, true);
 }

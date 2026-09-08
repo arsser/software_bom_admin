@@ -2,21 +2,34 @@ import { supabase } from './supabase';
 
 /** PostgREST / Supabase 返回的 error 多为普通对象，直接 String 会得到 [object Object] */
 export function formatSupabaseError(err: unknown): string {
-  if (err instanceof Error) return err.message;
+  if (typeof err === 'string' && err.trim()) return err.trim();
   if (err && typeof err === 'object') {
     const o = err as Record<string, unknown>;
-    const message = typeof o.message === 'string' ? o.message : '';
-    const code = typeof o.code === 'string' ? o.code : '';
-    const details = typeof o.details === 'string' ? o.details : '';
-    const hint = typeof o.hint === 'string' ? o.hint : '';
-    const parts = [code && `code=${code}`, message, details, hint].filter(Boolean);
+    const rawMsg = o.message;
+    const message =
+      typeof rawMsg === 'string'
+        ? rawMsg.trim()
+        : rawMsg && typeof rawMsg === 'object'
+          ? formatSupabaseError(rawMsg)
+          : '';
+    const usable = message && message !== '[object Object]' ? message : '';
+    const code = typeof o.code === 'string' ? o.code.trim() : '';
+    const details = typeof o.details === 'string' ? o.details.trim() : '';
+    const hint = typeof o.hint === 'string' ? o.hint.trim() : '';
+    const parts = [code && `code=${code}`, usable, details, hint].filter(Boolean);
     if (parts.length) return parts.join(' — ');
   }
-  try {
-    return JSON.stringify(err);
-  } catch {
-    return String(err);
+  if (err instanceof Error) {
+    const msg = err.message?.trim() ?? '';
+    if (msg && msg !== '[object Object]') return msg;
   }
+  try {
+    const s = JSON.stringify(err);
+    if (s && s !== '{}' && s !== 'null') return s.slice(0, 800);
+  } catch {
+    /* ignore */
+  }
+  return '未知错误';
 }
 
 export type BomScanJobStatus = 'queued' | 'running' | 'succeeded' | 'failed';

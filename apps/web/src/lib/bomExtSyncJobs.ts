@@ -1,5 +1,5 @@
 import { supabase } from './supabase';
-import { formatBytesHuman } from './bytesFormat';
+import { formatJobBytesLine, jobOverallProgressPercent } from './bomJobTransferStats';
 import { formatSupabaseError } from './bomScannerJobs';
 
 export type BomExtSyncJobStatus = 'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled';
@@ -95,7 +95,7 @@ export async function requestBomExtSync(batchId: string, rowIds?: string[] | nul
 /** 排队中立即取消；执行中则标记 cancel_requested；失败可关闭为 cancelled；已成功/已取消幂等 true */
 export async function cancelBomExtSyncJob(jobId: string): Promise<boolean> {
   const { data, error } = await supabase.rpc('bom_cancel_ext_sync_job', { p_job_id: jobId });
-  if (error) throw error;
+  if (error) throw new Error(formatSupabaseError(error));
   return data === true;
 }
 
@@ -106,7 +106,7 @@ export async function fetchBomExtSyncJobsForBatch(batchId: string, limit = 12): 
     .eq('batch_id', batchId)
     .order('created_at', { ascending: false })
     .limit(limit);
-  if (error) throw error;
+  if (error) throw new Error(formatSupabaseError(error));
   return (data ?? []).map((raw) => mapJob(raw as Record<string, unknown>));
 }
 
@@ -130,7 +130,7 @@ export async function fetchBomExtSyncJobsForUser(filter: BomExtSyncJobListFilter
     q = q.eq('status', filter.status);
   }
   const { data, error } = await q;
-  if (error) throw error;
+  if (error) throw new Error(formatSupabaseError(error));
   return (data ?? []).map((raw) => mapJob(raw as Record<string, unknown>));
 }
 
@@ -147,28 +147,9 @@ export function extSyncJobIsTerminal(status: BomExtSyncJobStatus): boolean {
 }
 
 export function extSyncJobProgressPercent(job: BomExtSyncJob): number {
-  if (job.status === 'running' && job.runningBytesTotal != null && job.runningBytesTotal > 0) {
-    return Math.min(100, (job.runningBytesDownloaded / job.runningBytesTotal) * 100);
-  }
-  if (job.bytesTotal != null && job.bytesTotal > 0) {
-    return Math.min(100, (job.bytesDownloadedTotal / job.bytesTotal) * 100);
-  }
-  if (job.progressTotal > 0) {
-    return Math.min(100, (job.progressCurrent / job.progressTotal) * 100);
-  }
-  return 0;
+  return jobOverallProgressPercent(job, false);
 }
 
 export function formatExtSyncJobBytesLine(job: BomExtSyncJob): string | null {
-  if (job.status === 'running' && (job.runningBytesDownloaded > 0 || job.runningBytesTotal != null)) {
-    const a = formatBytesHuman(job.runningBytesDownloaded);
-    const b = job.runningBytesTotal != null ? formatBytesHuman(job.runningBytesTotal) : null;
-    return b ? `当前文件 ${a} / ${b}` : `当前文件 ${a}`;
-  }
-  if (job.bytesDownloadedTotal > 0 || job.bytesTotal != null) {
-    const a = formatBytesHuman(job.bytesDownloadedTotal);
-    const b = job.bytesTotal != null ? formatBytesHuman(job.bytesTotal) : null;
-    return b ? `累计 ${a} / ${b}` : `累计 ${a}`;
-  }
-  return null;
+  return formatJobBytesLine(job, false);
 }

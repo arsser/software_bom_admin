@@ -1,5 +1,5 @@
 import { supabase } from './supabase';
-import { formatBytesHuman } from './bytesFormat';
+import { formatJobBytesLine, jobOverallProgressPercent } from './bomJobTransferStats';
 import { formatSupabaseError } from './bomScannerJobs';
 
 export type BomDownloadJobStatus = 'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled';
@@ -138,7 +138,7 @@ export async function fetchBomDownloadJobsForBatch(batchId: string, limit = 12):
     .eq('batch_id', batchId)
     .order('created_at', { ascending: false })
     .limit(limit);
-  if (error) throw error;
+  if (error) throw new Error(formatSupabaseError(error));
   return (data ?? []).map((raw) => mapJob(raw as Record<string, unknown>));
 }
 
@@ -162,7 +162,7 @@ export async function fetchBomDownloadJobsForUser(filter: BomDownloadJobListFilt
     q = q.eq('status', filter.status);
   }
   const { data, error } = await q;
-  if (error) throw error;
+  if (error) throw new Error(formatSupabaseError(error));
   return (data ?? []).map((raw) => mapJob(raw as Record<string, unknown>));
 }
 
@@ -178,31 +178,12 @@ export function downloadJobIsTerminal(status: BomDownloadJobStatus): boolean {
   return status === 'succeeded' || status === 'failed' || status === 'cancelled';
 }
 
-/** 用于进度条：优先当前文件字节，其次整任务字节，否则退回文件序号比例 */
+/** 用于进度条：整批已传/总量（含当前文件），无总量时退回文件序号比例 */
 export function downloadJobProgressPercent(job: BomDownloadJob): number {
-  if (job.status === 'running' && job.runningBytesTotal != null && job.runningBytesTotal > 0) {
-    return Math.min(100, (job.runningBytesDownloaded / job.runningBytesTotal) * 100);
-  }
-  if (job.bytesTotal != null && job.bytesTotal > 0) {
-    return Math.min(100, (job.bytesDownloadedTotal / job.bytesTotal) * 100);
-  }
-  if (job.progressTotal > 0) {
-    return Math.min(100, (job.progressCurrent / job.progressTotal) * 100);
-  }
-  return 0;
+  return jobOverallProgressPercent(job, false);
 }
 
 export function formatDownloadJobBytesLine(job: BomDownloadJob): string | null {
-  if (job.status === 'running' && (job.runningBytesDownloaded > 0 || job.runningBytesTotal != null)) {
-    const a = formatBytesHuman(job.runningBytesDownloaded);
-    const b = job.runningBytesTotal != null ? formatBytesHuman(job.runningBytesTotal) : null;
-    return b ? `当前文件 ${a} / ${b}` : `当前文件 ${a}`;
-  }
-  if (job.bytesDownloadedTotal > 0 || job.bytesTotal != null) {
-    const a = formatBytesHuman(job.bytesDownloadedTotal);
-    const b = job.bytesTotal != null ? formatBytesHuman(job.bytesTotal) : null;
-    return b ? `累计 ${a} / ${b}` : `累计 ${a}`;
-  }
-  return null;
+  return formatJobBytesLine(job, false);
 }
 

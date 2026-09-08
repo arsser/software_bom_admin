@@ -35,6 +35,59 @@ export function formatSpeedLabel(bytesPerSec: number): string {
   return `${formatBytesHuman(bytesPerSec)}/s`;
 }
 
+/** 全程平均吞吐：已传字节 / 已用时（需至少 1.5s 且已传 > 0） */
+export function jobAverageSpeedBps(transferredBytes: number, elapsedSec: number | null): number | null {
+  if (elapsedSec == null || elapsedSec < 1.5 || transferredBytes <= 0) return null;
+  return transferredBytes / elapsedSec;
+}
+
+function formatBytesPair(done: number, total: number | null, prefix: string): string {
+  const a = formatBytesHuman(done);
+  const b = total != null ? formatBytesHuman(total) : null;
+  return b ? `${prefix} ${a} / ${b}` : `${prefix} ${a}`;
+}
+
+/**
+ * 整批进度百分比：优先已传字节/总量（含当前文件），否则退回完成行数比例。
+ */
+export function jobOverallProgressPercent(
+  job: BomJobByteProgress,
+  runningAlreadyInTotal: boolean,
+): number {
+  const transferred = jobEffectiveTransferredBytes(job, runningAlreadyInTotal);
+  if (job.bytesTotal != null && job.bytesTotal > 0) {
+    return Math.min(100, Math.max(0, (transferred / job.bytesTotal) * 100));
+  }
+  const totalRows = Math.max(0, Number(job.progressTotal ?? 0));
+  if (totalRows > 0) {
+    const doneRows = Math.max(0, Number(job.progressCurrent ?? 0));
+    return Math.min(100, (doneRows / totalRows) * 100);
+  }
+  return 0;
+}
+
+/**
+ * 字节列文案。进行中：当前文件一行 + 整批已传/总量一行；其它状态：累计。
+ */
+export function formatJobBytesLine(
+  job: BomJobByteProgress,
+  runningAlreadyInTotal: boolean,
+): string | null {
+  const batchDone = jobEffectiveTransferredBytes(job, runningAlreadyInTotal);
+  const batchTotal = job.bytesTotal;
+  const batchPrefix = job.status === 'running' ? '整批' : '累计';
+  const batchLine =
+    batchDone > 0 || batchTotal != null ? formatBytesPair(batchDone, batchTotal, batchPrefix) : null;
+
+  const showCurrent =
+    job.status === 'running' && (job.runningBytesDownloaded > 0 || job.runningBytesTotal != null);
+  if (showCurrent) {
+    const current = formatBytesPair(job.runningBytesDownloaded, job.runningBytesTotal, '当前文件');
+    return batchLine ? `${current}\n${batchLine}` : current;
+  }
+  return batchLine;
+}
+
 export type JobTransferLiveStats = {
   speedBps: number | null;
   /** 整批任务预计剩余秒数（不含「当前文件」回退） */

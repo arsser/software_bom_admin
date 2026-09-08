@@ -8,10 +8,12 @@ import {
   extractExpectedMd5FromRow,
   extractExtUrlFromRow,
   extractHttpUrlFromDownloadCell,
+  extractRemoteSizeBytesFromRow,
 } from './bomRowFields';
 import { parseBomRowStatus, type BomRowStatusJson } from './bomRowStatus';
 import type { BomFeishuUploadJob } from './bomFeishuUploadJobs';
 import { fetchBomScannerSettings, type BomJsonKeyMap } from './bomScannerSettings';
+import { formatSupabaseError } from './bomScannerJobs';
 import { LABEL_EXTERNAL_ARTI, LABEL_INTERNAL_ARTI } from './bomUiLabels';
 
 /** 与后台任务类型对应，用于详情里状态摘要的侧重点 */
@@ -21,13 +23,39 @@ export type BomJobRowDetailLine = {
   rowId: string;
   displayName: string;
   md5: string | null;
+  localSizeBytes: number | null;
   localSizeLabel: string | null;
+  remoteSizeBytes: number | null;
+  remoteSizeLabel: string | null;
   statusLine: string;
   /** 本任务结果视角：fail / ok / skip / live */
   outcome?: 'fail' | 'ok' | 'skip' | 'live';
   /** 失败行当前是否已飞书对齐（补传后） */
   currentAligned?: boolean | null;
 };
+
+function sizeFieldsForRow(
+  row: BomRowRecord | undefined,
+  jsonKeyMap: BomJsonKeyMap,
+  localInfo: { sizeBytes: number } | undefined,
+): {
+  localSizeBytes: number | null;
+  localSizeLabel: string | null;
+  remoteSizeBytes: number | null;
+  remoteSizeLabel: string | null;
+} {
+  const localSizeBytes =
+    localInfo != null && Number.isFinite(localInfo.sizeBytes) && localInfo.sizeBytes >= 0
+      ? localInfo.sizeBytes
+      : null;
+  const remoteSizeBytes = row ? extractRemoteSizeBytesFromRow(row, jsonKeyMap) : null;
+  return {
+    localSizeBytes,
+    localSizeLabel: localSizeBytes != null ? formatBytesHuman(localSizeBytes) : null,
+    remoteSizeBytes,
+    remoteSizeLabel: remoteSizeBytes != null ? formatBytesHuman(remoteSizeBytes) : null,
+  };
+}
 
 function urlBasename(u: string): string {
   try {
@@ -98,7 +126,7 @@ export async function fetchBomJobRowDetails(
     .select('id,bom_row,status')
     .eq('batch_id', batchId)
     .in('id', uniq);
-  if (error) throw error;
+  if (error) throw new Error(formatSupabaseError(error));
 
   const byId = new Map<string, BomBatchRow>();
   for (const raw of data ?? []) {
@@ -127,19 +155,21 @@ export async function fetchBomJobRowDetails(
         rowId: id,
         displayName: '（行不存在或无权访问）',
         md5: null,
+        localSizeBytes: null,
         localSizeLabel: null,
+        remoteSizeBytes: null,
+        remoteSizeLabel: null,
         statusLine: '—',
       });
       continue;
     }
     const md5 = extractExpectedMd5FromRow(r.bom_row, jsonKeyMap);
     const localInfo = md5 ? localMap.get(md5) : undefined;
-    const localSizeLabel = localInfo != null ? formatBytesHuman(localInfo.sizeBytes) : null;
     out.push({
       rowId: id,
       displayName: displayNameForRow(r.bom_row, jsonKeyMap),
       md5,
-      localSizeLabel,
+      ...sizeFieldsForRow(r.bom_row, jsonKeyMap, localInfo),
       statusLine: statusLineForKind(kind, r.status),
     });
   }
@@ -172,7 +202,7 @@ export async function fetchFeishuUploadJobDetailLines(
     .select('id,bom_row,status')
     .eq('batch_id', job.batchId)
     .in('id', uniq);
-  if (error) throw error;
+  if (error) throw new Error(formatSupabaseError(error));
 
   const byId = new Map<string, BomBatchRow>();
   for (const raw of data ?? []) {
@@ -228,7 +258,7 @@ export async function fetchFeishuUploadJobDetailLines(
       rowId: id,
       displayName: displayFromSnap || (r ? displayNameForRow(r.bom_row, jsonKeyMap) : '—'),
       md5,
-      localSizeLabel: localInfo != null ? formatBytesHuman(localInfo.sizeBytes) : null,
+      ...sizeFieldsForRow(r?.bom_row, jsonKeyMap, localInfo),
       statusLine,
       outcome,
       currentAligned,

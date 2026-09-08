@@ -1,5 +1,6 @@
 import { copyTextToClipboard } from './clipboardCopy';
 import { supabase } from './supabase';
+import { formatSupabaseError } from './bomScannerJobs';
 import {
   buildBomWarnings,
   parsePastedBom,
@@ -55,8 +56,11 @@ export async function fetchBomBatches(): Promise<BomBatch[]> {
     supabase.rpc('bom_batch_byte_totals'),
   ]);
 
-  if (error) throw error;
-  if (totalsError) throw totalsError;
+  if (error) throw new Error(formatSupabaseError(error));
+  // 体积合计仅用于版本列表排序/展示；失败时降级为 0，避免拖垮任务页
+  if (totalsError) {
+    console.warn('bom_batch_byte_totals 失败：', formatSupabaseError(totalsError));
+  }
 
   const bytesByBatchId = new Map<string, number>();
   for (const row of totalsData ?? []) {

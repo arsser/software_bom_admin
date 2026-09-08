@@ -43,15 +43,19 @@ import {
 } from '../lib/bomFeishuUploadJobs';
 import { LABEL_EXTERNAL_ARTI, LABEL_INTERNAL_ARTI } from '../lib/bomUiLabels';
 import { fetchBomBatches, type BomBatch } from '../lib/bomBatches';
+import { formatSupabaseError } from '../lib/bomScannerJobs';
 import {
   fetchBomJobRowDetails,
   fetchFeishuUploadJobDetailLines,
   type BomJobDetailKind,
   type BomJobRowDetailLine,
 } from '../lib/bomJobRowSnapshots';
+import { formatBytesHuman } from '../lib/bytesFormat';
 import {
   computeJobTransferLiveStats,
   formatSpeedLabel,
+  jobAverageSpeedBps,
+  jobEffectiveTransferredBytes,
   type BomJobByteProgress,
   type JobTransferLiveStats,
 } from '../lib/bomJobTransferStats';
@@ -78,6 +82,28 @@ function parseMsOrNull(iso: string | null | undefined): number | null {
   return Number.isFinite(n) ? n : null;
 }
 
+function jobElapsedAndAvg(
+  startedAt: string | null,
+  finishedAt: string | null,
+  status: string,
+  nowMs: number,
+  job: BomJobByteProgress,
+  runningAlreadyInTotal: boolean,
+): { elapsedSec: number | null; avgSpeedBps: number | null } {
+  const startedMs = parseMsOrNull(startedAt);
+  const finishedMs = parseMsOrNull(finishedAt);
+  const endMs = status === 'running' ? nowMs : finishedMs;
+  const elapsedExact =
+    startedMs != null && endMs != null && endMs >= startedMs ? (endMs - startedMs) / 1000 : null;
+  return {
+    elapsedSec: elapsedExact != null ? Math.round(elapsedExact) : null,
+    avgSpeedBps: jobAverageSpeedBps(
+      jobEffectiveTransferredBytes(job, runningAlreadyInTotal),
+      elapsedExact,
+    ),
+  };
+}
+
 function renderJobTimeCell(opts: {
   createdAt: string;
   startedAt: string | null;
@@ -85,9 +111,11 @@ function renderJobTimeCell(opts: {
   status: string;
   elapsedSec: number | null;
   live: JobTransferLiveStats | undefined;
+  avgSpeedBps: number | null;
 }) {
-  const { createdAt, startedAt, finishedAt, status, elapsedSec, live } = opts;
+  const { createdAt, startedAt, finishedAt, status, elapsedSec, live, avgSpeedBps } = opts;
   const showTransfer = status === 'running';
+  const showAvg = status !== 'queued';
   return (
     <td className="px-3 py-2 text-xs text-slate-500 whitespace-nowrap">
       <div>创建 {new Date(createdAt).toLocaleString()}</div>
@@ -98,16 +126,21 @@ function renderJobTimeCell(opts: {
         {elapsedSec != null ? formatElapsedLabel(elapsedSec) : status === 'queued' ? '排队中' : '—'}
       </div>
       {showTransfer ? (
-        <>
-          <div>
-            速度{' '}
-            {live?.speedBps != null && live.speedBps > 0 ? formatSpeedLabel(live.speedBps) : '—'}
-          </div>
-          <div>
-            整批 ETA{' '}
-            {live?.etaSec != null ? formatElapsedLabel(live.etaSec) : '—'}
-          </div>
-        </>
+        <div>
+          速度{' '}
+          {live?.speedBps != null && live.speedBps > 0 ? formatSpeedLabel(live.speedBps) : '—'}
+        </div>
+      ) : null}
+      {showAvg ? (
+        <div>
+          平均{' '}
+          {avgSpeedBps != null && avgSpeedBps > 0 ? formatSpeedLabel(avgSpeedBps) : '—'}
+        </div>
+      ) : null}
+      {showTransfer ? (
+        <div>
+          整批 ETA {live?.etaSec != null ? formatElapsedLabel(live.etaSec) : '—'}
+        </div>
       ) : null}
     </td>
   );
@@ -211,8 +244,9 @@ export const BomDownloadJobsPage: React.FC = () => {
       setItHasMore(js.length === itL);
       setExtHasMore(ej.length === extL);
       setFeishuHasMore(fj.length === feiL);
+      setError(null);
     } catch (e) {
-      if (!quiet) setError(e instanceof Error ? e.message : String(e));
+      if (!quiet) setError(formatSupabaseError(e));
     } finally {
       if (!quiet) setLoading(false);
     }
@@ -244,6 +278,24 @@ export const BomDownloadJobsPage: React.FC = () => {
     () => new Map(batches.map((b) => [b.id, `${b.productName} · ${b.name}`])),
     [batches],
   );
+
+  const detailSizeTotals = useMemo(() => {
+    let remote = 0;
+    let local = 0;
+    let remoteN = 0;
+    let localN = 0;
+    for (const line of detailLines) {
+      if (line.remoteSizeBytes != null) {
+        remote += line.remoteSizeBytes;
+        remoteN += 1;
+      }
+      if (line.localSizeBytes != null) {
+        local += line.localSizeBytes;
+        localN += 1;
+      }
+    }
+    return { remote, local, remoteN, localN };
+  }, [detailLines]);
 
   useEffect(() => {
     if (!hasActive) return;
@@ -294,7 +346,7 @@ export const BomDownloadJobsPage: React.FC = () => {
       if (!ok) alert('无法取消：任务已结束、无权操作，或请刷新后重试。');
       await fetchLists(false);
     } catch (e) {
-      alert(e instanceof Error ? e.message : String(e));
+      alert(formatSupabaseError(e));
     } finally {
       setCancelBusy(null);
     }
@@ -307,7 +359,7 @@ export const BomDownloadJobsPage: React.FC = () => {
       if (!ok) alert('无法取消：任务已结束、无权操作，或请刷新后重试。');
       await fetchLists(false);
     } catch (e) {
-      alert(e instanceof Error ? e.message : String(e));
+      alert(formatSupabaseError(e));
     } finally {
       setExtCancelBusy(null);
     }
@@ -320,7 +372,7 @@ export const BomDownloadJobsPage: React.FC = () => {
       if (!ok) alert('无法取消：任务已结束、无权操作，或请刷新后重试。');
       await fetchLists(false);
     } catch (e) {
-      alert(e instanceof Error ? e.message : String(e));
+      alert(formatSupabaseError(e));
     } finally {
       setFeishuCancelBusy(null);
     }
@@ -374,7 +426,7 @@ export const BomDownloadJobsPage: React.FC = () => {
           : await fetchBomJobRowDetails(batchId, rowIds, kind);
       setDetailLines(lines);
     } catch (e) {
-      setDetailError(e instanceof Error ? e.message : String(e));
+      setDetailError(formatSupabaseError(e));
     } finally {
       setDetailLoading(false);
     }
@@ -399,7 +451,7 @@ export const BomDownloadJobsPage: React.FC = () => {
       closeJobDetail();
       setSectionFeishuOpen(true);
     } catch (e) {
-      alert(e instanceof Error ? e.message : String(e));
+      alert(formatSupabaseError(e));
     } finally {
       setFeishuRetryBusy(null);
     }
@@ -660,13 +712,14 @@ export const BomDownloadJobsPage: React.FC = () => {
                 const bytesLine = formatDownloadJobBytesLine(j);
                 const canCancelIt =
                   j.status === 'queued' || j.status === 'running';
-                const startedMs = parseMsOrNull(j.startedAt);
-                const finishedMs = parseMsOrNull(j.finishedAt);
-                const endMs = j.status === 'running' ? nowMs : finishedMs;
-                const elapsedSec =
-                  startedMs != null && endMs != null && endMs >= startedMs
-                    ? Math.round((endMs - startedMs) / 1000)
-                    : null;
+                const { elapsedSec, avgSpeedBps } = jobElapsedAndAvg(
+                  j.startedAt,
+                  j.finishedAt,
+                  j.status,
+                  nowMs,
+                  j,
+                  false,
+                );
                 return (
                   <tr key={j.id} className="hover:bg-slate-50/80">
                     <td className="px-3 py-2 whitespace-nowrap">
@@ -683,8 +736,11 @@ export const BomDownloadJobsPage: React.FC = () => {
                     <td className="px-3 py-2 text-slate-700">
                       <div className="whitespace-nowrap">
                         {j.progressTotal > 0 ? `${j.progressCurrent}/${j.progressTotal} 文件` : '—'}
+                        {j.status === 'running' || j.status === 'queued' ? (
+                          <span className="text-slate-500"> · {Math.round(pct)}%</span>
+                        ) : null}
                       </div>
-                      {(j.status === 'running' || j.status === 'queued') && pct > 0 ? (
+                      {j.status === 'running' || j.status === 'queued' ? (
                         <div className="mt-1 h-1.5 w-28 rounded-full bg-slate-100 overflow-hidden">
                           <div
                             className="h-full bg-indigo-600 transition-all duration-300"
@@ -693,7 +749,7 @@ export const BomDownloadJobsPage: React.FC = () => {
                         </div>
                       ) : null}
                     </td>
-                    <td className="px-3 py-2 text-xs text-slate-600 max-w-[14rem]">
+                    <td className="px-3 py-2 text-xs text-slate-600 max-w-[14rem] whitespace-pre-line">
                       {bytesLine ?? '—'}
                       {j.runningFileName && j.status === 'running' ? (
                         <div className="text-[11px] text-slate-400 truncate mt-0.5" title={j.runningFileName}>
@@ -711,6 +767,7 @@ export const BomDownloadJobsPage: React.FC = () => {
                       status: j.status,
                       elapsedSec,
                       live: liveStatsById[j.id],
+                      avgSpeedBps,
                     })}
                     <td className="px-3 py-2 text-right whitespace-nowrap">
                       {j.rowIds.length > 0 ? (
@@ -818,13 +875,14 @@ export const BomDownloadJobsPage: React.FC = () => {
                 const bytesLine = formatExtSyncJobBytesLine(j);
                 const canCancelExt =
                   j.status === 'queued' || j.status === 'running';
-                const startedMs = parseMsOrNull(j.startedAt);
-                const finishedMs = parseMsOrNull(j.finishedAt);
-                const endMs = j.status === 'running' ? nowMs : finishedMs;
-                const elapsedSec =
-                  startedMs != null && endMs != null && endMs >= startedMs
-                    ? Math.round((endMs - startedMs) / 1000)
-                    : null;
+                const { elapsedSec, avgSpeedBps } = jobElapsedAndAvg(
+                  j.startedAt,
+                  j.finishedAt,
+                  j.status,
+                  nowMs,
+                  j,
+                  false,
+                );
                 return (
                   <tr key={j.id} className="hover:bg-slate-50/80">
                     <td className="px-3 py-2 whitespace-nowrap">
@@ -841,8 +899,11 @@ export const BomDownloadJobsPage: React.FC = () => {
                     <td className="px-3 py-2 text-slate-700">
                       <div className="whitespace-nowrap">
                         {j.progressTotal > 0 ? `${j.progressCurrent}/${j.progressTotal} 行` : '—'}
+                        {j.status === 'running' || j.status === 'queued' ? (
+                          <span className="text-slate-500"> · {Math.round(pct)}%</span>
+                        ) : null}
                       </div>
-                      {(j.status === 'running' || j.status === 'queued') && pct > 0 ? (
+                      {j.status === 'running' || j.status === 'queued' ? (
                         <div className="mt-1 h-1.5 w-28 rounded-full bg-slate-100 overflow-hidden">
                           <div
                             className="h-full bg-emerald-600 transition-all duration-300"
@@ -851,7 +912,7 @@ export const BomDownloadJobsPage: React.FC = () => {
                         </div>
                       ) : null}
                     </td>
-                    <td className="px-3 py-2 text-xs text-slate-600 max-w-[14rem]">
+                    <td className="px-3 py-2 text-xs text-slate-600 max-w-[14rem] whitespace-pre-line">
                       {bytesLine ?? '—'}
                     </td>
                     <td className="px-3 py-2 text-xs text-slate-600 max-w-[20rem]">
@@ -864,6 +925,7 @@ export const BomDownloadJobsPage: React.FC = () => {
                       status: j.status,
                       elapsedSec,
                       live: liveStatsById[j.id],
+                      avgSpeedBps,
                     })}
                     <td className="px-3 py-2 text-right whitespace-nowrap">
                       {j.rowIds.length > 0 ? (
@@ -972,13 +1034,14 @@ export const BomDownloadJobsPage: React.FC = () => {
                 const failN = feishuUploadJobFailCount(j);
                 const canCancelFeishu =
                   j.status === 'queued' || j.status === 'running';
-                const startedMs = parseMsOrNull(j.startedAt);
-                const finishedMs = parseMsOrNull(j.finishedAt);
-                const endMs = j.status === 'running' ? nowMs : finishedMs;
-                const elapsedSec =
-                  startedMs != null && endMs != null && endMs >= startedMs
-                    ? Math.round((endMs - startedMs) / 1000)
-                    : null;
+                const { elapsedSec, avgSpeedBps } = jobElapsedAndAvg(
+                  j.startedAt,
+                  j.finishedAt,
+                  j.status,
+                  nowMs,
+                  j,
+                  true,
+                );
                 const statusBadgeCls =
                   failN > 0 || j.status === 'failed'
                     ? 'border-red-200 bg-red-50 text-red-800'
@@ -1010,8 +1073,11 @@ export const BomDownloadJobsPage: React.FC = () => {
                         {failN > 0 ? (
                           <span className="ml-1 text-red-600 font-medium">（失败 {failN}）</span>
                         ) : null}
+                        {j.status === 'running' || j.status === 'queued' ? (
+                          <span className="text-slate-500"> · {Math.round(pct)}%</span>
+                        ) : null}
                       </div>
-                      {(j.status === 'running' || j.status === 'queued') && pct > 0 ? (
+                      {j.status === 'running' || j.status === 'queued' ? (
                         <div className="mt-1 h-1.5 w-28 rounded-full bg-slate-100 overflow-hidden">
                           <div
                             className="h-full bg-violet-600 transition-all duration-300"
@@ -1020,7 +1086,7 @@ export const BomDownloadJobsPage: React.FC = () => {
                         </div>
                       ) : null}
                     </td>
-                    <td className="px-3 py-2 text-xs text-slate-600 max-w-[14rem]">
+                    <td className="px-3 py-2 text-xs text-slate-600 max-w-[14rem] whitespace-pre-line">
                       {bytesLine ?? '—'}
                     </td>
                     <td className="px-3 py-2 text-xs text-slate-600 max-w-[20rem]">
@@ -1033,6 +1099,7 @@ export const BomDownloadJobsPage: React.FC = () => {
                       status: j.status,
                       elapsedSec,
                       live: liveStatsById[j.id],
+                      avgSpeedBps,
                     })}
                     <td className="px-3 py-2 text-right whitespace-nowrap">
                       {j.rowIds.length > 0 ? (
@@ -1165,6 +1232,7 @@ export const BomDownloadJobsPage: React.FC = () => {
                         <th className="px-2 py-2 text-left font-semibold text-slate-700">结果</th>
                         <th className="px-2 py-2 text-left font-semibold text-slate-700">文件名（推断）</th>
                         <th className="px-2 py-2 text-left font-semibold text-slate-700">期望 MD5</th>
+                        <th className="px-2 py-2 text-left font-semibold text-slate-700">远端大小</th>
                         <th className="px-2 py-2 text-left font-semibold text-slate-700">本地索引大小</th>
                         <th className="px-2 py-2 text-left font-semibold text-slate-700">状态摘要</th>
                       </tr>
@@ -1197,6 +1265,7 @@ export const BomDownloadJobsPage: React.FC = () => {
                               {line.displayName}
                             </td>
                             <td className="px-2 py-1.5 font-mono text-[11px] text-slate-600">{line.md5 ?? '—'}</td>
+                            <td className="px-2 py-1.5 whitespace-nowrap">{line.remoteSizeLabel ?? '—'}</td>
                             <td className="px-2 py-1.5 whitespace-nowrap">{line.localSizeLabel ?? '—'}</td>
                             <td className={`px-2 py-1.5 max-w-[28rem] ${isFail && !line.currentAligned ? 'text-red-800' : 'text-slate-700'}`}>
                               <div className="whitespace-pre-wrap break-words">{line.statusLine}</div>
@@ -1205,6 +1274,42 @@ export const BomDownloadJobsPage: React.FC = () => {
                         );
                       })}
                     </tbody>
+                    {detailLines.length > 0 ? (
+                      <tfoot>
+                        <tr className="bg-slate-50 border-t border-slate-200 font-medium text-slate-800">
+                          <td colSpan={4} className="px-2 py-2 text-left">
+                            合计
+                          </td>
+                          <td
+                            className="px-2 py-2 whitespace-nowrap"
+                            title={
+                              detailSizeTotals.remoteN > 0
+                                ? `${detailSizeTotals.remoteN} 行有远端大小`
+                                : '无远端大小'
+                            }
+                          >
+                            {detailSizeTotals.remoteN > 0
+                              ? formatBytesHuman(detailSizeTotals.remote)
+                              : '—'}
+                          </td>
+                          <td
+                            className="px-2 py-2 whitespace-nowrap"
+                            title={
+                              detailSizeTotals.localN > 0
+                                ? `${detailSizeTotals.localN} 行有本地索引大小`
+                                : '无本地索引大小'
+                            }
+                          >
+                            {detailSizeTotals.localN > 0
+                              ? formatBytesHuman(detailSizeTotals.local)
+                              : '—'}
+                          </td>
+                          <td className="px-2 py-2 text-slate-500 font-normal">
+                            {detailLines.length} 行
+                          </td>
+                        </tr>
+                      </tfoot>
+                    ) : null}
                   </table>
                 </div>
               )}

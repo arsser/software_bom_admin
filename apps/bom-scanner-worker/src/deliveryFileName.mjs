@@ -1,10 +1,14 @@
 /**
  * 飞书/本地交付文件名：默认用下载 URL basename。
- * 撞名（同名被另一份不同 MD5 占用）时改用组件 ID；仍撞则加毫秒时间戳。
+ * 仅当「同一目标目录」里已被另一份不同 MD5 占用时改名：
+ * 在原名加前缀【自动重命名1】、【自动重命名2】…
  * 同名同 MD5 不算撞名（去重复用）。
  */
 
 const COMPONENT_ID_KEYS = ['组件ID', 'componentId', 'component_id'];
+
+/** 全角括号、紧贴原名、无空格。捕获组为编号。 */
+export const AUTO_RENAME_PREFIX_RE = /^【自动重命名(\d+)】/;
 
 function flatFilename(name) {
   const base = String(name ?? '').trim() || 'artifact.bin';
@@ -23,32 +27,32 @@ export function pickComponentId(bomRow, pickFirstNonEmpty) {
 }
 
 /**
- * @param {string} newStem
- * @param {string} originalName
+ * 去掉已有【自动重命名N】前缀，得到可还原的原名。
+ * @param {string} fileName
  */
-function attachOriginalExt(newStem, originalName) {
-  const stem = flatFilename(newStem);
-  const orig = flatFilename(originalName);
-  const dot = orig.lastIndexOf('.');
-  if (dot <= 0 || dot === orig.length - 1) return stem;
-  const ext = orig.slice(dot);
-  if (stem.toLowerCase().endsWith(ext.toLowerCase())) return stem;
-  return flatFilename(stem + ext);
+export function stripDeliveryAutoRenamePrefix(fileName) {
+  const name = flatFilename(fileName);
+  const m = name.match(AUTO_RENAME_PREFIX_RE);
+  if (!m) return name;
+  const rest = name.slice(m[0].length);
+  return rest ? rest : name;
 }
 
 /**
- * 本地时区，精确到毫秒：20260818T020712.123
- * @param {Date} [d]
+ * @param {string} originalName 未加前缀的原名
+ * @param {number} n >= 1
  */
-export function formatDeliveryCollisionStamp(d = new Date()) {
-  const p = (n, w) => String(n).padStart(w, '0');
-  return `${d.getFullYear()}${p(d.getMonth() + 1, 2)}${p(d.getDate(), 2)}T${p(d.getHours(), 2)}${p(d.getMinutes(), 2)}${p(d.getSeconds(), 2)}.${p(d.getMilliseconds(), 3)}`;
+export function applyDeliveryAutoRenamePrefix(originalName, n) {
+  const original = stripDeliveryAutoRenamePrefix(originalName);
+  const seq = Math.trunc(Number(n));
+  const prefix = `【自动重命名${Number.isFinite(seq) && seq >= 1 ? seq : 1}】`;
+  return flatFilename(`${prefix}${original}`);
 }
 
 /**
  * @param {object} p
  * @param {string} p.baseName
- * @param {string} [p.componentId]
+ * @param {string} [p.componentId] 保留参数以兼容旧调用，不再用于改名
  * @param {string} [p.md5]
  * @param {(name: string, md5: string) => boolean | Promise<boolean>} p.isTakenByOther
  * @returns {Promise<string>}
@@ -57,21 +61,15 @@ export async function resolveUniqueDeliveryFileName(p) {
   const md5 = String(p.md5 || '')
     .trim()
     .toLowerCase();
-  const base = flatFilename(p.baseName || 'artifact.bin');
-  const componentId = String(p.componentId || '').trim();
+  const original = stripDeliveryAutoRenamePrefix(p.baseName || 'artifact.bin');
   const isTaken = async (name) => Boolean(await p.isTakenByOther(name, md5));
 
-  if (!(await isTaken(base))) return base;
+  if (!(await isTaken(original))) return original;
 
-  if (componentId) {
-    const idName = attachOriginalExt(componentId, base);
-    if (idName && idName !== base && !(await isTaken(idName))) return idName;
+  for (let n = 1; n <= 999; n += 1) {
+    const candidate = applyDeliveryAutoRenamePrefix(original, n);
+    if (!(await isTaken(candidate))) return candidate;
   }
 
-  const stem = componentId ? attachOriginalExt(componentId, base) : base;
-  for (let i = 0; i < 40; i += 1) {
-    const stamped = flatFilename(`${stem}_${formatDeliveryCollisionStamp(new Date())}`);
-    if (!(await isTaken(stamped))) return stamped;
-  }
-  return flatFilename(`${stem}_${Date.now()}`);
+  return applyDeliveryAutoRenamePrefix(original, Date.now());
 }

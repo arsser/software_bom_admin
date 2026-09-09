@@ -161,7 +161,7 @@ function resolveMiddleDirFromRow(bomRow, keyMap) {
 }
 
 /**
- * 飞书交付文件名：优先下载 URL 原始 basename；撞名改名见 resolveUniqueDeliveryFileName。
+ * 飞书交付文件名：优先下载 URL 原始 basename；同目录撞名加【自动重命名N】前缀。
  * @param {Record<string, unknown>} bomRow
  * @param {ReturnType<typeof mergeKeyMap>} keyMap
  * @param {string} diskAbs
@@ -971,8 +971,8 @@ export async function executeFeishuUploadJob(supabase, rootAbs, job, tuning) {
     const resultOk = [];
     /** @type {{ rowId: string, reason?: string }[]} */
     const resultSkip = [];
-    /** @type {Map<string, string>} */
-    const reservedNames = new Map();
+    /** @type {Map<string, string>} rel_path → md5 */
+    const reservedRelPaths = new Map();
     let userCancelled = false;
 
     for (const rowId of rowIds) {
@@ -1167,16 +1167,17 @@ export async function executeFeishuUploadJob(supabase, rootAbs, job, tuning) {
         componentId: pickComponentId(bomRow, firstNonEmptyByKeysRelaxed),
         md5: md5Lower,
         isTakenByOther: (name, md5) => {
-          const prev = reservedNames.get(name.normalize('NFKC'));
+          const rel = buildFeishuPackageRelPath(pathSegments, name);
+          const prev = reservedRelPaths.get(rel);
           if (prev && prev !== md5) return true;
-          return packageManifestNameTakenByOtherMd5(packageManifest, name, md5);
+          return packageManifestNameTakenByOtherMd5(packageManifest, rel, md5);
         },
       });
-      reservedNames.set(fileName.normalize('NFKC'), md5Lower);
-      if (fileName !== baseName) {
-        log('feishu-upload rename on collision', { jobId, rowId, from: baseName, to: fileName, md5: md5Lower });
-      }
       const packageRelPath = buildFeishuPackageRelPath(pathSegments, fileName);
+      reservedRelPaths.set(packageRelPath, md5Lower);
+      if (fileName !== baseName) {
+        log('feishu-upload rename on collision', { jobId, rowId, from: baseName, to: fileName, md5: md5Lower, packageRelPath });
+      }
 
       log('feishu-upload row start', {
         jobId,

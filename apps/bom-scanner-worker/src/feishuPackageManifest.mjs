@@ -1,7 +1,7 @@
 /**
  * 飞书产品根目录下 meta/package-manifest.json：软件包去重清单。
- * 去重优先按 md5（+ 大小）命中，不要求文件名一致。
- * 新上传若与「另一份不同 MD5」撞名，改用组件 ID / 毫秒时间戳（见 deliveryFileName.mjs）。
+ * 条目主键为 rel_path（版本目录 + 模块目录 + 文件名）；去重优先按 md5（+ 大小）。
+ * 仅当同一 rel_path 已被另一份不同 MD5 占用时改名（见 deliveryFileName.mjs）。
  */
 
 import { safeFlatFilename, safePathSegment } from './extArtifactorySync.mjs';
@@ -120,12 +120,25 @@ function isValidMd5Hex(v) {
  *   version: number,
  *   updated_at: string,
  *   entries: FeishuPackageManifestEntry[],
- *   byFileName: Map<string, FeishuPackageManifestEntry>,
  *   byRelPath: Map<string, FeishuPackageManifestEntry>,
  *   dirty: boolean,
  *   fileToken: string | null,
  * }} FeishuPackageManifestState
  */
+
+/**
+ * @param {string} relPath
+ */
+export function normalizePackageRelPath(relPath) {
+  return safeTrim(relPath).replace(/\\/g, '/').replace(/^\/+/, '').normalize('NFKC');
+}
+
+/**
+ * @param {FeishuPackageManifestState} state
+ */
+function syncManifestEntries(state) {
+  state.entries = [...state.byRelPath.values()];
+}
 
 /**
  * @param {string} accessToken
@@ -417,19 +430,15 @@ export function createEmptyPackageManifest(jsonText, webBaseUrl) {
   }
 
   /** @type {Map<string, FeishuPackageManifestEntry>} */
-  const byFileName = new Map();
-  /** @type {Map<string, FeishuPackageManifestEntry>} */
   const byRelPath = new Map();
   for (const e of entries) {
-    byFileName.set(e.file_name, e);
     byRelPath.set(e.rel_path, e);
   }
 
   return {
     version: MANIFEST_VERSION,
     updated_at: new Date().toISOString(),
-    entries: [...byFileName.values()],
-    byFileName,
+    entries: [...byRelPath.values()],
     byRelPath,
     dirty: false,
     fileToken: null,
@@ -470,7 +479,7 @@ export async function loadFeishuPackageManifest(accessToken, rootFolderToken) {
     const text = await downloadFileText(accessToken, found.token);
     const state = createEmptyPackageManifest(text);
     state.fileToken = found.token;
-    log('feishu-manifest loaded', { entries: state.byFileName.size });
+    log('feishu-manifest loaded', { entries: state.byRelPath.size });
     return state;
   } catch (err) {
     log('WARN feishu-manifest download failed, empty inventory', err instanceof Error ? err.message : err);
@@ -514,9 +523,7 @@ export function findPackageManifestHit(state, q) {
   const sizeBytes = Math.trunc(Number(q.sizeBytes));
   if (!md5) return null;
 
-  const relPath = q.relPath
-    ? safeTrim(q.relPath).replace(/\\/g, '/').replace(/^\/+/, '').normalize('NFKC')
-    : '';
+  const relPath = q.relPath ? normalizePackageRelPath(q.relPath) : '';
   // 优先按目标相对路径命中（版本目录下的真实位置）
   if (relPath) {
     const byPath = state.byRelPath.get(relPath);
@@ -531,14 +538,15 @@ export function findPackageManifestHit(state, q) {
   }
 
   if (fileName) {
-    const byName = state.byFileName.get(fileName);
-    if (
-      byName &&
-      byName.md5 &&
-      byName.md5 === md5 &&
-      (!Number.isFinite(sizeBytes) || sizeBytes < 0 || byName.size_bytes === sizeBytes)
-    ) {
-      return byName;
+    for (const e of state.byRelPath.values()) {
+      if (
+        e.file_name === fileName &&
+        e.md5 &&
+        e.md5 === md5 &&
+        (!Number.isFinite(sizeBytes) || sizeBytes < 0 || e.size_bytes === sizeBytes)
+      ) {
+        return e;
+      }
     }
   }
 
@@ -546,16 +554,18 @@ export function findPackageManifestHit(state, q) {
 }
 
 /**
- * 该文件名是否已被另一份不同 MD5 占用（同 MD5 不算撞名）。
+ * 该 rel_path 是否已被另一份不同 MD5 占用（同 MD5 不算撞名）。
+ * 无 MD5 的占位条目视为已占用，避免误覆盖。
  * @param {FeishuPackageManifestState | null | undefined} state
- * @param {string} fileName
+ * @param {string} relPath
  * @param {string} md5Raw
  */
-export function packageManifestNameTakenByOtherMd5(state, fileName, md5Raw) {
+export function packageManifestNameTakenByOtherMd5(state, relPath, md5Raw) {
   if (!state) return false;
-  const name = safeFlatFilename(fileName).normalize('NFKC');
+  const pathKey = normalizePackageRelPath(relPath);
+  if (!pathKey) return false;
   const md5 = isValidMd5Hex(md5Raw) ? String(md5Raw).trim().toLowerCase() : '';
-  const e = state.byFileName.get(name);
+  const e = state.byRelPath.get(pathKey);
   if (!e) return false;
   return !e.md5 || e.md5 !== md5;
 }
@@ -563,8 +573,8 @@ export function packageManifestNameTakenByOtherMd5(state, fileName, md5Raw) {
 /** 清单命中是否就是「当前版本期望路径」（跨版本同名同 MD5 不算） */
 export function packageManifestHitIsAtRelPath(hit, expectedRelPath) {
   if (!hit) return false;
-  const a = safeTrim(hit.rel_path).replace(/\\/g, '/').replace(/^\/+/, '').normalize('NFKC');
-  const b = safeTrim(expectedRelPath).replace(/\\/g, '/').replace(/^\/+/, '').normalize('NFKC');
+  const a = normalizePackageRelPath(hit.rel_path);
+  const b = normalizePackageRelPath(expectedRelPath);
   return Boolean(a && b && a === b);
 }
 
@@ -575,16 +585,11 @@ export function packageManifestHitIsAtRelPath(hit, expectedRelPath) {
 export function upsertPackageManifestEntry(state, p) {
   const fileName = safeFlatFilename(p.fileName).normalize('NFKC');
   const md5 = String(p.md5).trim().toLowerCase();
-  const relPath = safeTrim(p.relPath).replace(/\\/g, '/').replace(/^\/+/, '').normalize('NFKC');
+  const relPath = normalizePackageRelPath(p.relPath);
   const sizeBytes = Math.trunc(Number(p.sizeBytes));
   const fileToken = safeTrim(p.fileToken);
   if (!fileName || !isValidMd5Hex(md5) || !relPath || !fileToken || !Number.isFinite(sizeBytes) || sizeBytes < 0) {
     return;
-  }
-
-  const prev = state.byFileName.get(fileName);
-  if (prev && prev.rel_path !== relPath && prev.md5 === md5) {
-    state.byRelPath.delete(prev.rel_path);
   }
 
   /** @type {FeishuPackageManifestEntry} */
@@ -597,9 +602,8 @@ export function upsertPackageManifestEntry(state, p) {
     download_url: resolvePackageManifestDownloadUrl(fileToken, p.webBaseUrl),
     uploaded_at: new Date().toISOString(),
   };
-  state.byFileName.set(fileName, entry);
   state.byRelPath.set(relPath, entry);
-  state.entries = [...state.byFileName.values()];
+  syncManifestEntries(state);
   state.dirty = true;
   state.updated_at = entry.uploaded_at;
 }
@@ -633,7 +637,7 @@ export async function saveFeishuPackageManifestIfDirty(accessToken, rootFolderTo
   const payload = {
     version: MANIFEST_VERSION,
     updated_at: state.updated_at || new Date().toISOString(),
-    entries: [...state.byFileName.values()].sort((a, b) => a.rel_path.localeCompare(b.rel_path)),
+    entries: [...state.byRelPath.values()].sort((a, b) => a.rel_path.localeCompare(b.rel_path)),
   };
   const text = `${JSON.stringify(payload, null, 2)}\n`;
   const fileToken = await uploadTextFile(accessToken, metaToken, MANIFEST_FILE_NAME, text);
@@ -766,14 +770,17 @@ export async function rebuildFeishuPackageManifestFromDrive(accessToken, rootFol
     }
 
     const local = localByFileName.get(f.fileName);
-    const oldByName = prev.byFileName.get(f.fileName);
     const oldByPath = prev.byRelPath.get(f.relPath);
-    const old =
-      oldByName && oldByName.file_token === f.fileToken
-        ? oldByName
-        : oldByPath && oldByPath.file_token === f.fileToken
-          ? oldByPath
-          : oldByName || oldByPath || null;
+    let oldByToken = null;
+    let oldByName = null;
+    if (!oldByPath) {
+      for (const e of prev.byRelPath.values()) {
+        if (e.file_token === f.fileToken) oldByToken = e;
+        else if (!oldByName && e.file_name === f.fileName) oldByName = e;
+        if (oldByToken && oldByName) break;
+      }
+    }
+    const old = oldByPath || oldByToken || oldByName;
 
     let sizeBytes = local && Number.isFinite(local.sizeBytes) ? Math.trunc(local.sizeBytes) : null;
     if (sizeBytes == null && old && Number.isFinite(old.size_bytes)) sizeBytes = old.size_bytes;
@@ -801,11 +808,10 @@ export async function rebuildFeishuPackageManifestFromDrive(accessToken, rootFol
       download_url: resolvePackageManifestDownloadUrl(f.fileToken, webBaseUrl, old?.download_url),
       uploaded_at: old?.uploaded_at || new Date().toISOString(),
     };
-    next.byFileName.set(entry.file_name, entry);
     next.byRelPath.set(entry.rel_path, entry);
   }
 
-  next.entries = [...next.byFileName.values()];
+  syncManifestEntries(next);
   next.dirty = true;
   next.updated_at = new Date().toISOString();
 
@@ -829,6 +835,6 @@ export function packageManifestToJson(state) {
   return {
     version: state.version || MANIFEST_VERSION,
     updated_at: state.updated_at || null,
-    entries: [...state.byFileName.values()].sort((a, b) => a.rel_path.localeCompare(b.rel_path)),
+    entries: [...state.byRelPath.values()].sort((a, b) => a.rel_path.localeCompare(b.rel_path)),
   };
 }

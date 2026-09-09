@@ -6,7 +6,8 @@
   "description": "Consumes bom_scan_jobs, indexes BOM_LOCAL_ROOT into local_file via Supabase RPCs",
   "scripts": {
     "start": "node src/index.mjs",
-    "start:env": "node --env-file=.env src/index.mjs"
+    "start:env": "node --env-file=.env src/index.mjs",
+    "test": "node --test src/deliveryFileName.test.mjs"
   },
   "engines": {
     "node": ">=20"

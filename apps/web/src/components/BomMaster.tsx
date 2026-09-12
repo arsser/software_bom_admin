@@ -3,6 +3,8 @@ import { useNavigate } from 'react-router-dom';
 import {
   ArrowDown,
   ArrowUp,
+  ChevronDown,
+  ChevronRight,
   ClipboardCopy,
   Copy,
   GitCompareArrows,
@@ -38,6 +40,19 @@ type ProductWithBatches = {
   batches: BomBatch[];
 };
 
+const COLLAPSED_PRODUCTS_KEY = 'bom-master-collapsed-product-ids';
+
+function readCollapsedProductIds(): Set<string> {
+  try {
+    const raw = localStorage.getItem(COLLAPSED_PRODUCTS_KEY);
+    const parsed = raw ? JSON.parse(raw) : [];
+    if (!Array.isArray(parsed)) return new Set();
+    return new Set(parsed.map((x) => String(x)).filter(Boolean));
+  } catch {
+    return new Set();
+  }
+}
+
 export const BomMaster: React.FC = () => {
   const navigate = useNavigate();
   const [loading, setLoading] = useState(true);
@@ -48,6 +63,7 @@ export const BomMaster: React.FC = () => {
   const [copyingBatchId, setCopyingBatchId] = useState<string | null>(null);
   const [clipboardListBatchId, setClipboardListBatchId] = useState<string | null>(null);
   const [productBusyId, setProductBusyId] = useState<string | null>(null);
+  const [collapsedIds, setCollapsedIds] = useState<Set<string>>(() => readCollapsedProductIds());
 
   const [editorOpen, setEditorOpen] = useState(false);
   const [editorMode, setEditorMode] = useState<'create' | 'edit'>('create');
@@ -81,6 +97,27 @@ export const BomMaster: React.FC = () => {
     load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  useEffect(() => {
+    localStorage.setItem(COLLAPSED_PRODUCTS_KEY, JSON.stringify([...collapsedIds]));
+  }, [collapsedIds]);
+
+  const toggleProductCollapsed = (productId: string) => {
+    setCollapsedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(productId)) next.delete(productId);
+      else next.add(productId);
+      return next;
+    });
+  };
+
+  const collapseAllProducts = () => {
+    setCollapsedIds(new Set(products.map((p) => p.id)));
+  };
+
+  const expandAllProducts = () => {
+    setCollapsedIds(new Set());
+  };
 
   const openCreateProduct = () => {
     setEditorMode('create');
@@ -307,27 +344,73 @@ export const BomMaster: React.FC = () => {
       ) : null}
 
       <div className="bg-white rounded-xl border border-gray-200 shadow-sm">
-        <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between">
+        <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between gap-3">
           <div className="text-sm font-medium text-slate-800">产品与版本</div>
-          <div className="text-xs text-slate-500">
-            {loading ? '加载中…' : `产品 ${products.length}，版本 ${batches.length}`}
+          <div className="flex items-center gap-3">
+            {!loading && products.length > 0 ? (
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={expandAllProducts}
+                  disabled={collapsedIds.size === 0}
+                  className="text-xs px-2 py-1 rounded-md border border-slate-200 text-slate-600 hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed"
+                >
+                  全部展开
+                </button>
+                <button
+                  type="button"
+                  onClick={collapseAllProducts}
+                  disabled={collapsedIds.size >= products.length}
+                  className="text-xs px-2 py-1 rounded-md border border-slate-200 text-slate-600 hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed"
+                >
+                  全部折叠
+                </button>
+              </div>
+            ) : null}
+            <div className="text-xs text-slate-500">
+              {loading ? '加载中…' : `产品 ${products.length}，版本 ${batches.length}`}
+            </div>
           </div>
         </div>
 
         <div className="divide-y divide-gray-100">
-          {grouped.map(({ product, batches: bs }) => (
+          {grouped.map(({ product, batches: bs }) => {
+            const collapsed = collapsedIds.has(product.id);
+            const panelId = `product-versions-${product.id}`;
+            return (
             <div key={product.id} className="px-5 py-4">
               <div className="flex items-center justify-between gap-4">
-                <div className="min-w-0">
-                  <div className="text-sm font-semibold text-slate-900">
-                    {product.name}
-                  </div>
-                  <div className="text-xs text-slate-500 mt-0.5">
-                    版本数：{bs.length}
-                    {!distConfigured(product) ? (
-                      <span className="text-amber-700 ml-2">· 分发配置未完整</span>
-                    ) : null}
-                  </div>
+                <div className="min-w-0 flex items-start gap-2">
+                  <button
+                    type="button"
+                    onClick={() => toggleProductCollapsed(product.id)}
+                    aria-expanded={!collapsed}
+                    aria-controls={panelId}
+                    className="mt-0.5 p-1 rounded-md text-slate-500 hover:bg-slate-100 hover:text-slate-800"
+                    title={collapsed ? '展开版本列表' : '折叠版本列表'}
+                  >
+                    {collapsed ? <ChevronRight size={16} /> : <ChevronDown size={16} />}
+                    <span className="sr-only">{collapsed ? '展开' : '折叠'} {product.name}</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => toggleProductCollapsed(product.id)}
+                    className="min-w-0 text-left"
+                    aria-expanded={!collapsed}
+                    aria-controls={panelId}
+                    title={collapsed ? '展开版本列表' : '折叠版本列表'}
+                  >
+                    <div className="text-sm font-semibold text-slate-900">
+                      {product.name}
+                    </div>
+                    <div className="text-xs text-slate-500 mt-0.5">
+                      版本数：{bs.length}
+                      {collapsed ? <span className="text-slate-400"> · 已折叠</span> : null}
+                      {!distConfigured(product) ? (
+                        <span className="text-amber-700 ml-2">· 分发配置未完整</span>
+                      ) : null}
+                    </div>
+                  </button>
                 </div>
                 <div className="flex items-center gap-2 flex-wrap justify-end">
                   <button
@@ -389,12 +472,15 @@ export const BomMaster: React.FC = () => {
                 </div>
               </div>
 
-              {bs.length > 0 ? (
-                <div className="mt-3 overflow-x-auto">
+              {!collapsed && bs.length > 0 ? (
+                <div
+                  id={panelId}
+                  className="mt-3 max-h-[28rem] overflow-auto rounded-lg border border-slate-200"
+                >
                   <table className="min-w-full text-sm">
-                    <thead className="bg-slate-50">
+                    <thead className="bg-slate-50 sticky top-0 z-10 shadow-[0_1px_0_0_rgb(226_232_240)]">
                       <tr>
-                        <th className="px-3 py-2 text-left text-xs font-semibold text-slate-700 border-b border-slate-200">
+                        <th className="px-3 py-2 text-left text-xs font-semibold text-slate-700 bg-slate-50 border-b border-slate-200">
                           <button
                             type="button"
                             onClick={() => toggleBatchSort('name')}
@@ -405,7 +491,7 @@ export const BomMaster: React.FC = () => {
                             <span className="text-[11px]">{sortArrow('name')}</span>
                           </button>
                         </th>
-                        <th className="px-3 py-2 text-left text-xs font-semibold text-slate-700 border-b border-slate-200">
+                        <th className="px-3 py-2 text-left text-xs font-semibold text-slate-700 bg-slate-50 border-b border-slate-200">
                           <button
                             type="button"
                             onClick={() => toggleBatchSort('rowCount')}
@@ -416,7 +502,7 @@ export const BomMaster: React.FC = () => {
                             <span className="text-[11px]">{sortArrow('rowCount')}</span>
                           </button>
                         </th>
-                        <th className="px-3 py-2 text-left text-xs font-semibold text-slate-700 border-b border-slate-200">
+                        <th className="px-3 py-2 text-left text-xs font-semibold text-slate-700 bg-slate-50 border-b border-slate-200">
                           <button
                             type="button"
                             onClick={() => toggleBatchSort('totalBytes')}
@@ -427,7 +513,7 @@ export const BomMaster: React.FC = () => {
                             <span className="text-[11px]">{sortArrow('totalBytes')}</span>
                           </button>
                         </th>
-                        <th className="px-3 py-2 text-left text-xs font-semibold text-slate-700 border-b border-slate-200">
+                        <th className="px-3 py-2 text-left text-xs font-semibold text-slate-700 bg-slate-50 border-b border-slate-200">
                           <button
                             type="button"
                             onClick={() => toggleBatchSort('createdAt')}
@@ -438,7 +524,7 @@ export const BomMaster: React.FC = () => {
                             <span className="text-[11px]">{sortArrow('createdAt')}</span>
                           </button>
                         </th>
-                        <th className="px-3 py-2 text-right text-xs font-semibold text-slate-700 border-b border-slate-200">操作</th>
+                        <th className="px-3 py-2 text-right text-xs font-semibold text-slate-700 bg-slate-50 border-b border-slate-200">操作</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -543,11 +629,16 @@ export const BomMaster: React.FC = () => {
                     </tbody>
                   </table>
                 </div>
+              ) : collapsed ? (
+                <div id={panelId} className="sr-only">
+                  已折叠
+                </div>
               ) : (
-                <div className="mt-3 text-sm text-slate-500">暂无版本。</div>
+                <div id={panelId} className="mt-3 text-sm text-slate-500">暂无版本。</div>
               )}
             </div>
-          ))}
+            );
+          })}
 
           {!loading && grouped.length === 0 ? (
             <div className="px-5 py-10 text-center text-slate-500">

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import {
   ArrowLeft,
@@ -104,6 +104,103 @@ function jobElapsedAndAvg(
   };
 }
 
+function jobProductAndVersion(
+  batchById: Map<string, BomBatch>,
+  batchId: string,
+  batchName?: string | null,
+): { productName: string; versionName: string } {
+  const b = batchById.get(batchId);
+  return {
+    productName: b?.productName?.trim() || '—',
+    versionName: b?.name?.trim() || batchName?.trim() || '—',
+  };
+}
+
+function renderProductVersionCells(
+  productName: string,
+  versionName: string,
+  extra?: ReactNode,
+) {
+  return (
+    <>
+      <td className="px-2 py-2 w-[5.5rem] min-w-[5.5rem] max-w-[5.5rem] overflow-hidden">
+        <div className="text-xs font-medium text-slate-900 truncate" title={productName}>
+          {productName}
+        </div>
+      </td>
+      <td className="px-2 py-2 w-[5.5rem] min-w-[5.5rem] max-w-[5.5rem] overflow-hidden">
+        <div className="text-xs font-medium text-slate-900 truncate" title={versionName}>
+          {versionName}
+        </div>
+        {extra}
+      </td>
+    </>
+  );
+}
+
+const STATUS_COL_TH =
+  'px-3 py-2 text-left text-xs font-semibold text-slate-700 w-[5.25rem] min-w-[5.25rem] max-w-[5.25rem]';
+const STATUS_COL_TD = 'px-3 py-2 w-[5.25rem] min-w-[5.25rem] max-w-[5.25rem] overflow-hidden whitespace-nowrap';
+const PRODUCT_COL_TH =
+  'px-2 py-2 text-left text-xs font-semibold text-slate-700 w-[5.5rem] min-w-[5.5rem] max-w-[5.5rem]';
+const PROGRESS_COL_TH =
+  'px-3 py-2 text-left text-xs font-semibold text-slate-700 w-[4.75rem] min-w-[4.75rem] max-w-[4.75rem]';
+const PROGRESS_COL_TD =
+  'px-3 py-2 text-xs text-slate-700 w-[4.75rem] min-w-0 max-w-[4.75rem] overflow-hidden';
+const BYTES_COL_TH =
+  'px-3 py-2 text-left text-xs font-semibold text-slate-700 w-[8.5rem] min-w-[8.5rem] max-w-[8.5rem]';
+const BYTES_COL_TD =
+  'px-3 py-2 text-xs text-slate-600 w-[8.5rem] min-w-[8.5rem] max-w-[8.5rem] whitespace-pre-line leading-snug overflow-hidden';
+const MSG_COL_TH =
+  'px-3 py-2 text-left text-xs font-semibold text-slate-700 w-[18rem] min-w-[18rem]';
+const MSG_COL_TD = 'px-3 py-2 text-xs text-slate-600 min-w-[18rem] overflow-hidden';
+const TIME_COL_TH =
+  'px-3 py-2 text-left text-xs font-semibold text-slate-700 w-[10.5rem] min-w-[10.5rem] max-w-[10.5rem]';
+const TIME_COL_TD =
+  'px-3 py-2 text-xs text-slate-500 whitespace-nowrap w-[10.5rem] min-w-[10.5rem] max-w-[10.5rem]';
+const DETAIL_COL_TH =
+  'px-3 py-2 text-left text-xs font-semibold text-slate-700 whitespace-nowrap w-[4.75rem] min-w-[4.75rem] max-w-[4.75rem]';
+const DETAIL_COL_TD =
+  'px-3 py-2 text-left whitespace-nowrap w-[4.75rem] min-w-[4.75rem] max-w-[4.75rem]';
+const ACTION_COL_TH =
+  'px-3 py-2 text-left text-xs font-semibold text-slate-700 whitespace-nowrap w-[6.5rem] min-w-[6.5rem] max-w-[6.5rem]';
+const ACTION_COL_TD =
+  'px-3 py-2 text-left w-[6.5rem] min-w-0 max-w-[6.5rem] overflow-hidden';
+
+function JobTableColGroup() {
+  return (
+    <colgroup>
+      <col style={{ width: '5.25rem' }} />
+      <col style={{ width: '5.5rem' }} />
+      <col style={{ width: '5.5rem' }} />
+      <col style={{ width: '4.75rem' }} />
+      <col style={{ width: '8.5rem' }} />
+      <col style={{ width: '18rem' }} />
+      <col style={{ width: '10.5rem' }} />
+      <col style={{ width: '4.75rem' }} />
+      <col style={{ width: '6.5rem' }} />
+    </colgroup>
+  );
+}
+
+function JobTableHead() {
+  return (
+    <thead className="bg-slate-50 border-b border-slate-200">
+      <tr>
+        <th className={STATUS_COL_TH}>状态</th>
+        <th className={PRODUCT_COL_TH}>产品</th>
+        <th className={PRODUCT_COL_TH}>版本</th>
+        <th className={PROGRESS_COL_TH}>进度</th>
+        <th className={BYTES_COL_TH}>字节</th>
+        <th className={MSG_COL_TH}>说明</th>
+        <th className={TIME_COL_TH}>时间</th>
+        <th className={DETAIL_COL_TH}>详情</th>
+        <th className={ACTION_COL_TH}>操作</th>
+      </tr>
+    </thead>
+  );
+}
+
 function renderJobTimeCell(opts: {
   createdAt: string;
   startedAt: string | null;
@@ -117,7 +214,7 @@ function renderJobTimeCell(opts: {
   const showTransfer = status === 'running';
   const showAvg = status !== 'queued';
   return (
-    <td className="px-3 py-2 text-xs text-slate-500 whitespace-nowrap">
+    <td className={TIME_COL_TD}>
       <div>创建 {new Date(createdAt).toLocaleString()}</div>
       {startedAt ? <div>开始 {new Date(startedAt).toLocaleString()}</div> : null}
       {finishedAt ? <div>结束 {new Date(finishedAt).toLocaleString()}</div> : null}
@@ -237,10 +334,10 @@ export const BomDownloadJobsPage: React.FC = () => {
         }),
       ]);
       setBatches(bs);
-      const idToLabel = new Map(bs.map((b) => [b.id, `${b.productName} · ${b.name}`]));
-      setJobs(js.map((j) => ({ ...j, batchName: j.batchName ?? idToLabel.get(j.batchId) ?? null })));
-      setExtJobs(ej.map((j) => ({ ...j, batchName: j.batchName ?? idToLabel.get(j.batchId) ?? null })));
-      setFeishuJobs(fj.map((j) => ({ ...j, batchName: j.batchName ?? idToLabel.get(j.batchId) ?? null })));
+      const idToVersion = new Map(bs.map((b) => [b.id, b.name]));
+      setJobs(js.map((j) => ({ ...j, batchName: j.batchName ?? idToVersion.get(j.batchId) ?? null })));
+      setExtJobs(ej.map((j) => ({ ...j, batchName: j.batchName ?? idToVersion.get(j.batchId) ?? null })));
+      setFeishuJobs(fj.map((j) => ({ ...j, batchName: j.batchName ?? idToVersion.get(j.batchId) ?? null })));
       setItHasMore(js.length === itL);
       setExtHasMore(ej.length === extL);
       setFeishuHasMore(fj.length === feiL);
@@ -274,8 +371,8 @@ export const BomDownloadJobsPage: React.FC = () => {
     [jobs, extJobs, feishuJobs],
   );
 
-  const batchLabelById = useMemo(
-    () => new Map(batches.map((b) => [b.id, `${b.productName} · ${b.name}`])),
+  const batchById = useMemo(
+    () => new Map(batches.map((b) => [b.id, b])),
     [batches],
   );
 
@@ -304,7 +401,7 @@ export const BomDownloadJobsPage: React.FC = () => {
     }, 2000);
     return () => window.clearInterval(id);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [hasActive, batchIdFilter, statusFilter, batchLabelById, itLimit, extLimit, feishuLimit]);
+  }, [hasActive, batchIdFilter, statusFilter, batchById, itLimit, extLimit, feishuLimit]);
 
   useEffect(() => {
     if (!hasRunningJob) return;
@@ -573,7 +670,7 @@ export const BomDownloadJobsPage: React.FC = () => {
           {content}
         </div>
         {message ? (
-          <div className="mt-1 flex items-center gap-3 text-[11px]">
+          <div className="mt-1 flex flex-wrap items-center gap-3 text-[11px]">
             <button
               type="button"
               onClick={() => toggleMessageExpanded(key)}
@@ -686,23 +783,13 @@ export const BomDownloadJobsPage: React.FC = () => {
         {sectionItOpen ? (
         <>
         <div className="overflow-x-auto">
-          <table className="min-w-full text-sm">
-            <thead className="bg-slate-50 border-b border-slate-200">
-              <tr>
-                <th className="px-3 py-2 text-left text-xs font-semibold text-slate-700">状态</th>
-                <th className="px-3 py-2 text-left text-xs font-semibold text-slate-700">版本</th>
-                <th className="px-3 py-2 text-left text-xs font-semibold text-slate-700">进度</th>
-                <th className="px-3 py-2 text-left text-xs font-semibold text-slate-700">字节</th>
-                <th className="px-3 py-2 text-left text-xs font-semibold text-slate-700">说明</th>
-                <th className="px-3 py-2 text-left text-xs font-semibold text-slate-700">时间</th>
-                <th className="px-3 py-2 text-right text-xs font-semibold text-slate-700">详情</th>
-                <th className="px-3 py-2 text-right text-xs font-semibold text-slate-700">操作</th>
-              </tr>
-            </thead>
+          <table className="min-w-full table-fixed text-sm">
+            <JobTableColGroup />
+            <JobTableHead />
             <tbody className="divide-y divide-slate-100">
               {jobs.length === 0 && !loading ? (
                 <tr>
-                  <td colSpan={8} className="px-4 py-10 text-center text-slate-500">
+                  <td colSpan={9} className="px-4 py-10 text-center text-slate-500">
                     暂无任务。请在 BOM 明细页发起「拉取」。
                   </td>
                 </tr>
@@ -720,20 +807,16 @@ export const BomDownloadJobsPage: React.FC = () => {
                   j,
                   false,
                 );
+                const { productName, versionName } = jobProductAndVersion(batchById, j.batchId, j.batchName);
                 return (
                   <tr key={j.id} className="hover:bg-slate-50/80">
-                    <td className="px-3 py-2 whitespace-nowrap">
+                    <td className={`${STATUS_COL_TD} whitespace-nowrap`}>
                       <span className="inline-flex rounded-md border border-slate-200 bg-white px-2 py-0.5 text-xs font-medium text-slate-800">
                         {BOM_DOWNLOAD_JOB_STATUS_LABEL[j.status]}
                       </span>
                     </td>
-                    <td className="px-3 py-2">
-                      <div className="font-medium text-slate-900">{j.batchName ?? '—'}</div>
-                      <div className="text-[11px] text-slate-400 font-mono truncate max-w-[14rem]" title={j.batchId}>
-                        {j.batchId}
-                      </div>
-                    </td>
-                    <td className="px-3 py-2 text-slate-700">
+                    {renderProductVersionCells(productName, versionName)}
+                    <td className={PROGRESS_COL_TD}>
                       <div className="whitespace-nowrap">
                         {j.progressTotal > 0 ? `${j.progressCurrent}/${j.progressTotal} 文件` : '—'}
                         {j.status === 'running' || j.status === 'queued' ? (
@@ -741,7 +824,7 @@ export const BomDownloadJobsPage: React.FC = () => {
                         ) : null}
                       </div>
                       {j.status === 'running' || j.status === 'queued' ? (
-                        <div className="mt-1 h-1.5 w-28 rounded-full bg-slate-100 overflow-hidden">
+                        <div className="mt-1 h-1.5 w-full rounded-full bg-slate-100 overflow-hidden">
                           <div
                             className="h-full bg-indigo-600 transition-all duration-300"
                             style={{ width: `${pct}%` }}
@@ -749,7 +832,7 @@ export const BomDownloadJobsPage: React.FC = () => {
                         </div>
                       ) : null}
                     </td>
-                    <td className="px-3 py-2 text-xs text-slate-600 max-w-[14rem] whitespace-pre-line">
+                    <td className={BYTES_COL_TD}>
                       {bytesLine ?? '—'}
                       {j.runningFileName && j.status === 'running' ? (
                         <div className="text-[11px] text-slate-400 truncate mt-0.5" title={j.runningFileName}>
@@ -757,7 +840,7 @@ export const BomDownloadJobsPage: React.FC = () => {
                         </div>
                       ) : null}
                     </td>
-                    <td className="px-3 py-2 text-xs text-slate-600 max-w-[20rem]">
+                    <td className={MSG_COL_TD}>
                       {renderMessageCell(`it-${j.id}`, j.lastMessage)}
                     </td>
                     {renderJobTimeCell({
@@ -769,7 +852,7 @@ export const BomDownloadJobsPage: React.FC = () => {
                       live: liveStatsById[j.id],
                       avgSpeedBps,
                     })}
-                    <td className="px-3 py-2 text-right whitespace-nowrap">
+                    <td className={DETAIL_COL_TD}>
                       {j.rowIds.length > 0 ? (
                         <button
                           type="button"
@@ -786,7 +869,7 @@ export const BomDownloadJobsPage: React.FC = () => {
                         <span className="text-slate-300">—</span>
                       )}
                     </td>
-                    <td className="px-3 py-2 text-right">
+                    <td className={ACTION_COL_TD}>
                       {canCancelIt ? (
                         <button
                           type="button"
@@ -849,23 +932,13 @@ export const BomDownloadJobsPage: React.FC = () => {
         {sectionExtOpen ? (
         <>
         <div className="overflow-x-auto">
-          <table className="min-w-full text-sm">
-            <thead className="bg-slate-50 border-b border-slate-200">
-              <tr>
-                <th className="px-3 py-2 text-left text-xs font-semibold text-slate-700">状态</th>
-                <th className="px-3 py-2 text-left text-xs font-semibold text-slate-700">版本</th>
-                <th className="px-3 py-2 text-left text-xs font-semibold text-slate-700">进度</th>
-                <th className="px-3 py-2 text-left text-xs font-semibold text-slate-700">字节</th>
-                <th className="px-3 py-2 text-left text-xs font-semibold text-slate-700">说明</th>
-                <th className="px-3 py-2 text-left text-xs font-semibold text-slate-700">时间</th>
-                <th className="px-3 py-2 text-right text-xs font-semibold text-slate-700">详情</th>
-                <th className="px-3 py-2 text-right text-xs font-semibold text-slate-700">操作</th>
-              </tr>
-            </thead>
+          <table className="min-w-full table-fixed text-sm">
+            <JobTableColGroup />
+            <JobTableHead />
             <tbody className="divide-y divide-slate-100">
               {extJobs.length === 0 && !loading ? (
                 <tr>
-                  <td colSpan={8} className="px-4 py-10 text-center text-slate-500">
+                  <td colSpan={9} className="px-4 py-10 text-center text-slate-500">
                     {`暂无任务。请在 BOM 明细页发起「同步全部」或单行 ${LABEL_EXTERNAL_ARTI} 同步。`}
                   </td>
                 </tr>
@@ -883,20 +956,16 @@ export const BomDownloadJobsPage: React.FC = () => {
                   j,
                   false,
                 );
+                const { productName, versionName } = jobProductAndVersion(batchById, j.batchId, j.batchName);
                 return (
                   <tr key={j.id} className="hover:bg-slate-50/80">
-                    <td className="px-3 py-2 whitespace-nowrap">
+                    <td className={`${STATUS_COL_TD} whitespace-nowrap`}>
                       <span className="inline-flex rounded-md border border-emerald-200 bg-emerald-50/80 px-2 py-0.5 text-xs font-medium text-emerald-900">
                         {BOM_EXT_SYNC_JOB_STATUS_LABEL[j.status]}
                       </span>
                     </td>
-                    <td className="px-3 py-2">
-                      <div className="font-medium text-slate-900">{j.batchName ?? '—'}</div>
-                      <div className="text-[11px] text-slate-400 font-mono truncate max-w-[14rem]" title={j.batchId}>
-                        {j.batchId}
-                      </div>
-                    </td>
-                    <td className="px-3 py-2 text-slate-700">
+                    {renderProductVersionCells(productName, versionName)}
+                    <td className={PROGRESS_COL_TD}>
                       <div className="whitespace-nowrap">
                         {j.progressTotal > 0 ? `${j.progressCurrent}/${j.progressTotal} 行` : '—'}
                         {j.status === 'running' || j.status === 'queued' ? (
@@ -904,7 +973,7 @@ export const BomDownloadJobsPage: React.FC = () => {
                         ) : null}
                       </div>
                       {j.status === 'running' || j.status === 'queued' ? (
-                        <div className="mt-1 h-1.5 w-28 rounded-full bg-slate-100 overflow-hidden">
+                        <div className="mt-1 h-1.5 w-full rounded-full bg-slate-100 overflow-hidden">
                           <div
                             className="h-full bg-emerald-600 transition-all duration-300"
                             style={{ width: `${pct}%` }}
@@ -912,10 +981,10 @@ export const BomDownloadJobsPage: React.FC = () => {
                         </div>
                       ) : null}
                     </td>
-                    <td className="px-3 py-2 text-xs text-slate-600 max-w-[14rem] whitespace-pre-line">
+                    <td className={BYTES_COL_TD}>
                       {bytesLine ?? '—'}
                     </td>
-                    <td className="px-3 py-2 text-xs text-slate-600 max-w-[20rem]">
+                    <td className={MSG_COL_TD}>
                       {renderMessageCell(`ext-${j.id}`, j.lastMessage)}
                     </td>
                     {renderJobTimeCell({
@@ -927,7 +996,7 @@ export const BomDownloadJobsPage: React.FC = () => {
                       live: liveStatsById[j.id],
                       avgSpeedBps,
                     })}
-                    <td className="px-3 py-2 text-right whitespace-nowrap">
+                    <td className={DETAIL_COL_TD}>
                       {j.rowIds.length > 0 ? (
                         <button
                           type="button"
@@ -944,7 +1013,7 @@ export const BomDownloadJobsPage: React.FC = () => {
                         <span className="text-slate-300">—</span>
                       )}
                     </td>
-                    <td className="px-3 py-2 text-right">
+                    <td className={ACTION_COL_TD}>
                       {canCancelExt ? (
                         <button
                           type="button"
@@ -1007,23 +1076,13 @@ export const BomDownloadJobsPage: React.FC = () => {
         {sectionFeishuOpen ? (
         <>
         <div className="overflow-x-auto">
-          <table className="min-w-full text-sm">
-            <thead className="bg-slate-50 border-b border-slate-200">
-              <tr>
-                <th className="px-3 py-2 text-left text-xs font-semibold text-slate-700">状态</th>
-                <th className="px-3 py-2 text-left text-xs font-semibold text-slate-700">版本</th>
-                <th className="px-3 py-2 text-left text-xs font-semibold text-slate-700">进度</th>
-                <th className="px-3 py-2 text-left text-xs font-semibold text-slate-700">字节</th>
-                <th className="px-3 py-2 text-left text-xs font-semibold text-slate-700">说明</th>
-                <th className="px-3 py-2 text-left text-xs font-semibold text-slate-700">时间</th>
-                <th className="px-3 py-2 text-right text-xs font-semibold text-slate-700">详情</th>
-                <th className="px-3 py-2 text-right text-xs font-semibold text-slate-700">操作</th>
-              </tr>
-            </thead>
+          <table className="min-w-full table-fixed text-sm">
+            <JobTableColGroup />
+            <JobTableHead />
             <tbody className="divide-y divide-slate-100">
               {feishuJobs.length === 0 && !loading ? (
                 <tr>
-                  <td colSpan={8} className="px-4 py-10 text-center text-slate-500">
+                  <td colSpan={9} className="px-4 py-10 text-center text-slate-500">
                     暂无任务。请在 BOM 分发页发起「上传选中到飞书」。
                   </td>
                 </tr>
@@ -1042,43 +1101,42 @@ export const BomDownloadJobsPage: React.FC = () => {
                   j,
                   true,
                 );
+                const { productName, versionName } = jobProductAndVersion(batchById, j.batchId, j.batchName);
                 const statusBadgeCls =
                   failN > 0 || j.status === 'failed'
                     ? 'border-red-200 bg-red-50 text-red-800'
                     : 'border-violet-200 bg-violet-50/80 text-violet-900';
                 return (
                   <tr key={j.id} className="hover:bg-slate-50/80">
-                    <td className="px-3 py-2 whitespace-nowrap">
+                    <td className={STATUS_COL_TD}>
                       <span className={`inline-flex rounded-md border px-2 py-0.5 text-xs font-medium ${statusBadgeCls}`}>
                         {BOM_FEISHU_UPLOAD_JOB_STATUS_LABEL[j.status]}
-                        {failN > 0 ? (
-                          <span className="ml-1 font-semibold text-red-600">· 失败 {failN}</span>
-                        ) : null}
                       </span>
+                      {failN > 0 ? (
+                        <div className="text-[11px] font-semibold text-red-600 mt-0.5">失败 {failN}</div>
+                      ) : null}
                     </td>
-                    <td className="px-3 py-2">
-                      <div className="font-medium text-slate-900">{j.batchName ?? '—'}</div>
-                      <div className="text-[11px] text-slate-400 font-mono truncate max-w-[14rem]" title={j.batchId}>
-                        {j.batchId}
-                      </div>
-                      {j.parentJobId ? (
+                    {renderProductVersionCells(
+                      productName,
+                      versionName,
+                      j.parentJobId ? (
                         <div className="text-[11px] text-slate-500 mt-0.5" title={j.parentJobId}>
                           补传自 {j.parentJobId.slice(0, 8)}…
                         </div>
-                      ) : null}
-                    </td>
-                    <td className="px-3 py-2 text-slate-700">
+                      ) : null,
+                    )}
+                    <td className={PROGRESS_COL_TD}>
                       <div className="whitespace-nowrap">
                         {j.progressTotal > 0 ? `${j.progressCurrent}/${j.progressTotal} 行` : '—'}
-                        {failN > 0 ? (
-                          <span className="ml-1 text-red-600 font-medium">（失败 {failN}）</span>
-                        ) : null}
                         {j.status === 'running' || j.status === 'queued' ? (
                           <span className="text-slate-500"> · {Math.round(pct)}%</span>
                         ) : null}
                       </div>
+                      {failN > 0 ? (
+                        <div className="text-[11px] font-medium text-red-600 mt-0.5">失败 {failN}</div>
+                      ) : null}
                       {j.status === 'running' || j.status === 'queued' ? (
-                        <div className="mt-1 h-1.5 w-28 rounded-full bg-slate-100 overflow-hidden">
+                        <div className="mt-1 h-1.5 w-full rounded-full bg-slate-100 overflow-hidden">
                           <div
                             className="h-full bg-violet-600 transition-all duration-300"
                             style={{ width: `${pct}%` }}
@@ -1086,10 +1144,10 @@ export const BomDownloadJobsPage: React.FC = () => {
                         </div>
                       ) : null}
                     </td>
-                    <td className="px-3 py-2 text-xs text-slate-600 max-w-[14rem] whitespace-pre-line">
+                    <td className={BYTES_COL_TD}>
                       {bytesLine ?? '—'}
                     </td>
-                    <td className="px-3 py-2 text-xs text-slate-600 max-w-[20rem]">
+                    <td className={MSG_COL_TD}>
                       {renderFeishuMessageCell(j)}
                     </td>
                     {renderJobTimeCell({
@@ -1101,7 +1159,7 @@ export const BomDownloadJobsPage: React.FC = () => {
                       live: liveStatsById[j.id],
                       avgSpeedBps,
                     })}
-                    <td className="px-3 py-2 text-right whitespace-nowrap">
+                    <td className={DETAIL_COL_TD}>
                       {j.rowIds.length > 0 ? (
                         <button
                           type="button"
@@ -1118,8 +1176,8 @@ export const BomDownloadJobsPage: React.FC = () => {
                         <span className="text-slate-300">—</span>
                       )}
                     </td>
-                    <td className="px-3 py-2 text-right">
-                      <div className="inline-flex flex-col items-end gap-1">
+                    <td className={ACTION_COL_TD}>
+                      <div className="inline-flex flex-col items-start gap-1">
                         {failN > 0 && (j.result?.fail?.length ?? 0) > 0 ? (
                           <button
                             type="button"

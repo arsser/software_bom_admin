@@ -1018,7 +1018,7 @@ async function executeDownloadJob(supabase, rootAbs, job, tuning) {
           running_file_name: null,
           running_bytes_downloaded: 0,
           running_bytes_total: null,
-          last_message: `${completed}/${total} 跳过（已有本地或状态变化）`,
+          last_message: `${completed}/${total} 跳过（状态变化或不满足拉取条件）`,
         });
         await touchHeartbeat();
         continue;

@@ -1,0 +1,7 @@
+{
+  "origin": "https://it-artifactory.yitu-inc.com",
+  "repo": "tw-stage",
+  "kit": "startship-collision-kit",
+  "dlBase": "https://it-artifactory.yitu-inc.com/artifactory/tw-stage/startship-collision-kit",
+  "putRoot": "https://it-artifactory.yitu-inc.com/artifactory/tw-stage/startship-collision-kit"
+}

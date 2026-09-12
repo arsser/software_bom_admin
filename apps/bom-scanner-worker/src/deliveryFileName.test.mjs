@@ -98,6 +98,64 @@ test('package-manifest PK is rel_path: same file_name two dirs both kept', () =>
   );
 });
 
+test('startship A2: same dir collide.sh three MD5s number in order', async () => {
+  /** @type {Map<string, string>} */
+  const claimed = new Map();
+  const md5s = [
+    'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+    'cccccccccccccccccccccccccccccccc',
+    'zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz',
+  ];
+  const names = [];
+  for (const md5 of md5s) {
+    const name = await resolveUniqueDeliveryFileName({
+      baseName: 'collide.sh',
+      md5,
+      isTakenByOther: (n, m) => {
+        const prev = claimed.get(`v1.0/Raptor/${n}`);
+        return Boolean(prev && prev !== m);
+      },
+    });
+    claimed.set(`v1.0/Raptor/${name}`, md5);
+    names.push(name);
+  }
+  assert.deepEqual(names, [
+    'collide.sh',
+    '【自动重命名1】collide.sh',
+    '【自动重命名2】collide.sh',
+  ]);
+});
+
+test('startship B2: other dir keeps original collide.sh', async () => {
+  /** @type {Map<string, string>} */
+  const claimed = new Map();
+  claimed.set('v1.0/Raptor/collide.sh', 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb');
+  const name = await resolveUniqueDeliveryFileName({
+    baseName: 'collide.sh',
+    md5: 'tttttttttttttttttttttttttttttttt',
+    isTakenByOther: (n, m) => {
+      const prev = claimed.get(`v1.0/GridFins/${n}`);
+      return Boolean(prev && prev !== m);
+    },
+  });
+  assert.equal(name, 'collide.sh');
+});
+
+test('A1 same destRel same MD5 is not taken', async () => {
+  /** @type {Map<string, string>} */
+  const claimed = new Map();
+  claimed.set('v1.0/Raptor/same.sh', 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa');
+  const name = await resolveUniqueDeliveryFileName({
+    baseName: 'same.sh',
+    md5: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+    isTakenByOther: (n, m) => {
+      const prev = claimed.get(`v1.0/Raptor/${n}`);
+      return Boolean(prev && prev !== m);
+    },
+  });
+  assert.equal(name, 'same.sh');
+});
+
 test('load JSON keeps duplicate file_name at different rel_path', () => {
   const text = JSON.stringify({
     version: 1,

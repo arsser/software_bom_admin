@@ -117,19 +117,17 @@ export function extractExtUrlFromRow(row: BomRowRecord, keyMap: BomJsonKeyMap): 
 /**
  * 分发页「从 Artifactory-ext 拉取」前置条件（与 `bom_request_distribute_ext_pull` 一致）：
  * - 本地状态：pending / error，或 (verified_ok|verified_fail|local_found 且 BOM 中有合法期望 MD5)；
- * - ext 列为可解析的 http(s) 且 URL 含 artifactory；
- * - 若已传入 `localMd5Indexed` 且 `localIndexReady`：期望 MD5 已在本地索引命中时不可再拉取（后端会因「已在 local_file」不入队）。
+ * - ext 列为可解析的 http(s) 且 URL 含 artifactory。
+ * 全局 `local_file` 已有该 MD5 仍可入队：worker 会硬链到本次 destRel。
  */
 export function rowEligibleForDistributeExternalPull(
   row: BomBatchRow,
   keyMap: BomJsonKeyMap,
-  localMd5Indexed?: ReadonlyMap<string, unknown> | null,
-  localIndexReady = true,
+  _localMd5Indexed?: ReadonlyMap<string, unknown> | null,
+  _localIndexReady = true,
 ): boolean {
   const local = row.status.local;
   const md5 = extractExpectedMd5FromRow(row.bom_row, keyMap);
-  // 索引尚未就绪时，先不展示依赖 MD5 索引命中的拉取按钮，避免页面刷新/扫描后短暂闪现。
-  if (!localIndexReady && md5 != null) return false;
   const localEligibleByStatus =
     local === 'pending' ||
     local === 'error' ||
@@ -141,7 +139,6 @@ export function rowEligibleForDistributeExternalPull(
   const u = url?.trim();
   if (!u || !/^https?:\/\//i.test(u)) return false;
   if (!/artifactory/i.test(u)) return false;
-  if (localIndexReady && md5 != null && localMd5Indexed?.has(md5)) return false;
   return true;
 }
 
@@ -199,11 +196,11 @@ export function headerMatchesAny(header: string, keys: string[]): boolean {
   return keys.some((k) => norm(k) === n);
 }
 
-/** 与 DB eligible 语义对齐：可网页/worker 从 Artifactory 拉取 */
+/** 与 DB eligible 语义对齐：可网页/worker 从 Artifactory 拉取（不因全局 MD5 索引禁拉） */
 export function rowEligibleForItPull(
   row: BomBatchRow,
   keyMap: BomJsonKeyMap,
-  localInfoByMd5: Map<string, LocalFileIndexInfo>,
+  _localInfoByMd5?: Map<string, LocalFileIndexInfo>,
 ): boolean {
   const raw = extractDownloadUrlRaw(row.bom_row, keyMap);
   if (!raw) return false;
@@ -211,14 +208,12 @@ export function rowEligibleForItPull(
   if (!url) return false;
   if (!/artifactory/i.test(url)) return false;
   const md5 = extractExpectedMd5FromRow(row.bom_row, keyMap);
-  const fileInIndex = Boolean(md5 && localInfoByMd5.has(md5));
-  if (fileInIndex) return false;
 
   const { local } = row.status;
-  const indexMissButDbSaysHadFile =
+  const verifiedWithMd5 =
     Boolean(md5) &&
     (local === 'verified_ok' || local === 'verified_fail' || local === 'local_found');
-  if (local !== 'pending' && local !== 'error' && !indexMissButDbSaysHadFile) return false;
+  if (local !== 'pending' && local !== 'error' && !verifiedWithMd5) return false;
   return true;
 }
 

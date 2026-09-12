@@ -1,0 +1,6 @@
+模块	组件名	组件ID	下载路径	MD5	文件大小	备注
+Raptor	same	ss-b1-v2	__IT_DL_BASE__/kit/a/same.sh	bd451c5b3a483a573ddee76344c9fe0d	24	B1 跨版本同名同MD5
+Raptor	collide	ss-b2-v2	__IT_DL_BASE__/kit/b2v2/collide.sh	721ec0a3338ecf6a7d415d67f27547b1	21	B2 跨版本同名不同MD5
+Raptor	v2-alias	ss-b3-v2	__IT_DL_BASE__/kit/b3v2/v2-alias.sh	bd451c5b3a483a573ddee76344c9fe0d	24	B3 跨版本不同名同MD5
+Raptor	unique-v2	ss-b4-v2	__IT_DL_BASE__/kit/b4v2/unique-v2.dat	b3aaba131fe6b3d62cf2b203df00426f	24	B4 跨版本不同名不同MD5
+GridFins	unique-gf	ss-gf-v2	__IT_DL_BASE__/kit/b4/unique-gf.dat	194dd88542b19242e39216854043286b	23	v2.0/GridFins 结构完整

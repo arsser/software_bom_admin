@@ -1,0 +1,13 @@
+模块	组件名	组件ID	下载路径	MD5	文件大小	备注
+Raptor	same	ss-a1-1	__IT_DL_BASE__/kit/a/same.sh	bd451c5b3a483a573ddee76344c9fe0d	24	A1#1 同目录同名同MD5
+Raptor	same	ss-a1-2	__IT_DL_BASE__/kit/a/same.sh	bd451c5b3a483a573ddee76344c9fe0d	24	A1#2 同目录同名同MD5
+Raptor	collide	ss-a2-b	__IT_DL_BASE__/kit/collide/b/collide.sh	009df7e9193149cca741b334359d4456	23	A2#1 collide.sh 原名
+Raptor	collide	ss-a2-c	__IT_DL_BASE__/kit/collide/c/collide.sh	22a0c33113d04b2d294b19c441651f9a	24	A2#2 【自动重命名1】collide.sh
+Raptor	collide	ss-a2-z	__IT_DL_BASE__/kit/collide/z/collide.sh	bfeff081e45153c2aca627bb8d54f12c	23	A2#3 【自动重命名2】collide.sh
+Raptor	alpha-old	ss-a3	__IT_DL_BASE__/kit/a/alpha-old.sh	bd451c5b3a483a573ddee76344c9fe0d	24	A3 不同名同MD5
+Raptor	one	ss-a4-1	__IT_DL_BASE__/kit/a4/one.bin	397f95f87a52bf5fef8fc97fb32308f6	24	A4 one.bin
+Raptor	two	ss-a4-2	__IT_DL_BASE__/kit/a4/two.tar.gz	3c47f731b763dfd33342cd676ffc683e	32	A4 two.tar.gz
+GridFins	same	ss-b1-v1	__IT_DL_BASE__/kit/a/same.sh	bd451c5b3a483a573ddee76344c9fe0d	24	B1 跨模块同名同MD5
+GridFins	collide	ss-b2-v1	__IT_DL_BASE__/kit/b2/collide.sh	51ef49e95768d3d1b459dbe2b6ffa4ac	24	B2 跨模块同名不同MD5
+GridFins	fins-alias	ss-b3-v1	__IT_DL_BASE__/kit/b3/fins-alias.sh	bd451c5b3a483a573ddee76344c9fe0d	24	B3 跨模块不同名同MD5
+GridFins	unique-gf	ss-b4-v1	__IT_DL_BASE__/kit/b4/unique-gf.dat	194dd88542b19242e39216854043286b	23	B4 跨模块不同名不同MD5

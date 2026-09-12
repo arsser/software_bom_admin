@@ -1,0 +1,204 @@
+{
+  "kitPrefix": "startship-collision-kit",
+  "urlPlaceholder": "__IT_DL_BASE__",
+  "files": {
+    "kit/a/same.sh": {
+      "rel": "kit/a/same.sh",
+      "md5": "bd451c5b3a483a573ddee76344c9fe0d",
+      "bytes": 24,
+      "label": "alpha"
+    },
+    "kit/a/alpha-old.sh": {
+      "rel": "kit/a/alpha-old.sh",
+      "md5": "bd451c5b3a483a573ddee76344c9fe0d",
+      "bytes": 24,
+      "label": "alpha"
+    },
+    "kit/collide/b/collide.sh": {
+      "rel": "kit/collide/b/collide.sh",
+      "md5": "009df7e9193149cca741b334359d4456",
+      "bytes": 23,
+      "label": "beta"
+    },
+    "kit/collide/c/collide.sh": {
+      "rel": "kit/collide/c/collide.sh",
+      "md5": "22a0c33113d04b2d294b19c441651f9a",
+      "bytes": 24,
+      "label": "gamma"
+    },
+    "kit/collide/z/collide.sh": {
+      "rel": "kit/collide/z/collide.sh",
+      "md5": "bfeff081e45153c2aca627bb8d54f12c",
+      "bytes": 23,
+      "label": "zeta"
+    },
+    "kit/a4/one.bin": {
+      "rel": "kit/a4/one.bin",
+      "md5": "397f95f87a52bf5fef8fc97fb32308f6",
+      "bytes": 24,
+      "label": "delta"
+    },
+    "kit/a4/two.tar.gz": {
+      "rel": "kit/a4/two.tar.gz",
+      "md5": "3c47f731b763dfd33342cd676ffc683e",
+      "bytes": 32,
+      "label": "epsilon"
+    },
+    "kit/b2/collide.sh": {
+      "rel": "kit/b2/collide.sh",
+      "md5": "51ef49e95768d3d1b459dbe2b6ffa4ac",
+      "bytes": 24,
+      "label": "theta"
+    },
+    "kit/b2v2/collide.sh": {
+      "rel": "kit/b2v2/collide.sh",
+      "md5": "721ec0a3338ecf6a7d415d67f27547b1",
+      "bytes": 21,
+      "label": "mu"
+    },
+    "kit/b3/fins-alias.sh": {
+      "rel": "kit/b3/fins-alias.sh",
+      "md5": "bd451c5b3a483a573ddee76344c9fe0d",
+      "bytes": 24,
+      "label": "alpha"
+    },
+    "kit/b3v2/v2-alias.sh": {
+      "rel": "kit/b3v2/v2-alias.sh",
+      "md5": "bd451c5b3a483a573ddee76344c9fe0d",
+      "bytes": 24,
+      "label": "alpha"
+    },
+    "kit/b4/unique-gf.dat": {
+      "rel": "kit/b4/unique-gf.dat",
+      "md5": "194dd88542b19242e39216854043286b",
+      "bytes": 23,
+      "label": "iota"
+    },
+    "kit/b4v2/unique-v2.dat": {
+      "rel": "kit/b4v2/unique-v2.dat",
+      "md5": "b3aaba131fe6b3d62cf2b203df00426f",
+      "bytes": 24,
+      "label": "kappa"
+    }
+  },
+  "expectedLocal": [
+    {
+      "path": "v1.0/Raptor/same.sh",
+      "md5": "bd451c5b3a483a573ddee76344c9fe0d",
+      "case": "A1"
+    },
+    {
+      "path": "v1.0/Raptor/collide.sh",
+      "md5": "009df7e9193149cca741b334359d4456",
+      "case": "A2"
+    },
+    {
+      "path": "v1.0/Raptor/【自动重命名1】collide.sh",
+      "md5": "22a0c33113d04b2d294b19c441651f9a",
+      "case": "A2"
+    },
+    {
+      "path": "v1.0/Raptor/【自动重命名2】collide.sh",
+      "md5": "bfeff081e45153c2aca627bb8d54f12c",
+      "case": "A2"
+    },
+    {
+      "path": "v1.0/Raptor/alpha-old.sh",
+      "md5": "bd451c5b3a483a573ddee76344c9fe0d",
+      "case": "A3",
+      "sameInodeAs": "v1.0/Raptor/same.sh"
+    },
+    {
+      "path": "v1.0/Raptor/one.bin",
+      "md5": "397f95f87a52bf5fef8fc97fb32308f6",
+      "case": "A4"
+    },
+    {
+      "path": "v1.0/Raptor/two.tar.gz",
+      "md5": "3c47f731b763dfd33342cd676ffc683e",
+      "case": "A4"
+    },
+    {
+      "path": "v1.0/GridFins/same.sh",
+      "md5": "bd451c5b3a483a573ddee76344c9fe0d",
+      "case": "B1",
+      "sameInodeAs": "v1.0/Raptor/same.sh"
+    },
+    {
+      "path": "v1.0/GridFins/collide.sh",
+      "md5": "51ef49e95768d3d1b459dbe2b6ffa4ac",
+      "case": "B2"
+    },
+    {
+      "path": "v1.0/GridFins/fins-alias.sh",
+      "md5": "bd451c5b3a483a573ddee76344c9fe0d",
+      "case": "B3",
+      "sameInodeAs": "v1.0/Raptor/same.sh"
+    },
+    {
+      "path": "v1.0/GridFins/unique-gf.dat",
+      "md5": "194dd88542b19242e39216854043286b",
+      "case": "B4"
+    },
+    {
+      "path": "v2.0/Raptor/same.sh",
+      "md5": "bd451c5b3a483a573ddee76344c9fe0d",
+      "case": "B1",
+      "sameInodeAs": "v1.0/Raptor/same.sh"
+    },
+    {
+      "path": "v2.0/Raptor/collide.sh",
+      "md5": "721ec0a3338ecf6a7d415d67f27547b1",
+      "case": "B2"
+    },
+    {
+      "path": "v2.0/Raptor/v2-alias.sh",
+      "md5": "bd451c5b3a483a573ddee76344c9fe0d",
+      "case": "B3",
+      "sameInodeAs": "v1.0/Raptor/same.sh"
+    },
+    {
+      "path": "v2.0/Raptor/unique-v2.dat",
+      "md5": "b3aaba131fe6b3d62cf2b203df00426f",
+      "case": "B4"
+    },
+    {
+      "path": "v2.0/GridFins/unique-gf.dat",
+      "md5": "194dd88542b19242e39216854043286b",
+      "case": "v2-GridFins",
+      "sameInodeAs": "v1.0/GridFins/unique-gf.dat"
+    }
+  ],
+  "feishu": {
+    "md5DedupMayOmitPaths": [
+      "v1.0/Raptor/alpha-old.sh",
+      "v1.0/GridFins/same.sh",
+      "v1.0/GridFins/fins-alias.sh",
+      "v2.0/Raptor/same.sh",
+      "v2.0/Raptor/v2-alias.sh",
+      "v2.0/GridFins/unique-gf.dat"
+    ],
+    "note": "飞书按 MD5 全局去重，这些 destRel 行上 present 即可，云盘可以没有第二份文件"
+  },
+  "ext": {
+    "mustHavePaths": [
+      "v1.0/Raptor/same.sh",
+      "v1.0/Raptor/collide.sh",
+      "v1.0/Raptor/【自动重命名1】collide.sh",
+      "v1.0/Raptor/【自动重命名2】collide.sh",
+      "v1.0/Raptor/alpha-old.sh",
+      "v1.0/Raptor/one.bin",
+      "v1.0/Raptor/two.tar.gz",
+      "v1.0/GridFins/same.sh",
+      "v1.0/GridFins/collide.sh",
+      "v1.0/GridFins/fins-alias.sh",
+      "v1.0/GridFins/unique-gf.dat",
+      "v2.0/Raptor/same.sh",
+      "v2.0/Raptor/collide.sh",
+      "v2.0/Raptor/v2-alias.sh",
+      "v2.0/Raptor/unique-v2.dat",
+      "v2.0/GridFins/unique-gf.dat"
+    ],
+    "note": "ext checksum COPY 会落到本版路径，应有实文件"
+  }
+}
